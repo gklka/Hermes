@@ -37,6 +37,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         split.onFilterChanged = { [weak self] in
             self?.updateFilterItem()
         }
+        split.onSidebarCollapsedChanged = { [weak self] in
+            self?.updateSidebarItems()
+        }
         ChatStore.shared.changes
             .sink { [weak self] change in
                 guard let self else { return }
@@ -81,6 +84,15 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         split.newMessage()
     }
 
+    @objc func attachFiles(_ sender: Any?) {
+        split.attachFiles()
+    }
+
+    /// Opens a chat (e.g. from a notification).
+    func select(threadID: String) {
+        split.select(threadID: threadID)
+    }
+
     func windowDidBecomeKey(_ notification: Notification) {
         split.windowDidBecomeKey()
     }
@@ -103,11 +115,19 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         filterItem?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Filter")
     }
 
+    /// Filter and New Message belong to the sidebar, so they're hidden while it's collapsed.
+    private func updateSidebarItems() {
+        let collapsed = split.isSidebarCollapsed
+        filterItem?.isHidden = collapsed
+        newMessageToolbarItem?.isHidden = collapsed
+    }
+
     // MARK: - NSToolbarDelegate
 
     private static let newMessageItem = NSToolbarItem.Identifier("newMessage")
     private static let filterItemID = NSToolbarItem.Identifier("filter")
     private weak var filterItem: NSMenuToolbarItem?
+    private weak var newMessageToolbarItem: NSToolbarItem?
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.toggleSidebar, .flexibleSpace, Self.filterItemID, Self.newMessageItem, .sidebarTrackingSeparator, .flexibleSpace]
@@ -126,6 +146,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
             item.toolTip = "New Message (⌘N)"
             item.target = self
             item.action = #selector(newMessage(_:))
+            item.isHidden = split.isSidebarCollapsed
+            newMessageToolbarItem = item
             return item
         case Self.filterItemID:
             let menu = NSMenu()
@@ -140,6 +162,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
             item.showsIndicator = false
             item.label = "Filter"
             item.toolTip = "Filter Conversations"
+            item.isHidden = split.isSidebarCollapsed
             filterItem = item
             updateFilterItem()
             return item
@@ -154,6 +177,12 @@ final class MainSplitViewController: NSSplitViewController {
     private let chat = ChatViewController()
 
     var onConversationChanged: ((Conversation?) -> Void)?
+    var onSidebarCollapsedChanged: (() -> Void)?
+    private var collapseObservation: NSKeyValueObservation?
+
+    var isSidebarCollapsed: Bool {
+        splitViewItems.first?.isCollapsed ?? false
+    }
 
     var selectedConversation: Conversation? {
         chat.threadID.flatMap { ChatStore.shared.conversation($0) }
@@ -178,6 +207,10 @@ final class MainSplitViewController: NSSplitViewController {
 
         addSplitViewItem(sidebar)
         addSplitViewItem(content)
+
+        collapseObservation = sidebar.observe(\.isCollapsed) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.onSidebarCollapsedChanged?() }
+        }
 
         list.onSelect = { [weak self] threadID in
             guard let self else { return }
@@ -231,5 +264,19 @@ final class MainSplitViewController: NSSplitViewController {
 
     func windowDidBecomeKey() {
         chat.markReadIfVisible()
+        if let threadID = chat.threadID {
+            Notifier.shared.clear(threadID: threadID)
+        }
+    }
+
+    func select(threadID: String) {
+        if let sidebar = splitViewItems.first, sidebar.isCollapsed {
+            sidebar.animator().isCollapsed = false
+        }
+        list.select(threadID: threadID)
+    }
+
+    func attachFiles() {
+        chat.attachFiles()
     }
 }

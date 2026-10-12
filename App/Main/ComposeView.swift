@@ -4,7 +4,6 @@ protocol ComposeViewDelegate: AnyObject {
     /// `attachments` are the staged files, in the order they appear in the field.
     func composeView(_ view: ComposeView, send text: String, attachments: [URL])
     func composeViewTextDidChange(_ view: ComposeView)
-    func composeViewAttach(_ view: ComposeView)
     func composeViewCancelReply(_ view: ComposeView)
 }
 
@@ -48,8 +47,9 @@ final class ComposeTextView: NSTextView {
     }
 }
 
-/// Bottom input bar: [+] [ growing text field ] [😀], with an optional "Replying to…" banner.
+/// Bottom input bar: [ growing text field ] [👍], with an optional "Replying to…" banner.
 /// Images and files are staged inline in the field, like in Messages, and sent with Return.
+/// The button on the right sends the chat's quick reaction, or the message while there is one.
 final class ComposeView: NSView, NSTextViewDelegate {
     weak var delegate: ComposeViewDelegate?
 
@@ -57,8 +57,10 @@ final class ComposeView: NSView, NSTextViewDelegate {
     private let scrollView = NSScrollView()
     private let field = NSView()
     private let placeholder = NSTextField(labelWithString: "Message")
-    private let plusButton = NSButton()
-    private let emojiButton = NSButton()
+    private let actionButton = NSButton()
+    /// The chat's custom quick reaction emoji; nil for the default like (👍).
+    private var quickEmoji: String?
+    private var tint: NSColor = BubbleColors.outgoing
     private let replyBanner = NSView()
     private let replyLabel = NSTextField(labelWithString: "")
     private var textHeight = NSLayoutConstraint()
@@ -94,6 +96,7 @@ final class ComposeView: NSView, NSTextViewDelegate {
         textView.textContainer?.widthTracksTextView = true
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isContinuousSpellCheckingEnabled = true
+        textView.writingToolsBehavior = .none
 
         scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
@@ -109,8 +112,12 @@ final class ComposeView: NSView, NSTextViewDelegate {
         placeholder.textColor = .placeholderTextColor
         placeholder.font = .systemFont(ofSize: 14)
 
-        configure(plusButton, symbol: "plus", label: "Attach", action: #selector(attach))
-        configure(emojiButton, symbol: "face.smiling", label: "Emoji", action: #selector(showEmoji))
+        actionButton.isBordered = false
+        actionButton.bezelStyle = .regularSquare
+        actionButton.target = self
+        actionButton.action = #selector(actionButtonClicked)
+        actionButton.setContentHuggingPriority(.required, for: .horizontal)
+        updateActionButton()
 
         // Reply banner
         replyBanner.wantsLayer = true
@@ -125,7 +132,7 @@ final class ComposeView: NSView, NSTextViewDelegate {
         }
         replyBanner.isHidden = true
 
-        for view in [replyBanner, plusButton, field, emojiButton] as [NSView] {
+        for view in [replyBanner, field, actionButton] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -149,13 +156,13 @@ final class ComposeView: NSView, NSTextViewDelegate {
 
             field.topAnchor.constraint(equalTo: replyBanner.bottomAnchor, constant: 8),
             field.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
-            field.leadingAnchor.constraint(equalTo: plusButton.trailingAnchor, constant: 8),
-            field.trailingAnchor.constraint(equalTo: emojiButton.leadingAnchor, constant: -8),
+            field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            field.trailingAnchor.constraint(equalTo: actionButton.leadingAnchor, constant: -8),
 
-            plusButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            plusButton.bottomAnchor.constraint(equalTo: field.bottomAnchor, constant: -3),
-            emojiButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            emojiButton.bottomAnchor.constraint(equalTo: field.bottomAnchor, constant: -3),
+            actionButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            actionButton.centerYAnchor.constraint(equalTo: field.bottomAnchor, constant: -Self.minTextHeight / 2),
+            actionButton.widthAnchor.constraint(equalToConstant: 28),
+            actionButton.heightAnchor.constraint(equalToConstant: 28),
 
             scrollView.leadingAnchor.constraint(equalTo: field.leadingAnchor, constant: 4),
             scrollView.trailingAnchor.constraint(equalTo: field.trailingAnchor, constant: -4),
@@ -273,6 +280,33 @@ final class ComposeView: NSView, NSTextViewDelegate {
         window?.makeFirstResponder(textView)
     }
 
+    /// The chat's quick reaction (nil: the default like) and theme color for the button.
+    func setQuickReaction(_ emoji: String?, tint: NSColor?) {
+        quickEmoji = emoji?.isEmpty == false ? emoji : nil
+        self.tint = tint ?? BubbleColors.outgoing
+        updateActionButton()
+    }
+
+    /// Send arrow while there's something to send, otherwise the quick reaction.
+    private func updateActionButton() {
+        actionButton.title = ""
+        actionButton.image = nil
+        if hasContent {
+            actionButton.image = NSImage(systemSymbolName: "arrow.up.circle.fill", accessibilityDescription: "Send")
+            actionButton.symbolConfiguration = .init(pointSize: 22, weight: .regular)
+            actionButton.contentTintColor = tint
+            actionButton.toolTip = "Send"
+        } else if let quickEmoji {
+            actionButton.attributedTitle = NSAttributedString(string: quickEmoji, attributes: [.font: NSFont.systemFont(ofSize: 20)])
+            actionButton.toolTip = "Send \(quickEmoji)"
+        } else {
+            actionButton.image = NSImage(systemSymbolName: "hand.thumbsup.fill", accessibilityDescription: "Like")
+            actionButton.symbolConfiguration = .init(pointSize: 18, weight: .regular)
+            actionButton.contentTintColor = tint
+            actionButton.toolTip = "Send a Like"
+        }
+    }
+
     func showReply(to name: String, text: String) {
         replyLabel.stringValue = "Replying to \(name): \(text)"
         replyBanner.isHidden = false
@@ -287,13 +321,13 @@ final class ComposeView: NSView, NSTextViewDelegate {
 
     // MARK: - Actions
 
-    @objc private func attach() {
-        delegate?.composeViewAttach(self)
-    }
-
-    @objc private func showEmoji() {
+    @objc private func actionButtonClicked() {
+        if hasContent {
+            send()
+        } else {
+            delegate?.composeView(self, send: quickEmoji ?? "👍", attachments: [])
+        }
         focus()
-        NSApp.orderFrontCharacterPalette(nil)
     }
 
     @objc private func cancelReply() {
@@ -323,6 +357,7 @@ final class ComposeView: NSView, NSTextViewDelegate {
 
     private func textChanged() {
         placeholder.isHidden = !textView.string.isEmpty
+        updateActionButton()
         if textView.string.isEmpty {
             textView.typingAttributes = Self.textAttributes
         }

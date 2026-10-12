@@ -56,6 +56,8 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
     }
 
     func windowWillClose(_ notification: Notification) {
+        restoreWatchTimer?.invalidate()
+        restoreWatchTimer = nil
         if let host = invisibleHost {
             embedInvisibly(in: host)
         }
@@ -97,8 +99,68 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
             self.showWindow(nil)
             window?.center()
             NSApp.activate()
+            watchForFinishedRestore()
+            // Opening an encrypted chat is what brings up the restore (PIN) prompt.
+            if (try? await evaluate(Self.openFirstChatScript, as: Bool.self)) != true {
+                CoreBridge.shared.log("WebSync: no chat to open for the restore")
+            }
         }
     }
+
+    /// Clicks the first encrypted chat in the web app's chat list (or the first chat if none).
+    private static let openFirstChatScript = """
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const listLinks = selector => Array.from(document.querySelectorAll(selector)).filter(a => !a.closest('[role="main"]'));
+    for (let i = 0; i < 20; i++) {
+      const link = listLinks('a[href^="/messages/e2ee/t/"]')[0] || listLinks('a[href^="/messages/t/"]')[0];
+      if (link) { link.click(); return JSON.stringify(true); }
+      await sleep(500);
+    }
+    return JSON.stringify(false);
+    """
+
+    // MARK: - Closing when the restore is done
+
+    private var restoreWatchTimer: Timer?
+
+    /// Closes the window once the PIN prompt has been shown and then went away (restore finished).
+    /// If the prompt never shows (already restored), the window stays until the user closes it.
+    private func watchForFinishedRestore() {
+        guard restoreWatchTimer == nil else { return }
+        var sawPrompt = false
+        var goneCount = 0
+        var isChecking = false
+        restoreWatchTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !isChecking else { return }
+                isChecking = true
+                Task {
+                    defer { isChecking = false }
+                    guard let showing = try? await self.evaluate(Self.pinPromptScript, as: Bool.self) else { return }
+                    if showing {
+                        if !sawPrompt { CoreBridge.shared.log("WebSync: PIN prompt shown") }
+                        sawPrompt = true
+                        goneCount = 0
+                    } else if sawPrompt {
+                        goneCount += 1
+                        // Twice in a row, so a re-render between steps doesn't count.
+                        if goneCount >= 2 {
+                            CoreBridge.shared.log("WebSync: PIN prompt gone, closing restore window")
+                            self.close()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// True while the page shows a dialog asking for the PIN (a code/password field).
+    private static let pinPromptScript = """
+    const visible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+    const fields = document.querySelectorAll('[role="dialog"] input, input[type="password"], input[autocomplete="one-time-code"], input[inputmode="numeric"]');
+    const showing = Array.from(fields).some(el => visible(el) && (el.closest('[role="dialog"]') || el.type === 'password' || el.inputMode === 'numeric' || el.autocomplete === 'one-time-code'));
+    return JSON.stringify(showing);
+    """
 
     // MARK: - Exclusive use
 
@@ -180,5 +242,33 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
 private final class InvisibleWhenTransparentWebView: WKWebView {
     override func hitTest(_ point: NSPoint) -> NSView? {
         alphaValue == 0 ? nil : super.hitTest(point)
+    }
+
+    // While invisible behind the chat it still receives drags dropped there; hand them to the
+    // chat (its superview), so files can be dropped anywhere on the chat.
+    private var dropTarget: NSView? { alphaValue == 0 ? superview : nil }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        dropTarget?.draggingEntered(sender) ?? super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        dropTarget?.draggingUpdated(sender) ?? super.draggingUpdated(sender)
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        if let dropTarget { dropTarget.draggingExited(sender) } else { super.draggingExited(sender) }
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        dropTarget?.prepareForDragOperation(sender) ?? super.prepareForDragOperation(sender)
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        dropTarget?.performDragOperation(sender) ?? super.performDragOperation(sender)
+    }
+
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        if let dropTarget { dropTarget.concludeDragOperation(sender) } else { super.concludeDragOperation(sender) }
     }
 }

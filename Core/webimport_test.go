@@ -32,6 +32,17 @@ func TestWebMessageID(t *testing.T) {
 	}
 }
 
+func TestUnrestoredPlaceholder(t *testing.T) {
+	for _, text := range []string{"Az üzenetet nem sikerült visszaállítani.", "Unable to restore this message"} {
+		if !isUnrestoredPlaceholder(text) {
+			t.Errorf("isUnrestoredPlaceholder(%q) = false", text)
+		}
+	}
+	if isUnrestoredPlaceholder("Jövő héten egy bor nálunk?") {
+		t.Errorf("a normal message was treated as a placeholder")
+	}
+}
+
 func TestAvatarKey(t *testing.T) {
 	url := "https://scontent-vie1-1.xx.fbcdn.net/v/t39.30808-1/805854260_28617347014528600_4651105664370678377_n.jpg?stp=cp6"
 	if got := avatarKey(url); got != "805854260_28617347014528600_4651105664370678377" {

@@ -143,6 +143,19 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return c.importWebThreads(rows.Rows), nil
 	case "web.threadWebID":
 		return map[string]string{"webID": c.store.Get("webid:" + p.ThreadID)}, nil
+	case "web.threadPath":
+		return map[string]string{"path": c.webThreadPath(p.ThreadID)}, nil
+	case "web.setThreadTheme":
+		var params struct {
+			ThreadID string   `json:"threadID"`
+			Colors   []string `json:"colors"`
+			Emoji    string   `json:"emoji"`
+		}
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			return nil, err
+		}
+		c.setThreadTheme(params.ThreadID, params.Colors, params.Emoji)
+		return nil, nil
 	case "web.importMessages":
 		var params struct {
 			ThreadID string       `json:"threadID"`

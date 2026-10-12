@@ -177,16 +177,42 @@ func webMessageID(domID string) (id string, timestampMs int64, ok bool) {
 	return id, int64(n >> 22), true
 }
 
+// unrestoredTexts are what the web app shows (lowercased, per language) in place of a message
+// it couldn't decrypt because the chat history hasn't been restored with the PIN yet.
+var unrestoredTexts = []string{
+	"nem sikerült visszaállítani",
+	"restore this message",
+}
+
+func isUnrestoredPlaceholder(text string) bool {
+	lower := strings.ToLower(text)
+	for _, t := range unrestoredTexts {
+		if strings.Contains(lower, t) {
+			return true
+		}
+	}
+	return false
+}
+
 // importWebMessages stores decrypted history read from the web app for a 1:1 encrypted chat.
-// Messages the live connection already delivered are left alone.
+// Messages the live connection already delivered are left alone, except placeholders stored
+// before the history was restored, which are replaced with the real message.
 func (c *Core) importWebMessages(threadID string, messages []webMessage) map[string]any {
 	self := c.selfID()
 	cs := newChangeSet()
 	imported := 0
+	unrestored := 0
 	var newest *messageRow
 	for _, wm := range messages {
 		id, ts, ok := webMessageID(wm.DOMID)
-		if !ok || c.store.GetMessage(id) != nil {
+		if !ok {
+			continue
+		}
+		if isUnrestoredPlaceholder(wm.Text) && len(wm.Images) == 0 {
+			unrestored++
+			continue
+		}
+		if existing := c.store.GetMessage(id); existing != nil && !isUnrestoredPlaceholder(existing.Text) {
 			continue
 		}
 		sender := threadID
@@ -231,8 +257,8 @@ func (c *Core) importWebMessages(threadID string, messages []webMessage) map[str
 		cs.thread(threadID)
 	}
 	c.flush(cs)
-	c.log.Info().Str("thread_id", threadID).Int("received", len(messages)).Int("imported", imported).Msg("Imported web message history")
-	return map[string]any{"imported": imported}
+	c.log.Info().Str("thread_id", threadID).Int("received", len(messages)).Int("imported", imported).Int("unrestored", unrestored).Msg("Imported web message history")
+	return map[string]any{"imported": imported, "unrestored": unrestored}
 }
 
 func (c *Core) saveWebImage(messageID string, index int, img webImage) (string, error) {
@@ -242,4 +268,52 @@ func (c *Core) saveWebImage(messageID string, index int, img webImage) (string, 
 	}
 	path := filepath.Join(c.dataDir, "media", fmt.Sprintf("%s-web%d%s", messageID, index, extensionFor(img.MimeType)))
 	return path, os.WriteFile(path, data, 0o600)
+}
+
+// webThreadPath is where the web app shows a chat, or "" if the encrypted chat's web ID isn't known yet.
+func (c *Core) webThreadPath(threadID string) string {
+	if t := c.store.GetThread(threadID); t != nil && t.Type.IsWhatsApp() {
+		if webID := c.store.Get("webid:" + threadID); webID != "" {
+			return "/messages/e2ee/t/" + webID + "/"
+		}
+		return ""
+	}
+	return fmt.Sprintf("/messages/t/%d/", c.fbThreadKey(threadID))
+}
+
+var hexColorPattern = regexp.MustCompile(`^#[0-9a-f]{6}$`)
+
+// setThreadTheme stores the chat's custom bubble colors and quick reaction emoji read from the
+// web app (empty: Messenger's default theme / like).
+func (c *Core) setThreadTheme(threadID string, colors []string, emoji string) {
+	for _, color := range colors {
+		if !hexColorPattern.MatchString(color) {
+			c.log.Warn().Str("thread_id", threadID).Strs("colors", colors).Msg("Ignoring invalid bubble colors")
+			return
+		}
+	}
+	if len(emoji) > 64 {
+		c.log.Warn().Str("thread_id", threadID).Int("length", len(emoji)).Msg("Ignoring invalid quick reaction emoji")
+		emoji = ""
+	}
+	changed := c.setOrDelete("colors:"+threadID, strings.Join(colors, ","))
+	changed = c.setOrDelete("emoji:"+threadID, emoji) || changed
+	if changed {
+		cs := newChangeSet()
+		cs.thread(threadID)
+		c.flush(cs)
+	}
+}
+
+// setOrDelete stores a kv value (deleting it when empty) and reports whether it changed.
+func (c *Core) setOrDelete(key, value string) bool {
+	if c.store.Get(key) == value {
+		return false
+	}
+	if value == "" {
+		c.store.Delete(key)
+	} else {
+		c.store.Set(key, value)
+	}
+	return true
 }

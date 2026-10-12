@@ -28,6 +28,11 @@ type apiConversation struct {
 	IsMuted         bool             `json:"isMuted"`
 	IsMarketplace   bool             `json:"isMarketplace"`
 	Participants    []apiParticipant `json:"participants"`
+	// The chat's custom Messenger theme for outgoing bubbles: one CSS color, or several for a
+	// gradient (top to bottom of the visible chat). Empty for the default theme.
+	BubbleColors []string `json:"bubbleColors,omitempty"`
+	// The chat's custom quick reaction emoji (the composer's like button). Empty for the default like.
+	QuickEmoji string `json:"quickEmoji,omitempty"`
 }
 
 type apiReaction struct {

@@ -7,6 +7,25 @@ enum BubbleColors {
             ? NSColor(srgbRed: 0.23, green: 0.23, blue: 0.24, alpha: 1)
             : NSColor(srgbRed: 0.91, green: 0.91, blue: 0.92, alpha: 1)
     }
+
+    /// A chat's custom Messenger theme colors ("#rrggbb"); empty for the default theme.
+    static func theme(_ hexColors: [String]?) -> [NSColor] {
+        (hexColors ?? []).compactMap { hex in
+            guard hex.count == 7, hex.hasPrefix("#"), let value = UInt32(hex.dropFirst(), radix: 16) else { return nil }
+            return NSColor(
+                srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+                green: CGFloat((value >> 8) & 0xFF) / 255,
+                blue: CGFloat(value & 0xFF) / 255,
+                alpha: 1
+            )
+        }
+    }
+}
+
+/// An image view that's never a drop target (NSImageView registers for image drags and then
+/// refuses them when not editable), so files dropped on a photo reach the chat's drop target.
+final class DisplayImageView: NSImageView {
+    override func registerForDraggedTypes(_ newTypes: [NSPasteboard.PasteboardType]) {}
 }
 
 /// A rounded rectangle whose color resolves with the current appearance.
@@ -15,11 +34,21 @@ final class BubbleView: NSView {
         didSet { needsDisplay = true }
     }
 
+    /// Gradient themes: like Messenger, the gradient spans the visible chat, so a bubble's color
+    /// depends on where it is on screen. See `alignGradient(to:)`.
+    var gradientColors: [NSColor]? {
+        didSet { needsDisplay = true }
+    }
+
+    private var gradientLayer: CAGradientLayer?
+    private var gradientArea: NSRect = .zero
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.cornerRadius = 17
         layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
     }
 
     @available(*, unavailable)
@@ -28,7 +57,33 @@ final class BubbleView: NSView {
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
-        layer?.backgroundColor = color.cgColor
+        guard let gradientColors, gradientColors.count > 1 else {
+            gradientLayer?.isHidden = true
+            layer?.backgroundColor = color.cgColor
+            return
+        }
+        let gradient = gradientLayer ?? CAGradientLayer()
+        if gradientLayer == nil {
+            // The view isn't flipped, so y = 1 is the top.
+            gradient.startPoint = CGPoint(x: 0.5, y: 1)
+            gradient.endPoint = CGPoint(x: 0.5, y: 0)
+            layer?.insertSublayer(gradient, at: 0)
+            gradientLayer = gradient
+        }
+        gradient.colors = gradientColors.map(\.cgColor)
+        gradient.isHidden = false
+        layer?.backgroundColor = nil
+        alignGradient(to: gradientArea)
+    }
+
+    /// Stretches the gradient over `area` (the visible chat, in this view's coordinates).
+    func alignGradient(to area: NSRect) {
+        gradientArea = area
+        guard let gradientLayer, !gradientLayer.isHidden else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradientLayer.frame = area
+        CATransaction.commit()
     }
 }
 
@@ -74,6 +129,44 @@ final class CaptionCellView: NSTableCellView {
             alignmentConstraints = [label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 18)]
         }
         NSLayoutConstraint.activate(alignmentConstraints)
+    }
+}
+
+/// Shown in encrypted chats whose history hasn't been restored in Messenger web yet.
+final class RestoreCellView: NSTableCellView {
+    private let label = NSTextField(wrappingLabelWithString: "🔒 End-to-end encrypted. Restore your encrypted chats with your PIN to see earlier messages.")
+    private let button = NSButton(title: "Restore Encrypted Chats…", target: nil, action: #selector(AppDelegate.showWebSync(_:)))
+    private var widthConstraint: NSLayoutConstraint?
+
+    init() {
+        super.init(frame: .zero)
+        label.font = .systemFont(ofSize: 11, weight: .medium)
+        label.textColor = .secondaryLabelColor
+        label.alignment = .center
+        button.bezelStyle = .push
+        button.controlSize = .regular
+        for view in [label, button] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        let width = label.widthAnchor.constraint(lessThanOrEqualToConstant: 400)
+        widthConstraint = width
+        NSLayoutConstraint.activate([
+            width,
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 16),
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            button.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 8),
+            button.centerXAnchor.constraint(equalTo: centerXAnchor),
+            button.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(maxWidth: CGFloat) {
+        label.preferredMaxLayoutWidth = maxWidth
+        widthConstraint?.constant = maxWidth
     }
 }
 
@@ -134,6 +227,8 @@ final class MessageCellView: NSTableCellView {
         var avatarURL: String?
         var isFirstInGroup = true
         var maxWidth: CGFloat = 400
+        /// The chat's custom theme for outgoing bubbles (one color or a gradient); empty for the default.
+        var outgoingColors: [NSColor] = []
     }
 
     weak var delegate: MessageCellDelegate?
@@ -147,7 +242,7 @@ final class MessageCellView: NSTableCellView {
     private let textView = MessageTextView()
     private let reactionsBadge = ReactionsBadge()
     private let avatar = AvatarView()
-    private let failedIcon = NSImageView()
+    private let failedIcon = DisplayImageView()
 
     // Placeholders; the real constraints are created in init once the views exist.
     private var topConstraint = NSLayoutConstraint()
@@ -227,6 +322,11 @@ final class MessageCellView: NSTableCellView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Lines up a gradient theme with the visible chat (call after layout and on scroll).
+    func alignGradient(to clipView: NSClipView) {
+        bubble.alignGradient(to: bubble.convert(clipView.bounds, from: clipView))
+    }
+
     func configure(_ message: ChatMessage, layout: Layout, store: ChatStore) {
         self.message = message
         let outgoing = message.isFromMe
@@ -277,7 +377,9 @@ final class MessageCellView: NSTableCellView {
         let text = message.isUnsent ? (outgoing ? "You unsent a message" : "Message unsent") : message.text
         let jumbo = !message.isUnsent && text.isJumboEmoji && message.replyTo == nil
         bubble.isHidden = text.isEmpty
-        bubble.color = jumbo ? .clear : (message.isUnsent ? .clear : (outgoing ? BubbleColors.outgoing : BubbleColors.incoming))
+        let themed = outgoing && !jumbo && !message.isUnsent
+        bubble.color = jumbo || message.isUnsent ? .clear : (outgoing ? layout.outgoingColors.first ?? BubbleColors.outgoing : BubbleColors.incoming)
+        bubble.gradientColors = themed && layout.outgoingColors.count > 1 ? layout.outgoingColors : nil
         bubble.layer?.borderWidth = message.isUnsent ? 1 : 0
         bubble.layer?.borderColor = NSColor.separatorColor.cgColor
         let font = jumbo ? NSFont.systemFont(ofSize: 44) : NSFont.systemFont(ofSize: 14)
@@ -363,6 +465,14 @@ final class MessageTextView: NSTextView {
         setContentHuggingPriority(.required, for: .horizontal)
         setContentHuggingPriority(.required, for: .vertical)
         setContentCompressionResistancePriority(.required, for: .vertical)
+        unregisterDraggedTypes()
+    }
+
+    // Read-only text: let files dropped on a bubble fall through to the chat's drop target.
+    override var acceptableDragTypes: [NSPasteboard.PasteboardType] { [] }
+
+    override func updateDragTypeRegistration() {
+        unregisterDraggedTypes()
     }
 
     @available(*, unavailable)
@@ -492,7 +602,7 @@ final class AttachmentView: NSView {
 
     private let attachment: Attachment
     private let message: ChatMessage
-    private let imageView = NSImageView()
+    private let imageView = DisplayImageView()
 
     init(attachment: Attachment, message: ChatMessage, maxWidth: CGFloat) {
         self.attachment = attachment
@@ -563,7 +673,7 @@ final class AttachmentView: NSView {
         ])
 
         if attachment.kind == .video {
-            let play = NSImageView(image: NSImage(systemSymbolName: "play.circle.fill", accessibilityDescription: "Play") ?? NSImage())
+            let play = DisplayImageView(image: NSImage(systemSymbolName: "play.circle.fill", accessibilityDescription: "Play") ?? NSImage())
             play.symbolConfiguration = .init(pointSize: 40, weight: .regular)
             play.contentTintColor = .white
             play.translatesAutoresizingMaskIntoConstraints = false
@@ -597,7 +707,7 @@ final class AttachmentView: NSView {
     private func setUpPill(symbol: String, title: String, subtitle: String?, maxWidth: CGFloat) {
         let background = BubbleView()
         background.color = BubbleColors.incoming
-        let icon = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
+        let icon = DisplayImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
         icon.symbolConfiguration = .init(pointSize: 18, weight: .regular)
         icon.contentTintColor = .secondaryLabelColor
         let titleLabel = NSTextField(labelWithString: title)

@@ -14,6 +14,8 @@ final class ChatStore {
     }
 
     let changes = PassthroughSubject<Change, Never>()
+    /// Every message event from the core (new, edited or backfilled), for all threads.
+    let messageEvents = PassthroughSubject<ChatMessage, Never>()
 
     private(set) var connectionState: ConnectionState = .disconnected
     private(set) var connectionError: String?
@@ -238,6 +240,7 @@ final class ChatStore {
         case "message":
             guard let message = core.decodeEvent(ChatMessage.self, from: payload) else { return }
             upsert(message)
+            messageEvents.send(message)
 
         case "messageRemoved":
             guard let event = core.decodeEvent(MessageRemovedEvent.self, from: payload) else { return }

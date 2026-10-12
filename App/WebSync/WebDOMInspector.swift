@@ -81,6 +81,18 @@ enum WebDOMInspector {
                     try? FileManager.default.removeItem(at: importFile)
                     WebHistoryImporter.shared.importHistory(threadID: threadID.trimmingCharacters(in: .whitespacesAndNewlines))
                 }
+                // dumpviews.txt lists the views registered as drop targets (to views.out).
+                let dumpViewsFile = supportDir.appendingPathComponent("dumpviews.txt")
+                if FileManager.default.fileExists(atPath: dumpViewsFile.path) {
+                    try? FileManager.default.removeItem(at: dumpViewsFile)
+                    try? dropTargetDump().write(to: supportDir.appendingPathComponent("views.out"), atomically: true, encoding: .utf8)
+                }
+                // testnotify.txt posts test notifications in two fake chats.
+                let testNotifyFile = supportDir.appendingPathComponent("testnotify.txt")
+                if FileManager.default.fileExists(atPath: testNotifyFile.path) {
+                    try? FileManager.default.removeItem(at: testNotifyFile)
+                    Notifier.shared.postTest()
+                }
                 let input = supportDir.appendingPathComponent("webeval.js")
                 guard let script = try? String(contentsOf: input, encoding: .utf8) else { return }
                 try? FileManager.default.removeItem(at: input)
@@ -96,6 +108,23 @@ enum WebDOMInspector {
                 }
             }
         }
+    }
+
+    private static func dropTargetDump() -> String {
+        var lines: [String] = []
+        func visit(_ view: NSView, depth: Int) {
+            let types = view.registeredDraggedTypes
+            if !types.isEmpty {
+                let frame = view.convert(view.bounds, to: nil)
+                lines.append("\(String(repeating: "  ", count: depth))\(type(of: view)) hidden=\(view.isHiddenOrHasHiddenAncestor) alpha=\(view.alphaValue) frame=\(frame) types=\(types.count)")
+            }
+            for subview in view.subviews { visit(subview, depth: depth + 1) }
+        }
+        for window in NSApp.windows where window.isVisible {
+            lines.append("WINDOW \(window.title)")
+            if let content = window.contentView?.superview ?? window.contentView { visit(content, depth: 1) }
+        }
+        return lines.joined(separator: "\n")
     }
 
     static func pageDidLoad(_ controller: WebSyncController) {

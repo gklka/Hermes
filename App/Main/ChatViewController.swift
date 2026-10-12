@@ -1,12 +1,15 @@
 import AppKit
 import Combine
+import QuickLookUI
 
-final class ChatViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, MessageCellDelegate, ComposeViewDelegate {
+final class ChatViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, MessageCellDelegate, ComposeViewDelegate,
+    QLPreviewPanelDataSource {
     private(set) var threadID: String?
 
     private enum Row {
         case separator(String)
         case caption(String, CaptionCellView.Placement, NSColor)
+        case restore
         case message(ChatMessage, MessageCellView.Layout)
         case typing
     }
@@ -93,6 +96,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
                     let conversation = self.store.conversation(threadID)
                     if conversation != self.lastConversation {
                         self.lastConversation = conversation
+                        self.updateComposeTheme()
                         self.reload()
                     }
                 default:
@@ -108,6 +112,47 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
 
         WebHistoryImporter.shared.onStateChange = { [weak self] threadID, _ in
             if threadID == self?.threadID { self?.reload() }
+        }
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(restoreWindowClosed), name: NSWindow.willCloseNotification, object: WebSyncController.shared.window
+        )
+
+        // No notifications for the chat that's on screen.
+        Notifier.shared.isThreadVisible = { [weak self] threadID in
+            guard let self, self.threadID == threadID, let window = self.view.window else { return false }
+            return NSApp.isActive && window.isKeyWindow && !window.isMiniaturized
+        }
+
+        // Typing while no text field is active goes to the compose field. The event is returned,
+        // so it's delivered to the field once it's focused (dead keys and input methods work too).
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.shouldRedirectTyping(event) else { return event }
+            self.compose.focus()
+            return event
+        }
+    }
+
+    private func shouldRedirectTyping(_ event: NSEvent) -> Bool {
+        guard threadID != nil, let window = view.window, event.window === window, window.attachedSheet == nil,
+              event.modifierFlags.intersection([.command, .control]).isEmpty else { return false }
+        if let text = window.firstResponder as? NSTextView, text.isEditable {
+            return false
+        }
+        // Printable characters only: no Return, Tab, Esc, Delete, arrows or function keys.
+        guard let characters = event.charactersIgnoringModifiers, !characters.isEmpty else { return false }
+        return characters.unicodeScalars.allSatisfy { scalar in
+            scalar.value >= 0x20 && scalar.value != 0x7F && !(0xF700...0xF8FF).contains(scalar.value)
+        }
+    }
+
+    /// After the user restored chats in the web window, pick up the chat list and retry this chat.
+    @objc private func restoreWindowClosed() {
+        guard let threadID, WebHistoryImporter.shared.needsRestore.contains(threadID) else { return }
+        Task {
+            await WebChatImporter.shared.runOnce()
+            if self.threadID == threadID {
+                WebHistoryImporter.shared.importHistory(threadID: threadID)
+            }
         }
     }
 
@@ -131,6 +176,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         }
         self.threadID = threadID
         lastConversation = threadID.flatMap { store.conversation($0) }
+        updateComposeTheme()
         replyTarget = nil
         compose.hideReply()
         if let draft = threadID.flatMap({ drafts[$0] }) {
@@ -141,6 +187,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         updateEmptyState()
         reload(scrollToBottom: true)
         guard let threadID else { return }
+        Notifier.shared.clear(threadID: threadID)
         compose.focus()
         Task {
             await store.openThread(threadID)
@@ -148,10 +195,17 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
                 reload(scrollToBottom: true)
                 markReadIfVisible()
             }
+            // Theme first: it's quick, while the history import can scroll back a long way.
+            WebThemeReader.shared.refresh(threadID: threadID)
             if store.conversation(threadID)?.isEncrypted == true {
                 WebHistoryImporter.shared.importHistory(threadID: threadID)
             }
         }
+    }
+
+    /// The compose button shows the chat's quick reaction, tinted with its theme color.
+    private func updateComposeTheme() {
+        compose.setQuickReaction(lastConversation?.quickEmoji, tint: BubbleColors.theme(lastConversation?.bubbleColors).first)
     }
 
     func markReadIfVisible() {
@@ -178,15 +232,13 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         let selfID = store.account?.id
         var result: [Row] = []
         let groupGap: Int64 = 5 * 60 * 1000
+        let outgoingColors = BubbleColors.theme(conversation.bubbleColors)
         var previous: ChatMessage?
 
         if WebHistoryImporter.shared.importing.contains(threadID) {
             result.append(.caption("Loading earlier messages from Messenger web…", .center, .secondaryLabelColor))
-        } else if messages.isEmpty && conversation.isEncrypted {
-            result.append(.caption(
-                "🔒 End-to-end encrypted. Earlier messages appear here once they're restored in Messenger web (File → Restore Encrypted Chats…).",
-                .center, .secondaryLabelColor
-            ))
+        } else if conversation.isEncrypted && (messages.isEmpty || WebHistoryImporter.shared.needsRestore.contains(threadID)) {
+            result.append(.restore)
         }
 
         for (index, message) in messages.enumerated() {
@@ -211,6 +263,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             var layout = MessageCellView.Layout()
             layout.maxWidth = bubbleMaxWidth
             layout.isFirstInGroup = !continuesPrevious
+            layout.outgoingColors = outgoingColors
             if conversation.isGroup && !message.isFromMe {
                 let participant = store.participant(message.senderID, in: threadID)
                 layout.senderName = participant?.name ?? "Unknown"
@@ -278,6 +331,18 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             scrollView.contentView.scroll(to: NSPoint(x: 0, y: oldOffset + delta))
             scrollView.reflectScrolledClipView(scrollView.contentView)
         }
+        alignGradients()
+    }
+
+    /// Gradient themes span the visible chat, so visible bubbles are realigned as it scrolls.
+    private func alignGradients() {
+        guard let threadID, (store.conversation(threadID)?.bubbleColors?.count ?? 0) > 1 else { return }
+        let visible = tableView.rows(in: scrollView.contentView.bounds)
+        for row in visible.lowerBound..<visible.upperBound {
+            if let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? MessageCellView {
+                cell.alignGradient(to: scrollView.contentView)
+            }
+        }
     }
 
     private func scrollToBottom() {
@@ -286,6 +351,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     }
 
     @objc private func scrolled() {
+        alignGradients()
         guard let threadID, !isLoadingOlder, scrollView.contentView.bounds.minY < 200, !rows.isEmpty else { return }
         isLoadingOlder = true
         Task {
@@ -311,6 +377,10 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         case .caption(let text, let placement, let color):
             let cell = reuse("Caption", CaptionCellView.init)
             cell.configure(text, placement: placement, color: color, maxWidth: bubbleMaxWidth)
+            return cell
+        case .restore:
+            let cell = reuse("Restore", RestoreCellView.init)
+            cell.configure(maxWidth: bubbleMaxWidth)
             return cell
         case .message(let message, let layout):
             let cell = reuse("Message", MessageCellView.init)
@@ -391,14 +461,72 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             }
             return
         }
+        // Quick Look with all of the message's attachments, starting at the clicked one.
+        let attachments = message.attachments.filter { $0.kind != .link }
         Task {
-            do {
-                let url = try await store.localFile(for: attachment, in: message)
-                NSWorkspace.shared.open(url)
-            } catch {
-                _ = presentError(error)
+            var urls: [URL] = []
+            var startIndex = 0
+            for item in attachments {
+                do {
+                    let url = try await store.localFile(for: item, in: message)
+                    if item.id == attachment.id { startIndex = urls.count }
+                    urls.append(url)
+                } catch {
+                    if item.id == attachment.id {
+                        _ = presentError(error)
+                        return
+                    }
+                    CoreBridge.shared.log("Quick Look: attachment \(item.id) unavailable: \(error)")
+                }
             }
+            showQuickLook(urls, at: startIndex)
         }
+    }
+
+    // MARK: - Quick Look
+
+    private var previewItems: [URL] = []
+    private var previewStartIndex = 0
+
+    private func showQuickLook(_ urls: [URL], at index: Int) {
+        guard !urls.isEmpty, let panel = QLPreviewPanel.shared() else { return }
+        previewItems = urls
+        previewStartIndex = index
+        // The panel finds its controller through the responder chain, which must include this view controller.
+        let responderInChat = (view.window?.firstResponder as? NSView)?.isDescendant(of: view) ?? false
+        if !responderInChat {
+            compose.focus()
+        }
+        if panel.isVisible {
+            panel.updateController()
+            panel.reloadData()
+            panel.currentPreviewItemIndex = index
+        } else {
+            panel.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool {
+        !previewItems.isEmpty
+    }
+
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        panel.dataSource = self
+        panel.reloadData()
+        panel.currentPreviewItemIndex = previewStartIndex
+    }
+
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        panel.dataSource = nil
+        previewItems = []
+    }
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        previewItems.count
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! {
+        previewItems[index] as NSURL
     }
 
     private func toggleReaction(_ emoji: String, on message: ChatMessage) {
@@ -456,8 +584,9 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         }
     }
 
-    func composeViewAttach(_ view: ComposeView) {
-        guard let window = view.window else { return }
+    /// File → Attach Files…: stages the chosen files in the compose field.
+    func attachFiles() {
+        guard threadID != nil, let window = view.window else { return }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
@@ -497,6 +626,11 @@ final class DropTargetView: NSView {
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         ComposeTextView.hasAttachments(sender.draggingPasteboard) ? .copy : []
+    }
+
+    // Called continuously during the drag; without it the drop isn't accepted.
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        draggingEntered(sender)
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {

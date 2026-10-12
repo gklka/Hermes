@@ -24,6 +24,11 @@ struct Conversation: Codable, Identifiable, Hashable {
     var isMuted: Bool
     var isMarketplace: Bool
     var participants: [Participant]
+    /// The chat's custom Messenger theme for outgoing bubbles: one color, or several for a
+    /// gradient (top to bottom of the visible chat). Nil for the default theme.
+    var bubbleColors: [String]?
+    /// The chat's custom quick reaction emoji (the like button). Nil for the default like.
+    var quickEmoji: String?
 
     var lastActivityDate: Date { Date(timeIntervalSince1970: TimeInterval(lastActivity) / 1000) }
 }

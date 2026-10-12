@@ -536,6 +536,10 @@ func (s *Store) Conversation(t *threadRow, selfID string) apiConversation {
 		IsMarketplace:   t.Type == table.MARKETPLACE,
 		Participants:    make([]apiParticipant, 0, len(participants)),
 	}
+	if colors := s.Get("colors:" + t.ID); colors != "" {
+		conv.BubbleColors = strings.Split(colors, ",")
+	}
+	conv.QuickEmoji = s.Get("emoji:" + t.ID)
 	var others []participantRow
 	for _, p := range participants {
 		conv.Participants = append(conv.Participants, apiParticipant{

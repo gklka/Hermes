@@ -9,6 +9,8 @@ final class WebHistoryImporter {
     /// Called on the main thread when an import starts/finishes for a thread.
     var onStateChange: ((_ threadID: String, _ isImporting: Bool) -> Void)?
     private(set) var importing: Set<String> = []
+    /// Threads whose history the web app couldn't show (not restored there with the PIN yet).
+    private(set) var needsRestore: Set<String> = []
     private var importedThisSession: Set<String> = []
 
     private struct Result: Decodable {
@@ -50,6 +52,7 @@ final class WebHistoryImporter {
                 CoreBridge.shared.log("WebHistoryImporter: web ID for \(threadID) is '\(webID)'")
                 guard !webID.isEmpty else {
                     CoreBridge.shared.log("WebHistoryImporter: no web chat known for \(threadID)")
+                    needsRestore.insert(threadID)
                     return
                 }
                 let web = WebSyncController.shared
@@ -66,8 +69,18 @@ final class WebHistoryImporter {
                     CoreBridge.shared.log("WebHistoryImporter: \(error)")
                 }
                 struct ImportParams: Encodable { let threadID: String; let messages: [Message] }
-                try await CoreBridge.shared.call("web.importMessages", ImportParams(threadID: threadID, messages: result.messages))
+                struct ImportResult: Decodable { let imported: Int; let unrestored: Int }
+                let imported = try await CoreBridge.shared.call(
+                    "web.importMessages", ImportParams(threadID: threadID, messages: result.messages), as: ImportResult.self
+                )
+                CoreBridge.shared.log("WebHistoryImporter: imported \(imported.imported), not restored \(imported.unrestored)")
                 // The core emits each stored message as an event, so open chats update by themselves.
+                if result.messages.isEmpty || imported.unrestored > 0 {
+                    // Not marked as imported, so it's tried again after a restore.
+                    needsRestore.insert(threadID)
+                    return
+                }
+                needsRestore.remove(threadID)
                 importedThisSession.insert(threadID)
             } catch {
                 CoreBridge.shared.log("WebHistoryImporter: \(error)")

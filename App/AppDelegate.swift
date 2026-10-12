@@ -18,6 +18,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         store.start()
+
+        Notifier.shared.onOpenThread = { [weak self] threadID in
+            guard let self, self.mainWindowController != nil else { return }
+            self.showMain()
+            self.mainWindowController?.select(threadID: threadID)
+            NSApp.activate()
+        }
+        Notifier.shared.start()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
