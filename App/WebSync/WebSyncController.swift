@@ -55,6 +55,25 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
         host.addSubview(webView, positioned: .below, relativeTo: nil)
     }
 
+    /// While the main window is being resized, the hidden web view leaves it: WebKit syncs every
+    /// step of a window resize with the page's rendering process (Core Animation fences), which
+    /// made resizing lag. It comes back when the resize ends.
+    func leaveWindowForLiveResize() {
+        guard window?.isVisible != true, let host = invisibleHost, webView.superview === host else { return }
+        isAwayForLiveResize = true
+        webView.removeFromSuperview()
+    }
+
+    func returnAfterLiveResize() {
+        guard isAwayForLiveResize else { return }
+        isAwayForLiveResize = false
+        if let host = invisibleHost, window?.isVisible != true {
+            embedInvisibly(in: host)
+        }
+    }
+
+    private var isAwayForLiveResize = false
+
     func windowWillClose(_ notification: Notification) {
         restoreWatchTimer?.invalidate()
         restoreWatchTimer = nil

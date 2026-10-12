@@ -87,6 +87,12 @@ enum WebDOMInspector {
                     try? FileManager.default.removeItem(at: dumpViewsFile)
                     try? dropTargetDump().write(to: supportDir.appendingPathComponent("views.out"), atomically: true, encoding: .utf8)
                 }
+                // resizetest.txt times resizing the main window (to resize.out).
+                let resizeTestFile = supportDir.appendingPathComponent("resizetest.txt")
+                if FileManager.default.fileExists(atPath: resizeTestFile.path) {
+                    try? FileManager.default.removeItem(at: resizeTestFile)
+                    try? resizeBenchmark().write(to: supportDir.appendingPathComponent("resize.out"), atomically: true, encoding: .utf8)
+                }
                 // testnotify.txt posts test notifications in two fake chats.
                 let testNotifyFile = supportDir.appendingPathComponent("testnotify.txt")
                 if FileManager.default.fileExists(atPath: testNotifyFile.path) {
@@ -108,6 +114,44 @@ enum WebDOMInspector {
                 }
             }
         }
+    }
+
+    /// Resizes the main window in steps (drawing each) and reports the time per step, with
+    /// everything shown and with each suspect part hidden.
+    private static func resizeBenchmark() -> String {
+        guard let window = NSApp.windows.first(where: { $0.contentViewController is NSSplitViewController && $0.isVisible }),
+              let content = window.contentView else { return "no main window" }
+        func all(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(all) }
+        let views = all(content)
+        let chat = views.first { String(describing: type(of: $0)) == "DropTargetView" }
+        let chatViews = chat.map(all) ?? []
+        let messageList = chatViews.first { ($0 as? NSScrollView)?.documentView is NSTableView }
+        let webView = chatViews.first { $0 is WKWebView }
+        let sidebarList = views.first { ($0 as? NSScrollView)?.documentView is NSTableView && !chatViews.contains($0) }
+
+        let original = window.frame
+        func measure(_ label: String, hiding view: NSView?) -> String {
+            view?.isHidden = true
+            defer { view?.isHidden = false }
+            let steps = 40
+            let start = CACurrentMediaTime()
+            for step in 0..<steps {
+                var frame = original
+                frame.size.width = original.width - CGFloat(step % 20) * 6
+                window.setFrame(frame, display: true)
+            }
+            window.setFrame(original, display: true)
+            let ms = (CACurrentMediaTime() - start) * 1000 / Double(steps)
+            return String(format: "%@: %.1f ms per step", label, ms)
+        }
+        return [
+            "window \(Int(original.width))x\(Int(original.height))",
+            measure("everything", hiding: nil),
+            measure("without message list", hiding: messageList),
+            measure("without hidden web view", hiding: webView),
+            measure("without sidebar list", hiding: sidebarList),
+            measure("everything again", hiding: nil),
+        ].joined(separator: "\n")
     }
 
     private static func dropTargetDump() -> String {

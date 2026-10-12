@@ -37,7 +37,11 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             guard let self, self.threadID != nil else { return false }
             return self.compose.addAttachments(from: pasteboard)
         }
+        root.onStartLiveResize = {
+            WebSyncController.shared.leaveWindowForLiveResize()
+        }
         root.onEndLiveResize = { [weak self] in
+            WebSyncController.shared.returnAfterLiveResize()
             self?.reloadIfBubbleWidthChanged()
         }
         view = root
@@ -791,7 +795,13 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
 /// compose field.
 final class DropTargetView: NSView {
     var onDrop: ((NSPasteboard) -> Bool)?
+    var onStartLiveResize: (() -> Void)?
     var onEndLiveResize: (() -> Void)?
+
+    override func viewWillStartLiveResize() {
+        super.viewWillStartLiveResize()
+        onStartLiveResize?()
+    }
 
     override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
