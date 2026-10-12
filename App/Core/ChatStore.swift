@@ -1,0 +1,349 @@
+import Combine
+import Foundation
+
+/// In-memory view model shared by all windows. The Go core is the source of truth
+/// (it persists everything); this store mirrors what the UI currently needs.
+final class ChatStore {
+    static let shared = ChatStore()
+
+    enum Change: Hashable {
+        case connection
+        case conversations
+        case messages(threadID: String)
+        case typing(threadID: String)
+    }
+
+    let changes = PassthroughSubject<Change, Never>()
+
+    private(set) var connectionState: ConnectionState = .disconnected
+    private(set) var connectionError: String?
+    private(set) var account: Account?
+
+    /// Sorted by most recent activity.
+    private(set) var conversations: [Conversation] = []
+    private var conversationsByID: [String: Conversation] = [:]
+
+    /// Messages per thread, sorted oldest → newest. Only populated for opened threads.
+    private var messagesByThread: [String: [ChatMessage]] = [:]
+    private var hasMoreHistory: [String: Bool] = [:]
+    private var loadingHistory: Set<String> = []
+
+    /// threadID → set of userIDs currently typing.
+    private(set) var typing: [String: Set<String>] = [:]
+    private var typingTimers: [String: Timer] = [:]
+
+    private let core = CoreBridge.shared
+    private var queuedChanges: [Change] = []
+    private var conversationsDirty = false
+
+    private init() {
+        core.onEvent = { [weak self] name, payload in
+            self?.handleEvent(name, payload)
+        }
+    }
+
+    // MARK: - Queries
+
+    func conversation(_ id: String) -> Conversation? { conversationsByID[id] }
+
+    func messages(in threadID: String) -> [ChatMessage] { messagesByThread[threadID] ?? [] }
+
+    func participantName(_ userID: String, in threadID: String) -> String {
+        if userID == account?.id { return "You" }
+        return conversationsByID[threadID]?.participants.first { $0.id == userID }?.name ?? "Unknown"
+    }
+
+    func participant(_ userID: String, in threadID: String) -> Participant? {
+        conversationsByID[threadID]?.participants.first { $0.id == userID }
+    }
+
+    // MARK: - Commands
+
+    func start() {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        core.start(dataDirectory: support.appendingPathComponent("MessengerMac", isDirectory: true))
+    }
+
+    func login(cookies: [String: String]) async throws {
+        struct Params: Encodable { let cookies: [String: String] }
+        try await core.call("login", Params(cookies: cookies))
+    }
+
+    func logout() async {
+        try? await core.call("logout")
+        conversations = []
+        conversationsByID = [:]
+        messagesByThread = [:]
+        notify(.conversations)
+    }
+
+    func userAgent() async -> String? {
+        struct Result: Decodable { let userAgent: String }
+        return try? await core.call("userAgent", as: Result.self).userAgent
+    }
+
+    func loadConversations() async {
+        do {
+            let list = try await core.call("threads.list", as: [Conversation].self)
+            conversationsByID = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
+            resortConversations()
+        } catch {
+            NSLog("threads.list failed: \(error)")
+        }
+    }
+
+    func searchContacts(_ query: String) async -> [Participant] {
+        struct Params: Encodable { let text: String }
+        return (try? await core.call("contacts.search", Params(text: query), as: [Participant].self)) ?? []
+    }
+
+    /// Opens (creating if needed) the 1:1 chat with a contact.
+    func openDirectChat(with userID: String) async throws -> Conversation {
+        struct Params: Encodable { let userID: String }
+        let conversation = try await core.call("threads.open", Params(userID: userID), as: Conversation.self)
+        conversationsByID[conversation.id] = conversation
+        resortConversations()
+        return conversation
+    }
+
+    func loadMoreConversations() async {
+        try? await core.call("threads.loadMore")
+    }
+
+    /// Loads the newest page for a thread (from the local database; the core
+    /// fetches from the server in the background if it has nothing yet).
+    func openThread(_ threadID: String) async {
+        guard messagesByThread[threadID] == nil else { return }
+        await loadPage(threadID, before: nil)
+    }
+
+    /// Loads an older page. Returns false when there is nothing more to load.
+    @discardableResult
+    func loadOlderMessages(_ threadID: String) async -> Bool {
+        guard hasMoreHistory[threadID] != false, !loadingHistory.contains(threadID) else { return false }
+        let oldest = messagesByThread[threadID]?.first?.timestamp
+        await loadPage(threadID, before: oldest)
+        return true
+    }
+
+    private func loadPage(_ threadID: String, before: Int64?) async {
+        struct Params: Encodable { let threadID: String; let before: Int64?; let limit: Int }
+        loadingHistory.insert(threadID)
+        defer { loadingHistory.remove(threadID) }
+        do {
+            let page = try await core.call(
+                "messages.list", Params(threadID: threadID, before: before, limit: 50), as: MessagesPage.self
+            )
+            hasMoreHistory[threadID] = page.hasMore
+            var existing = messagesByThread[threadID] ?? []
+            let known = Set(existing.map(\.id))
+            existing.append(contentsOf: page.messages.filter { !known.contains($0.id) })
+            existing.sort { $0.timestamp < $1.timestamp }
+            messagesByThread[threadID] = existing
+            notify(.messages(threadID: threadID))
+        } catch {
+            NSLog("messages.list failed: \(error)")
+        }
+    }
+
+    /// Sends each attachment as its own message, then the text (like Messages). The reply
+    /// target applies to the text.
+    func send(text: String, attachments: [URL] = [], in threadID: String, replyTo: String? = nil) {
+        struct TextParams: Encodable { let threadID: String; let text: String; let replyTo: String? }
+        struct MediaParams: Encodable { let threadID: String; let path: String }
+        Task {
+            for url in attachments {
+                do {
+                    let prepared = try await Task.detached { try OutgoingMedia.prepare(url) }.value
+                    try await core.call("messages.sendMedia", MediaParams(threadID: threadID, path: prepared.path))
+                } catch {
+                    core.log("messages.sendMedia failed for \(url.lastPathComponent): \(error)")
+                }
+            }
+            guard !text.isEmpty else { return }
+            do {
+                try await core.call("messages.send", TextParams(threadID: threadID, text: text, replyTo: replyTo))
+            } catch {
+                NSLog("messages.send failed: \(error)")
+            }
+        }
+    }
+
+    /// Pass an empty emoji to remove your reaction.
+    func react(to message: ChatMessage, with emoji: String) {
+        struct Params: Encodable { let threadID: String; let messageID: String; let emoji: String }
+        Task {
+            try? await core.call("messages.react", Params(threadID: message.threadID, messageID: message.id, emoji: emoji))
+        }
+    }
+
+    func unsend(_ message: ChatMessage) {
+        struct Params: Encodable { let threadID: String; let messageID: String }
+        Task {
+            try? await core.call("messages.unsend", Params(threadID: message.threadID, messageID: message.id))
+        }
+    }
+
+    func markRead(_ threadID: String) {
+        struct Params: Encodable { let threadID: String }
+        guard var conversation = conversationsByID[threadID], conversation.unreadCount > 0 else { return }
+        conversation.unreadCount = 0
+        conversationsByID[threadID] = conversation
+        resortConversations()
+        Task { try? await core.call("threads.markRead", Params(threadID: threadID)) }
+    }
+
+    func setTyping(_ isTyping: Bool, in threadID: String) {
+        struct Params: Encodable { let threadID: String; let isTyping: Bool }
+        Task { try? await core.call("threads.typing", Params(threadID: threadID, isTyping: isTyping)) }
+    }
+
+    /// Returns a local file URL for an attachment, downloading (and decrypting) it if needed.
+    func localFile(for attachment: Attachment, in message: ChatMessage) async throws -> URL {
+        if let path = attachment.localPath, FileManager.default.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        struct Params: Encodable { let threadID: String; let messageID: String; let attachmentID: String }
+        struct Result: Decodable { let path: String }
+        let result = try await core.call(
+            "media.download",
+            Params(threadID: message.threadID, messageID: message.id, attachmentID: attachment.id),
+            as: Result.self
+        )
+        return URL(fileURLWithPath: result.path)
+    }
+
+    // MARK: - Events
+
+    private func handleEvent(_ name: String, _ payload: Data) {
+        switch name {
+        case "state":
+            guard let event = core.decodeEvent(StateEvent.self, from: payload) else { return }
+            connectionState = event.state
+            connectionError = event.error
+            if let account = event.account { self.account = account }
+            notify(.connection)
+
+        case "thread":
+            guard let conversation = core.decodeEvent(Conversation.self, from: payload) else { return }
+            conversationsByID[conversation.id] = conversation
+            resortConversations()
+
+        case "threadRemoved":
+            guard let event = core.decodeEvent(ThreadRemovedEvent.self, from: payload) else { return }
+            conversationsByID[event.threadID] = nil
+            messagesByThread[event.threadID] = nil
+            resortConversations()
+
+        case "message":
+            guard let message = core.decodeEvent(ChatMessage.self, from: payload) else { return }
+            upsert(message)
+
+        case "messageRemoved":
+            guard let event = core.decodeEvent(MessageRemovedEvent.self, from: payload) else { return }
+            messagesByThread[event.threadID]?.removeAll { $0.id == event.messageID }
+            notify(.messages(threadID: event.threadID))
+
+        case "pendingResolved":
+            guard let event = core.decodeEvent(PendingResolvedEvent.self, from: payload) else { return }
+            guard var list = messagesByThread[event.threadID],
+                  let index = list.firstIndex(where: { $0.id == event.pendingID }) else { return }
+            if event.error != nil {
+                list[index].status = .failed
+            } else if let messageID = event.messageID, list.contains(where: { $0.id == messageID }) {
+                // The real message already arrived; drop the local echo.
+                list.remove(at: index)
+            }
+            messagesByThread[event.threadID] = list
+            notify(.messages(threadID: event.threadID))
+
+        case "typing":
+            guard let event = core.decodeEvent(TypingEvent.self, from: payload) else { return }
+            setRemoteTyping(event)
+
+        case "readReceipt":
+            guard let event = core.decodeEvent(ReadReceiptEvent.self, from: payload),
+                  var conversation = conversationsByID[event.threadID],
+                  let index = conversation.participants.firstIndex(where: { $0.id == event.readerID }) else { return }
+            conversation.participants[index].readWatermark = event.timestamp
+            conversationsByID[event.threadID] = conversation
+            notify(.messages(threadID: event.threadID))
+
+        default:
+            break
+        }
+    }
+
+    private func upsert(_ message: ChatMessage) {
+        // Only keep messages for threads the UI has opened; the list view only needs the snippet.
+        guard var list = messagesByThread[message.threadID] else { return }
+        if let index = list.firstIndex(where: { $0.id == message.id }) {
+            list[index] = message
+        } else {
+            // A confirmed outgoing message carries the ID of its local echo; replace the echo.
+            if let pendingID = message.pendingID, pendingID != message.id {
+                list.removeAll { $0.id == pendingID }
+            }
+            let insertAt = list.lastIndex(where: { $0.timestamp <= message.timestamp }).map { $0 + 1 } ?? 0
+            list.insert(message, at: insertAt)
+        }
+        messagesByThread[message.threadID] = list
+        if message.isFromMe == false {
+            clearTyping(message.senderID, in: message.threadID)
+        }
+        notify(.messages(threadID: message.threadID))
+    }
+
+    private func setRemoteTyping(_ event: TypingEvent) {
+        let key = "\(event.threadID)|\(event.senderID)"
+        typingTimers[key]?.invalidate()
+        if event.isTyping {
+            typing[event.threadID, default: []].insert(event.senderID)
+            // Messenger doesn't always send a "stopped typing" event.
+            typingTimers[key] = Timer.scheduledTimer(withTimeInterval: 8, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.clearTyping(event.senderID, in: event.threadID)
+                }
+            }
+            notify(.typing(threadID: event.threadID))
+        } else {
+            clearTyping(event.senderID, in: event.threadID)
+        }
+    }
+
+    private func clearTyping(_ userID: String, in threadID: String) {
+        typingTimers.removeValue(forKey: "\(threadID)|\(userID)")?.invalidate()
+        guard typing[threadID]?.remove(userID) != nil else { return }
+        notify(.typing(threadID: threadID))
+    }
+
+    private func resortConversations() {
+        conversationsDirty = true
+        notify(.conversations)
+    }
+
+    /// Changes are coalesced and delivered on the next run loop pass, so a burst of
+    /// sync events results in a single UI update.
+    private func notify(_ change: Change) {
+        if queuedChanges.isEmpty {
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated { self?.flushChanges() }
+            }
+        }
+        if !queuedChanges.contains(change) {
+            queuedChanges.append(change)
+        }
+    }
+
+    private func flushChanges() {
+        if conversationsDirty {
+            conversationsDirty = false
+            conversations = conversationsByID.values.sorted { $0.lastActivity > $1.lastActivity }
+        }
+        let pending = queuedChanges
+        queuedChanges = []
+        for change in pending {
+            changes.send(change)
+        }
+    }
+}
