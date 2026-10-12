@@ -1,9 +1,9 @@
 import AppKit
 import Combine
-import QuickLookUI
+import ImageIO
+import UniformTypeIdentifiers
 
-final class ChatViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, MessageCellDelegate, ComposeViewDelegate,
-    QLPreviewPanelDataSource {
+final class ChatViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, MessageCellDelegate, ComposeViewDelegate {
     private(set) var threadID: String?
 
     private enum Row {
@@ -21,7 +21,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     private let emptyLabel = NSTextField(labelWithString: "No Conversation Selected")
     private var rows: [Row] = []
     private var cancellables: Set<AnyCancellable> = []
-    private var lastLayoutWidth: CGFloat = 0
+    private var lastBubbleMaxWidth: CGFloat = 0
     private var isLoadingOlder = false
     private var replyTarget: ChatMessage?
     private var isTypingSent = false
@@ -36,6 +36,9 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         root.onDrop = { [weak self] pasteboard in
             guard let self, self.threadID != nil else { return false }
             return self.compose.addAttachments(from: pasteboard)
+        }
+        root.onEndLiveResize = { [weak self] in
+            self?.reloadIfBubbleWidthChanged()
         }
         view = root
         WebSyncController.shared.embedInvisibly(in: root)
@@ -158,13 +161,20 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
 
     override func viewDidLayout() {
         super.viewDidLayout()
-        // Bubble widths depend on the window width.
-        let width = scrollView.contentSize.width
-        if abs(width - lastLayoutWidth) > 1 {
-            lastLayoutWidth = width
-            // Defer so we don't re-enter layout from inside viewDidLayout.
-            DispatchQueue.main.async { [weak self] in self?.reload() }
+        // Reloading re-measures every row, far too slow for each step of a live resize; the
+        // bubbles keep their width until the resize ends.
+        if !view.inLiveResize {
+            reloadIfBubbleWidthChanged()
         }
+    }
+
+    /// Bubble widths depend on the chat's width (up to a maximum), so reload when they change.
+    private func reloadIfBubbleWidthChanged() {
+        let width = bubbleMaxWidth
+        guard abs(width - lastBubbleMaxWidth) > 1 else { return }
+        lastBubbleMaxWidth = width
+        // Defer so we don't re-enter layout from inside viewDidLayout.
+        DispatchQueue.main.async { [weak self] in self?.reload() }
     }
 
     // MARK: - Showing a thread
@@ -195,8 +205,9 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
                 reload(scrollToBottom: true)
                 markReadIfVisible()
             }
-            // Theme first: it's quick, while the history import can scroll back a long way.
-            WebThemeReader.shared.refresh(threadID: threadID)
+            // Theme first (a few seconds): the history import can scroll back for minutes and
+            // would hold the web view the whole time.
+            await WebThemeReader.shared.refresh(threadID: threadID)
             if store.conversation(threadID)?.isEncrypted == true {
                 WebHistoryImporter.shared.importHistory(threadID: threadID)
             }
@@ -461,72 +472,237 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             }
             return
         }
-        // Quick Look with all of the message's attachments, starting at the clicked one.
+        // Quick Look with all of the message's attachments, starting at the clicked one. Pictures
+        // not downloaded yet show the low-res version from the chat until the full one arrives.
         let attachments = message.attachments.filter { $0.kind != .link }
         Task {
-            var urls: [URL] = []
+            var items: [MediaViewer.Item] = []
+            var ids: [String] = []
+            var pending: [Attachment] = []
             var startIndex = 0
             for item in attachments {
+                let isPicture = [.image, .gif, .sticker].contains(item.kind)
+                var viewerItem: MediaViewer.Item?
+                if let downloaded = store.downloadedFile(for: item, in: message) {
+                    viewerItem = MediaViewer.Item(
+                        url: downloaded, title: Self.title(of: item),
+                        pixelSize: isPicture ? Self.localPixelSize(downloaded) : Self.videoSize(of: item)
+                    )
+                } else if isPicture, let image = cell.attachmentView(for: item.id)?.displayedImage?
+                            .cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                    let size = await finalPixelSize(of: item, in: message, thumbnail: image)
+                    if let preview = await Self.writeQuickLookPreview(image, finalSize: size, attachmentID: item.id) {
+                        viewerItem = MediaViewer.Item(url: preview, title: Self.title(of: item), pixelSize: size)
+                        pending.append(item)
+                    }
+                }
+                if viewerItem == nil {
+                    do {
+                        let url = try await store.localFile(for: item, in: message)
+                        viewerItem = MediaViewer.Item(
+                            url: url, title: Self.title(of: item),
+                            pixelSize: isPicture ? Self.localPixelSize(url) : Self.videoSize(of: item)
+                        )
+                    } catch {
+                        if item.id == attachment.id {
+                            _ = presentError(error)
+                            return
+                        }
+                        CoreBridge.shared.log("Quick Look: attachment \(item.id) unavailable: \(error)")
+                    }
+                }
+                guard let viewerItem else { continue }
+                if item.id == attachment.id { startIndex = items.count }
+                items.append(viewerItem)
+                ids.append(item.id)
+            }
+            previewCell = cell
+            previewMessageID = message.id
+            previewAttachmentIDs = ids
+            let session = UUID()
+            previewSession = session
+            MediaViewer.shared.show(items, at: startIndex, over: view.window) { [weak self] index in
+                self?.zoomSource(forItemAt: index)
+            }
+
+            for item in pending {
                 do {
                     let url = try await store.localFile(for: item, in: message)
-                    if item.id == attachment.id { startIndex = urls.count }
-                    urls.append(url)
-                } catch {
-                    if item.id == attachment.id {
-                        _ = presentError(error)
-                        return
+                    if session == previewSession, let index = previewAttachmentIDs.firstIndex(of: item.id) {
+                        MediaViewer.shared.replaceItem(at: index, with: url)
                     }
-                    CoreBridge.shared.log("Quick Look: attachment \(item.id) unavailable: \(error)")
+                } catch {
+                    CoreBridge.shared.log("Quick Look: full-size \(item.id) unavailable, keeping the preview: \(error)")
                 }
             }
-            showQuickLook(urls, at: startIndex)
         }
+    }
+
+    private static func title(of attachment: Attachment) -> String {
+        if let filename = attachment.filename, !filename.isEmpty { return filename }
+        switch attachment.kind {
+        case .image: return "Photo"
+        case .gif: return "GIF"
+        case .sticker: return "Sticker"
+        case .video: return "Video"
+        case .audio: return "Voice Message"
+        case .file, .link: return "File"
+        }
+    }
+
+    /// A downloaded picture's pixel size (reading just its header).
+    private static func localPixelSize(_ url: URL) -> CGSize? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0 else { return nil }
+        let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+        return orientation >= 5 ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
+    }
+
+    /// A video's window size: its reported shape (the preview's), at least 960 points on the long side.
+    private static func videoSize(of attachment: Attachment) -> CGSize? {
+        guard attachment.kind == .video, let width = attachment.width, let height = attachment.height,
+              width > 0, height > 0 else { return nil }
+        let scale = max(1, 960 / CGFloat(max(width, height)))
+        return CGSize(width: CGFloat(width) * scale, height: CGFloat(height) * scale)
+    }
+
+    /// The full-size picture's pixel size, so the preview opens Quick Look at its final size.
+    /// Encrypted chats report it; regular chats only report the preview's size, so it's read from
+    /// the full image's header, or else guessed from the thumbnail's shape.
+    private func finalPixelSize(of attachment: Attachment, in message: ChatMessage, thumbnail: CGImage) async -> CGSize {
+        let reported = CGSize(width: attachment.width ?? 0, height: attachment.height ?? 0)
+        let hasReported = reported.width > 0 && reported.height > 0
+        let encrypted = store.conversation(message.threadID)?.isEncrypted ?? false
+        if encrypted && hasReported {
+            return reported
+        }
+        if !encrypted, let string = attachment.url, let url = URL(string: string), url.scheme?.hasPrefix("http") == true,
+           let probed = await Self.probePixelSize(url) {
+            return probed
+        }
+        // Guess: the thumbnail's shape at Messenger's usual full size (2048 px on the long side).
+        let shape = hasReported ? reported : CGSize(width: thumbnail.width, height: thumbnail.height)
+        let longSide = max(2048, max(reported.width, reported.height))
+        let scale = longSide / max(shape.width, shape.height)
+        return CGSize(width: (shape.width * scale).rounded(), height: (shape.height * scale).rounded())
+    }
+
+    /// Reads an image's pixel size from the start of its file (the header), without downloading it all.
+    @concurrent nonisolated private static func probePixelSize(_ url: URL) async -> CGSize? {
+        var request = URLRequest(url: url, timeoutInterval: 1.5)
+        request.setValue("bytes=0-65535", forHTTPHeaderField: "Range")
+        guard let (data, _) = try? await URLSession.shared.data(for: request) else { return nil }
+        if let size = headerPixelSize(data) {
+            return size
+        }
+        // Other formats: ImageIO, which needs the whole file (small files come back whole).
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int, width > 0, height > 0 else { return nil }
+        // EXIF orientations 5–8 are rotated by 90°, which swaps the shown width and height.
+        let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
+        return orientation >= 5 ? CGSize(width: height, height: width) : CGSize(width: width, height: height)
+    }
+
+    /// Pixel size from the first bytes of a JPEG, PNG or WebP file (Facebook serves full-size
+    /// photos as WebP). ImageIO wants much more of the file than the header to tell the size.
+    nonisolated private static func headerPixelSize(_ data: Data) -> CGSize? {
+        let b = [UInt8](data.prefix(65536))
+        func be16(_ i: Int) -> Int { Int(b[i]) << 8 | Int(b[i + 1]) }
+        func le16(_ i: Int) -> Int { Int(b[i]) | Int(b[i + 1]) << 8 }
+        func le24(_ i: Int) -> Int { Int(b[i]) | Int(b[i + 1]) << 8 | Int(b[i + 2]) << 16 }
+        func size(_ w: Int, _ h: Int) -> CGSize? { w > 0 && h > 0 ? CGSize(width: w, height: h) : nil }
+        // PNG: the IHDR chunk.
+        if b.count >= 24, b[0] == 0x89, b[1] == 0x50, b[2] == 0x4E, b[3] == 0x47 {
+            return size(be16(16) << 16 | be16(18), be16(20) << 16 | be16(22))
+        }
+        // WebP: "RIFF....WEBP", then a VP8 / VP8L / VP8X chunk.
+        if b.count >= 30, b[0] == 0x52, b[1] == 0x49, b[2] == 0x46, b[3] == 0x46,
+           b[8] == 0x57, b[9] == 0x45, b[10] == 0x42, b[11] == 0x50 {
+            switch (b[12], b[13], b[14], b[15]) {
+            case (0x56, 0x50, 0x38, 0x20): // "VP8 " (lossy)
+                return size(le16(26) & 0x3FFF, le16(28) & 0x3FFF)
+            case (0x56, 0x50, 0x38, 0x4C): // "VP8L" (lossless)
+                let bits = Int(b[21]) | Int(b[22]) << 8 | Int(b[23]) << 16 | Int(b[24]) << 24
+                return size((bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1)
+            case (0x56, 0x50, 0x38, 0x58): // "VP8X" (extended)
+                return size(le24(24) + 1, le24(27) + 1)
+            default:
+                return nil
+            }
+        }
+        // JPEG: the first start-of-frame marker.
+        guard b.count > 4, b[0] == 0xFF, b[1] == 0xD8 else { return nil }
+        var i = 2
+        while i + 9 < b.count {
+            guard b[i] == 0xFF else { return nil }
+            let marker = b[i + 1]
+            if marker == 0xFF { i += 1; continue }
+            if marker == 0x01 || (0xD0...0xD8).contains(marker) { i += 2; continue }
+            if (0xC0...0xCF).contains(marker), ![0xC4, 0xC8, 0xCC].contains(marker) {
+                return size(be16(i + 7), be16(i + 5))
+            }
+            i += 2 + be16(i + 2)
+        }
+        return nil
+    }
+
+    /// Writes the chat's low-res picture, scaled up to the full picture's size, to a temporary
+    /// file Quick Look can show. At the final size, Quick Look opens its window at the size it
+    /// keeps when the full picture replaces it.
+    @concurrent nonisolated private static func writeQuickLookPreview(_ image: CGImage, finalSize: CGSize, attachmentID: String) async -> URL? {
+        // Large enough for any screen while keeping the aspect ratio exact.
+        let scale = min(1, 6000 / max(finalSize.width, finalSize.height))
+        let width = max(1, Int((finalSize.width * scale).rounded()))
+        let height = max(1, Int((finalSize.height * scale).rounded()))
+        guard let context = CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ) else { return nil }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        guard let scaled = context.makeImage() else { return nil }
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("QuickLookPreviews", isDirectory: true)
+        let name = attachmentID.replacingOccurrences(of: "/", with: "_")
+        let url = directory.appendingPathComponent("\(name)-preview.jpg")
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            return nil
+        }
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+        let properties: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: 0.8,
+            kCGImagePropertyDPIWidth: 72,
+            kCGImagePropertyDPIHeight: 72,
+        ]
+        CGImageDestinationAddImage(destination, scaled, properties as CFDictionary)
+        return CGImageDestinationFinalize(destination) ? url : nil
     }
 
     // MARK: - Quick Look
 
-    private var previewItems: [URL] = []
-    private var previewStartIndex = 0
+    /// The attachment shown by each viewer item, to zoom from its picture in the chat.
+    private var previewAttachmentIDs: [String] = []
+    private weak var previewCell: MessageCellView?
+    private var previewMessageID: String?
+    /// Identifies the current viewer session, so late downloads don't touch a newer one.
+    private var previewSession: UUID?
 
-    private func showQuickLook(_ urls: [URL], at index: Int) {
-        guard !urls.isEmpty, let panel = QLPreviewPanel.shared() else { return }
-        previewItems = urls
-        previewStartIndex = index
-        // The panel finds its controller through the responder chain, which must include this view controller.
-        let responderInChat = (view.window?.firstResponder as? NSView)?.isDescendant(of: view) ?? false
-        if !responderInChat {
-            compose.focus()
-        }
-        if panel.isVisible {
-            panel.updateController()
-            panel.reloadData()
-            panel.currentPreviewItemIndex = index
-        } else {
-            panel.makeKeyAndOrderFront(nil)
-        }
-    }
-
-    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool {
-        !previewItems.isEmpty
-    }
-
-    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
-        panel.dataSource = self
-        panel.reloadData()
-        panel.currentPreviewItemIndex = previewStartIndex
-    }
-
-    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
-        panel.dataSource = nil
-        previewItems = []
-    }
-
-    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
-        previewItems.count
-    }
-
-    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! {
-        previewItems[index] as NSURL
+    /// Where viewer item `index`'s picture is in the chat (on screen), while it's visible.
+    private func zoomSource(forItemAt index: Int) -> (frame: NSRect, image: NSImage)? {
+        guard previewAttachmentIDs.indices.contains(index),
+              let cell = previewCell, cell.message?.id == previewMessageID,
+              let view = cell.attachmentView(for: previewAttachmentIDs[index]), let window = view.window,
+              let image = view.displayedImage else { return nil }
+        // Only while it's visible in the message list (cells are reused once scrolled away).
+        let rect = view.convert(view.bounds, to: scrollView.contentView)
+        guard scrollView.contentView.bounds.intersects(rect) else { return nil }
+        return (window.convertToScreen(view.convert(view.bounds, to: nil)), image)
     }
 
     private func toggleReaction(_ emoji: String, on message: ChatMessage) {
@@ -615,6 +791,12 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
 /// compose field.
 final class DropTargetView: NSView {
     var onDrop: ((NSPasteboard) -> Bool)?
+    var onEndLiveResize: (() -> Void)?
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        onEndLiveResize?()
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)

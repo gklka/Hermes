@@ -327,6 +327,11 @@ final class MessageCellView: NSTableCellView {
         bubble.alignGradient(to: bubble.convert(clipView.bounds, from: clipView))
     }
 
+    /// The view showing one of this message's attachments (for Quick Look's zoom).
+    func attachmentView(for attachmentID: String) -> AttachmentView? {
+        attachmentsStack.arrangedSubviews.lazy.compactMap { $0 as? AttachmentView }.first { $0.attachmentID == attachmentID }
+    }
+
     func configure(_ message: ChatMessage, layout: Layout, store: ChatStore) {
         self.message = message
         let outgoing = message.isFromMe
@@ -470,7 +475,6 @@ final class MessageTextView: NSTextView {
 
     // Read-only text: let files dropped on a bubble fall through to the chat's drop target.
     override var acceptableDragTypes: [NSPasteboard.PasteboardType] { [] }
-
     override func updateDragTypeRegistration() {
         unregisterDraggedTypes()
     }
@@ -639,6 +643,11 @@ final class AttachmentView: NSView {
     @objc private func clicked() {
         onOpen?()
     }
+
+    var attachmentID: String { attachment.id }
+
+    /// The picture shown in the chat (images, GIFs, stickers, video previews); Quick Look zooms from it.
+    var displayedImage: NSImage? { imageView.superview == nil ? nil : imageView.image }
 
     private func setUpVisual(maxWidth: CGFloat) {
         let maxHeight: CGFloat = 320

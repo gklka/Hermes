@@ -200,10 +200,23 @@ final class ChatStore {
         Task { try? await core.call("threads.typing", Params(threadID: threadID, isTyping: isTyping)) }
     }
 
-    /// Returns a local file URL for an attachment, downloading (and decrypting) it if needed.
-    func localFile(for attachment: Attachment, in message: ChatMessage) async throws -> URL {
+    /// Files downloaded this session, by "messageID|attachmentID" (message events may predate the download).
+    private var downloadedFiles: [String: URL] = [:]
+
+    /// The attachment's local file if it's already downloaded, without downloading it.
+    func downloadedFile(for attachment: Attachment, in message: ChatMessage) -> URL? {
         if let path = attachment.localPath, FileManager.default.fileExists(atPath: path) {
             return URL(fileURLWithPath: path)
+        }
+        guard let url = downloadedFiles["\(message.id)|\(attachment.id)"],
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url
+    }
+
+    /// Returns a local file URL for an attachment, downloading (and decrypting) it if needed.
+    func localFile(for attachment: Attachment, in message: ChatMessage) async throws -> URL {
+        if let url = downloadedFile(for: attachment, in: message) {
+            return url
         }
         struct Params: Encodable { let threadID: String; let messageID: String; let attachmentID: String }
         struct Result: Decodable { let path: String }
@@ -212,7 +225,9 @@ final class ChatStore {
             Params(threadID: message.threadID, messageID: message.id, attachmentID: attachment.id),
             as: Result.self
         )
-        return URL(fileURLWithPath: result.path)
+        let url = URL(fileURLWithPath: result.path)
+        downloadedFiles["\(message.id)|\(attachment.id)"] = url
+        return url
     }
 
     // MARK: - Events

@@ -8,43 +8,41 @@ final class WebThemeReader {
 
     private var readThisSession: Set<String> = []
 
-    /// Reads the theme once per session per chat. The colors are stored with the chat in the core,
-    /// so they show right away next time.
-    func refresh(threadID: String) {
+    /// Reads the theme once per session per chat, returning when done. The colors are stored with
+    /// the chat in the core, so they show right away next time.
+    func refresh(threadID: String) async {
         // The user may be entering the PIN there; don't navigate away.
         guard !readThisSession.contains(threadID), WebSyncController.shared.window?.isVisible != true else { return }
         readThisSession.insert(threadID)
-        Task {
-            do {
-                struct Params: Encodable { let threadID: String }
-                struct PathResult: Decodable { let path: String }
-                let path = try await CoreBridge.shared.call("web.threadPath", Params(threadID: threadID), as: PathResult.self).path
-                guard !path.isEmpty else {
-                    // Encrypted chat not matched to the web chat list yet; try again next time.
-                    readThisSession.remove(threadID)
-                    return
-                }
-                let web = WebSyncController.shared
-                await web.start(showWindow: false)
-                struct Theme: Decodable { let colors: [String]; let emoji: String }
-                let theme = try await web.withExclusiveAccess {
-                    await web.navigate(toPath: path)
-                    return try await web.evaluate(Self.readScript(path: path), as: Theme?.self)
-                }
-                guard let theme else {
-                    CoreBridge.shared.log("WebThemeReader: no theme found for \(threadID) at \(path)")
-                    readThisSession.remove(threadID)
-                    return
-                }
-                CoreBridge.shared.log("WebThemeReader: \(threadID) colors \(theme.colors), emoji '\(theme.emoji)'")
-                struct ThemeParams: Encodable { let threadID: String; let colors: [String]; let emoji: String }
-                try await CoreBridge.shared.call(
-                    "web.setThreadTheme", ThemeParams(threadID: threadID, colors: theme.colors, emoji: theme.emoji)
-                )
-            } catch {
-                CoreBridge.shared.log("WebThemeReader: \(threadID) \(error)")
+        do {
+            struct Params: Encodable { let threadID: String }
+            struct PathResult: Decodable { let path: String }
+            let path = try await CoreBridge.shared.call("web.threadPath", Params(threadID: threadID), as: PathResult.self).path
+            guard !path.isEmpty else {
+                // Encrypted chat not matched to the web chat list yet; try again next time.
                 readThisSession.remove(threadID)
+                return
             }
+            let web = WebSyncController.shared
+            await web.start(showWindow: false)
+            struct Theme: Decodable { let colors: [String]; let emoji: String }
+            let theme = try await web.withExclusiveAccess {
+                await web.navigate(toPath: path)
+                return try await web.evaluate(Self.readScript(path: path), as: Theme?.self)
+            }
+            guard let theme else {
+                CoreBridge.shared.log("WebThemeReader: no theme found for \(threadID) at \(path)")
+                readThisSession.remove(threadID)
+                return
+            }
+            CoreBridge.shared.log("WebThemeReader: \(threadID) colors \(theme.colors), emoji '\(theme.emoji)'")
+            struct ThemeParams: Encodable { let threadID: String; let colors: [String]; let emoji: String }
+            try await CoreBridge.shared.call(
+                "web.setThreadTheme", ThemeParams(threadID: threadID, colors: theme.colors, emoji: theme.emoji)
+            )
+        } catch {
+            CoreBridge.shared.log("WebThemeReader: \(threadID) \(error)")
+            readThisSession.remove(threadID)
         }
     }
 

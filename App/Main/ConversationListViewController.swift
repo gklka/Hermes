@@ -40,6 +40,8 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
     private let tableView = NSTableView()
     private var rows: [Conversation] = []
     private var selectedID: String?
+    /// The first chat is opened once, when the list first loads after launch.
+    private var didAutoSelect = false
     private var cancellables: Set<AnyCancellable> = []
     private var isLoadingMore = false
 
@@ -127,6 +129,13 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
             filter.includes($0) && (query.isEmpty || $0.name.lowercased().contains(query))
         }
         tableView.reloadData()
+        if !didAutoSelect, let first = rows.first {
+            didAutoSelect = true
+            if selectedID == nil {
+                selectedID = first.id
+                onSelect?(first.id)
+            }
+        }
         if let selectedID, let index = rows.firstIndex(where: { $0.id == selectedID }) {
             tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
         }
