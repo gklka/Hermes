@@ -321,30 +321,53 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         return visible.maxY >= tableView.bounds.height - 40
     }
 
-    private func firstMessageID(_ rows: [Row]) -> String? {
-        for row in rows {
-            if case .message(let message, _) = row { return message.id }
+    /// The first message on screen and how far its top is from the top of the visible area.
+    private struct ScrollAnchor {
+        let messageID: String
+        let offset: CGFloat
+    }
+
+    private func scrollAnchor() -> ScrollAnchor? {
+        let visible = scrollView.contentView.bounds
+        let range = tableView.rows(in: visible)
+        for row in range.lowerBound..<range.upperBound where rows.indices.contains(row) {
+            if case .message(let message, _) = rows[row] {
+                return ScrollAnchor(messageID: message.id, offset: tableView.rect(ofRow: row).minY - visible.minY)
+            }
         }
         return nil
     }
 
+    /// Scrolls so the anchor message is back where it was on screen.
+    private func restore(_ anchor: ScrollAnchor) {
+        guard let row = rows.firstIndex(where: {
+            if case .message(let message, _) = $0 { return message.id == anchor.messageID }
+            return false
+        }) else { return }
+        let y = tableView.rect(ofRow: row).minY - anchor.offset
+        guard abs(y - scrollView.contentView.bounds.minY) > 0.5 else { return }
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
+
     private func reload(scrollToBottom forceBottom: Bool = false) {
         let wasAtBottom = isScrolledToBottom
-        let oldFirst = firstMessageID(rows)
-        let oldHeight = tableView.bounds.height
-        let oldOffset = scrollView.contentView.bounds.origin.y
+        let anchor = forceBottom || wasAtBottom ? nil : scrollAnchor()
 
         rows = buildRows()
         tableView.reloadData()
         tableView.layoutSubtreeIfNeeded()
 
-        if forceBottom || wasAtBottom {
+        if let anchor {
+            // Keep the same messages on screen (e.g. when older ones are added above). Rows are
+            // measured lazily, so the positions above settle after the next layout; anchor again then.
+            restore(anchor)
+            DispatchQueue.main.async { [weak self] in
+                self?.tableView.layoutSubtreeIfNeeded()
+                self?.restore(anchor)
+            }
+        } else if forceBottom || wasAtBottom {
             scrollToBottom()
-        } else if oldFirst != nil, firstMessageID(rows) != oldFirst {
-            // Older messages were prepended: keep the same messages on screen.
-            let delta = tableView.bounds.height - oldHeight
-            scrollView.contentView.scroll(to: NSPoint(x: 0, y: oldOffset + delta))
-            scrollView.reflectScrolledClipView(scrollView.contentView)
         }
         alignGradients()
     }
