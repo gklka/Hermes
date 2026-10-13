@@ -150,9 +150,10 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
     }
 
     private func reload() {
-        let query = searchField.stringValue.trimmingCharacters(in: .whitespaces).lowercased()
+        let query = searchField.stringValue.trimmingCharacters(in: .whitespaces)
         rows = store.conversations.filter {
-            filter.includes($0) && (query.isEmpty || $0.name.lowercased().contains(query))
+            // Ignoring case and accents: "peter" finds "Péter".
+            filter.includes($0) && (query.isEmpty || $0.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil)
         }
         tableView.reloadData()
         if !didAutoSelect, let first = rows.first {

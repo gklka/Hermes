@@ -423,7 +423,18 @@ final class ComposeView: NSView, NSTextViewDelegate {
     }
 
     func showReply(to name: String, text: String) {
-        replyLabel.stringValue = "Replying to \(name): \(text)"
+        showBanner("Replying to \(name): \(text)")
+    }
+
+    /// Puts a sent message's text in the field to edit it; Return saves, Escape cancels.
+    func showEditing(_ text: String) {
+        self.text = text
+        showBanner("Editing message")
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+    }
+
+    private func showBanner(_ text: String) {
+        replyLabel.stringValue = text
         replyBanner.isHidden = false
         bannerCollapsed.constant = 18
         focus()
@@ -466,8 +477,9 @@ final class ComposeView: NSView, NSTextViewDelegate {
         replaceEmoticon(before: textView.string.utf16.count)
         let text = self.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !attachments.isEmpty else { return }
-        delegate?.composeView(self, send: text, attachments: attachments)
+        // Cleared first: the delegate may put something back (the draft from before editing).
         self.text = ""
+        delegate?.composeView(self, send: text, attachments: attachments)
     }
 
     // MARK: - Link preview

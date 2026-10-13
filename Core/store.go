@@ -455,8 +455,36 @@ func (s *Store) UnreadFromOthers(threadID, selfID string, since int64) []*messag
 	return out
 }
 
-func (s *Store) EditMessage(id, text string) {
+// PreviousTexts are a message's texts before its edits seen by this app, oldest first.
+func (s *Store) PreviousTexts(id string) []string {
+	var versions []string
+	if data := s.Get("edits:" + id); data != "" {
+		_ = json.Unmarshal([]byte(data), &versions)
+	}
+	return versions
+}
+
+// EditMessage changes a message's text. If it's its chat's latest message, the chat's snippet
+// follows, and the chat's ID is returned (to emit the change).
+func (s *Store) EditMessage(id, text string) string {
+	// Keep the earlier versions (oldest first) to show them under "Edited".
+	var old string
+	if s.db.QueryRow(`SELECT text FROM messages WHERE id=?`, id).Scan(&old) == nil && old != text && old != "" {
+		versions := s.PreviousTexts(id)
+		versions = append(versions, old)
+		data, _ := json.Marshal(versions)
+		s.Set("edits:"+id, string(data))
+	}
 	_, _ = s.db.Exec(`UPDATE messages SET text=?, is_edited=1 WHERE id=?`, text, id)
+	var threadID string
+	err := s.db.QueryRow(`
+		SELECT m.thread_id FROM messages m
+		WHERE m.id=? AND m.timestamp=(SELECT MAX(timestamp) FROM messages WHERE thread_id=m.thread_id)`, id).Scan(&threadID)
+	if err != nil || text == "" {
+		return ""
+	}
+	_, _ = s.db.Exec(`UPDATE threads SET snippet=? WHERE id=?`, text, threadID)
+	return threadID
 }
 
 func (s *Store) UnsendMessage(id string) {
@@ -627,6 +655,9 @@ func (s *Store) APIMessages(rows []*messageRow, selfID string) []apiMessage {
 	out := make([]apiMessage, len(rows))
 	for i, m := range rows {
 		out[i] = m.toAPI(selfID, reactions[m.ID])
+		if m.IsEdited {
+			out[i].PreviousTexts = s.PreviousTexts(m.ID)
+		}
 	}
 	return out
 }
@@ -639,7 +670,7 @@ func (m *messageRow) toAPI(selfID string, reactions []apiReaction) apiMessage {
 	if reactions == nil {
 		reactions = []apiReaction{}
 	}
-	return apiMessage{
+	msg := apiMessage{
 		ID:          m.ID,
 		ThreadID:    m.ThreadID,
 		SenderID:    m.SenderID,
@@ -654,6 +685,7 @@ func (m *messageRow) toAPI(selfID string, reactions []apiReaction) apiMessage {
 		IsUnsent:    m.IsUnsent,
 		IsEdited:    m.IsEdited,
 	}
+	return msg
 }
 
 var errNotFound = errors.New("not found")

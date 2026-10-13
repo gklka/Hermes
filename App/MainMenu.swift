@@ -41,6 +41,7 @@ enum MainMenu {
         editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Edit Message", action: #selector(MainWindowController.editMessage(_:)), keyEquivalent: "e")
         let find = editMenu.addItem(withTitle: "Find…", action: #selector(MainWindowController.focusSearch(_:)), keyEquivalent: "f")
         find.keyEquivalentModifierMask = [.command]
         let emoji = editMenu.addItem(withTitle: "Emoji & Symbols", action: #selector(NSApplication.orderFrontCharacterPalette(_:)), keyEquivalent: " ")

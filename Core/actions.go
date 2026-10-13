@@ -66,7 +66,7 @@ func (c *Core) HandleRequest(data []byte) {
 		emitResponse(req.ID, result, err)
 	}
 	switch req.Method {
-	case "messages.send", "messages.sendMedia", "messages.react", "messages.unsend":
+	case "messages.send", "messages.sendMedia", "messages.react", "messages.unsend", "messages.edit":
 		c.sendQueue <- run
 	default:
 		go run()
@@ -198,6 +198,8 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return nil, c.react(ctx, p.ThreadID, p.MessageID, p.Emoji)
 	case "messages.unsend":
 		return nil, c.unsend(ctx, p.ThreadID, p.MessageID)
+	case "messages.edit":
+		return nil, c.editMessage(ctx, p.ThreadID, p.MessageID, p.Text)
 	case "media.download":
 		path, err := c.downloadMedia(ctx, p.MessageID, p.AttachmentID)
 		if err != nil {
@@ -847,6 +849,65 @@ func (c *Core) unsend(ctx context.Context, threadID, messageID string) error {
 	}
 	c.store.UnsendMessage(messageID)
 	cs := newChangeSet()
+	cs.message(messageID)
+	c.flush(cs)
+	return nil
+}
+
+// editMessage changes the text of one of our sent messages (Messenger allows this for 15 minutes).
+func (c *Core) editMessage(ctx context.Context, threadID, messageID, text string) error {
+	t, err := c.thread(threadID)
+	if err != nil {
+		return err
+	}
+	target := c.store.GetMessage(messageID)
+	if target == nil {
+		return fmt.Errorf("unknown message %s", messageID)
+	}
+	if t.Type.IsWhatsApp() && target.WAChat != "" {
+		e2ee := c.e2eeClient()
+		if e2ee == nil {
+			return errNotConnected
+		}
+		msg := &waConsumerApplication.ConsumerApplication{
+			Payload: &waConsumerApplication.ConsumerApplication_Payload{
+				Payload: &waConsumerApplication.ConsumerApplication_Payload_Content{
+					Content: &waConsumerApplication.ConsumerApplication_Content{
+						Content: &waConsumerApplication.ConsumerApplication_Content_EditMessage{
+							EditMessage: &waConsumerApplication.ConsumerApplication_EditMessage{
+								Key:         waKey(target, c.selfID()),
+								Message:     &waCommon.MessageText{Text: proto.String(text)},
+								TimestampMS: proto.Int64(time.Now().UnixMilli()),
+							},
+						},
+					},
+				},
+			},
+		}
+		if _, err = e2ee.SendFBMessage(ctx, c.chatJID(t), msg, nil); err != nil {
+			return err
+		}
+	} else {
+		cli := c.client()
+		if cli == nil {
+			return errNotConnected
+		}
+		resp, err := cli.ExecuteTasks(ctx, &socket.EditMessageTask{MessageID: messageID, Text: text})
+		if err != nil {
+			return err
+		}
+		// The server answers with the message's current text; a different one means it refused
+		// (e.g. too late to edit).
+		for _, edit := range resp.LSEditMessage {
+			if edit.MessageID == messageID && edit.Text != text {
+				return errors.New("Messenger didn't accept the edit")
+			}
+		}
+	}
+	cs := newChangeSet()
+	if threadID := c.store.EditMessage(messageID, text); threadID != "" {
+		cs.thread(threadID)
+	}
 	cs.message(messageID)
 	c.flush(cs)
 	return nil

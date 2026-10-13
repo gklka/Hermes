@@ -196,6 +196,11 @@ final class ChatStore {
         }
     }
 
+    func edit(_ message: ChatMessage, text: String) async throws {
+        struct Params: Encodable { let threadID: String; let messageID: String; let text: String }
+        try await core.call("messages.edit", Params(threadID: message.threadID, messageID: message.id, text: text))
+    }
+
     func unsend(_ message: ChatMessage) {
         struct Params: Encodable { let threadID: String; let messageID: String }
         Task {

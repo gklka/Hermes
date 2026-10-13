@@ -91,6 +91,8 @@ type apiMessage struct {
 	Status      string          `json:"status"`
 	IsUnsent    bool            `json:"isUnsent"`
 	IsEdited    bool            `json:"isEdited"`
+	// Earlier versions of an edited message (oldest first), as far as this app saw them.
+	PreviousTexts []string `json:"previousTexts,omitempty"`
 	PendingID   string          `json:"pendingID,omitempty"`
 }
 

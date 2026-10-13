@@ -250,6 +250,8 @@ protocol MessageCellDelegate: AnyObject {
     func messageCell(_ cell: MessageCellView, menuFor message: ChatMessage) -> NSMenu?
     func messageCellDidDoubleClick(_ cell: MessageCellView, message: ChatMessage, bubble: NSView)
     func messageCell(_ cell: MessageCellView, open attachment: Attachment, of message: ChatMessage)
+    /// "Edited" was clicked: show or hide the earlier versions.
+    func messageCellDidToggleEdits(_ message: ChatMessage)
     /// A message's bubble was clicked: select it.
     func messageCellDidClick(_ cell: MessageCellView, message: ChatMessage)
     /// The "not delivered" icon was clicked: offer to resend or delete.
@@ -272,6 +274,8 @@ final class MessageCellView: NSTableCellView {
         var maxWidth: CGFloat = 400
         /// The chat's custom theme for outgoing bubbles (one color or a gradient); empty for the default.
         var outgoingColors: [NSColor] = []
+        /// Earlier versions of an edited message are shown.
+        var showsEditHistory = false
     }
 
     weak var delegate: MessageCellDelegate?
@@ -289,6 +293,13 @@ final class MessageCellView: NSTableCellView {
     private let failedIcon = NSButton()
     /// The preview of a link in the message.
     private let linkCard = LinkCardView()
+    /// "Edited" under an edited message; clicking shows the earlier versions above it.
+    private let editedButton = NSButton(title: "Edited", target: nil, action: nil)
+    private let editedRow = NSView()
+    private var editedLeading = NSLayoutConstraint()
+    private var editedTrailing = NSLayoutConstraint()
+    /// Earlier versions of an edited message, as faded bubbles above the current one.
+    private let historyStack = NSStackView()
 
     // Placeholders; the real constraints are created in init once the views exist.
     private var topConstraint = NSLayoutConstraint()
@@ -325,7 +336,10 @@ final class MessageCellView: NSTableCellView {
         column.orientation = .vertical
         column.spacing = 3
         column.translatesAutoresizingMaskIntoConstraints = false
-        column.setHuggingPriority(.required, for: .horizontal)
+        // A stack view pulls its views to its own width at its hugging priority; below the text's
+        // (required) hugging, so bubbles of different widths (e.g. an edit's earlier version)
+        // keep their own sizes.
+        column.setHuggingPriority(.defaultHigh, for: .horizontal)
 
         senderLabel.font = .systemFont(ofSize: 11)
         senderLabel.textColor = .secondaryLabelColor
@@ -348,6 +362,30 @@ final class MessageCellView: NSTableCellView {
         column.addArrangedSubview(bubble)
         column.addArrangedSubview(linkCard)
         linkCard.isHidden = true
+        // In a row inset like the "Sent"/"Read" captions (18pt from the edge, the column is at 14).
+        editedButton.translatesAutoresizingMaskIntoConstraints = false
+        editedRow.addSubview(editedButton)
+        editedLeading = editedButton.leadingAnchor.constraint(equalTo: editedRow.leadingAnchor, constant: 4)
+        editedTrailing = editedButton.trailingAnchor.constraint(equalTo: editedRow.trailingAnchor, constant: -4)
+        NSLayoutConstraint.activate([
+            editedButton.topAnchor.constraint(equalTo: editedRow.topAnchor),
+            editedButton.bottomAnchor.constraint(equalTo: editedRow.bottomAnchor),
+            editedButton.leadingAnchor.constraint(greaterThanOrEqualTo: editedRow.leadingAnchor),
+            editedButton.trailingAnchor.constraint(lessThanOrEqualTo: editedRow.trailingAnchor),
+        ])
+        editedButton.isBordered = false
+        editedButton.bezelStyle = .regularSquare
+        editedButton.font = .systemFont(ofSize: 11, weight: .medium)
+        editedButton.contentTintColor = .secondaryLabelColor
+        editedButton.target = self
+        editedButton.action = #selector(editedClicked)
+        // Never truncated under a narrow bubble. It may stretch to the column's width, so its
+        // title is aligned to the bubble's side in configure.
+        editedButton.setContentCompressionResistancePriority(.required, for: .horizontal)
+        column.addArrangedSubview(editedRow)
+        historyStack.orientation = .vertical
+        historyStack.spacing = 3
+        column.insertArrangedSubview(historyStack, at: column.arrangedSubviews.firstIndex(of: bubble) ?? 0)
 
         failedIcon.image = NSImage(systemSymbolName: "exclamationmark.circle.fill", accessibilityDescription: "Not delivered")
         failedIcon.symbolConfiguration = .init(pointSize: 15, weight: .regular)
@@ -551,6 +589,28 @@ final class MessageCellView: NSTableCellView {
         columnBelowReply.constant = 5 + badgeRoom
         needsLayout = true
 
+        // Edits: the button, and the earlier versions while they're shown.
+        let previous = message.previousTexts ?? []
+        editedButton.isHidden = !message.isEdited || message.isUnsent
+        editedRow.isHidden = editedButton.isHidden
+        editedLeading.isActive = !outgoing
+        editedTrailing.isActive = outgoing
+        editedButton.isEnabled = !previous.isEmpty
+        editedButton.title = layout.showsEditHistory ? "Hide Edits" : "Edited"
+        editedButton.alignment = outgoing ? .right : .left
+        editedButton.toolTip = previous.isEmpty ? nil : (layout.showsEditHistory ? "Hide earlier versions" : "Show earlier versions")
+        for view in historyStack.arrangedSubviews {
+            view.removeFromSuperview()
+        }
+        if layout.showsEditHistory, !editedButton.isHidden {
+            for text in previous {
+                historyStack.addArrangedSubview(Self.previousVersion(
+                    text, color: bubble.color, textColor: color, maxWidth: layout.maxWidth))
+            }
+        }
+        historyStack.alignment = outgoing ? .trailing : .leading
+        historyStack.isHidden = historyStack.arrangedSubviews.isEmpty
+
         alphaValue = message.status == .pending ? 0.6 : 1
         failedIcon.isHidden = message.status != .failed
         toolTip = Formatters.messageTime(message.date) + (message.isEdited ? " (edited)" : "")
@@ -635,6 +695,40 @@ final class MessageCellView: NSTableCellView {
     var anchorView: NSView {
         if !bubble.isHidden { return bubble }
         return attachmentsStack.isHidden ? self : attachmentsStack
+    }
+
+    @objc private func editedClicked() {
+        guard let message else { return }
+        delegate?.messageCellDidToggleEdits(message)
+    }
+
+    /// An earlier version of the message: a faded bubble like the current one.
+    private static func previousVersion(_ text: String, color: NSColor, textColor: NSColor, maxWidth: CGFloat) -> NSView {
+        let bubble = BubbleView()
+        bubble.color = color
+        bubble.alphaValue = 0.5
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.isSelectable = false
+        label.font = .systemFont(ofSize: 14)
+        label.textColor = textColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+        bubble.addSubview(label)
+        // Sized from the text: otherwise the stack squeezes it to the current (maybe shorter)
+        // message's width, and the wrapped lines get cut off.
+        let size = (text as NSString).boundingRect(
+            with: NSSize(width: maxWidth - 24, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: NSFont.systemFont(ofSize: 14)]
+        ).size
+        NSLayoutConstraint.activate([
+            label.widthAnchor.constraint(equalToConstant: ceil(size.width) + 4),
+            label.heightAnchor.constraint(equalToConstant: ceil(size.height)),
+            label.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 12),
+            label.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -12),
+            label.topAnchor.constraint(equalTo: bubble.topAnchor, constant: 7),
+            label.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -7),
+        ])
+        return bubble
     }
 
     @objc private func failedIconClicked() {

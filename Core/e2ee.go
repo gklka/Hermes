@@ -105,7 +105,9 @@ func (c *Core) handleFBMessage(evt *events.FBMessage) {
 		}
 		if edit := content.GetEditMessage(); edit != nil {
 			target := edit.GetKey().GetID()
-			c.store.EditMessage(target, edit.GetMessage().GetText())
+			if threadID := c.store.EditMessage(target, edit.GetMessage().GetText()); threadID != "" {
+				cs.thread(threadID)
+			}
 			cs.message(target)
 			c.flush(cs)
 			return

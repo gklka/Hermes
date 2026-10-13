@@ -203,6 +203,10 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     // MARK: - Showing a thread
 
     func show(threadID: String?) {
+        if editTarget != nil {
+            // Leaving the chat cancels the edit and brings back what was typed before it.
+            finishEditing()
+        }
         if let current = self.threadID {
             drafts[current] = compose.hasContent ? compose.draft : nil
             stopTyping()
@@ -313,6 +317,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             layout.maxWidth = bubbleMaxWidth
             layout.isFirstInGroup = !continuesPrevious
             layout.outgoingColors = outgoingColors
+            layout.showsEditHistory = expandedEdits.contains(message.id)
             if conversation.isGroup && !message.isFromMe {
                 let participant = store.participant(message.senderID, in: threadID)
                 layout.senderName = participant?.name ?? "Unknown"
@@ -595,6 +600,11 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         }
 
         if message.isFromMe {
+            if !message.text.isEmpty, message.status != .failed {
+                let edit = menu.addItem(withTitle: "Edit", action: #selector(editFromMenu(_:)), keyEquivalent: "")
+                edit.target = self
+                edit.representedObject = message
+            }
             menu.addItem(.separator())
             let unsend = menu.addItem(withTitle: "Unsend", action: #selector(unsendFromMenu(_:)), keyEquivalent: "")
             unsend.target = self
@@ -640,6 +650,18 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         } else if wasAtBottom {
             scrollToBottom()
         }
+    }
+
+    // MARK: - Edits
+
+    /// Edited messages whose earlier versions are shown.
+    private var expandedEdits: Set<String> = []
+
+    func messageCellDidToggleEdits(_ message: ChatMessage) {
+        if expandedEdits.remove(message.id) == nil {
+            expandedEdits.insert(message.id)
+        }
+        reload()
     }
 
     // MARK: - Selecting a message
@@ -1004,6 +1026,22 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     func composeView(_ view: ComposeView, send text: String, attachments: [URL]) {
         guard let threadID else { return }
         store.clearMarkedUnread(threadID)
+        if let message = editTarget {
+            finishEditing()
+            guard !text.isEmpty, text != message.text else { return }
+            Task {
+                do {
+                    try await store.edit(message, text: text)
+                } catch {
+                    guard let window = view.window else { return }
+                    let alert = NSAlert()
+                    alert.messageText = "The message couldn't be edited."
+                    alert.informativeText = "Messenger only allows editing a message for 15 minutes after sending it, and only five times.\n\n\(error.localizedDescription)"
+                    alert.beginSheetModal(for: window, completionHandler: nil)
+                }
+            }
+            return
+        }
         store.send(text: text, attachments: attachments, in: threadID, replyTo: replyTarget?.id)
         replyTarget = nil
         compose.hideReply()
@@ -1040,8 +1078,53 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     }
 
     func composeViewCancelReply(_ view: ComposeView) {
+        if editTarget != nil {
+            finishEditing()
+            return
+        }
         replyTarget = nil
         compose.hideReply()
+    }
+
+    // MARK: - Editing
+
+    /// The sent message being edited in the compose field, and what the field held before.
+    private var editTarget: ChatMessage?
+    private var draftBeforeEditing: NSAttributedString?
+
+    /// ⌘E: edits the selected message if it's yours, otherwise the last one you sent.
+    func editMessage() {
+        guard let threadID else { return }
+        let mine = store.messages(in: threadID).filter {
+            $0.isFromMe && !$0.isUnsent && !$0.isSystem && $0.status != .pending && $0.status != .failed && !$0.text.isEmpty
+        }
+        guard let message = mine.first(where: { $0.id == selectedMessageID }) ?? mine.last else {
+            NSSound.beep()
+            return
+        }
+        startEditing(message)
+    }
+
+    private func startEditing(_ message: ChatMessage) {
+        if editTarget == nil {
+            draftBeforeEditing = compose.draft
+        }
+        editTarget = message
+        replyTarget = nil
+        selectMessage(nil)
+        compose.showEditing(message.text)
+    }
+
+    private func finishEditing() {
+        editTarget = nil
+        compose.hideReply()
+        compose.draft = draftBeforeEditing ?? NSAttributedString()
+        draftBeforeEditing = nil
+    }
+
+    @objc private func editFromMenu(_ sender: NSMenuItem) {
+        guard let message = sender.representedObject as? ChatMessage else { return }
+        startEditing(message)
     }
 
     private func stopTyping() {

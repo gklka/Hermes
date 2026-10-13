@@ -125,8 +125,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         split.attachFiles()
     }
 
-    /// Opens a chat (e.g. from a notification).
-    /// Opens a chat; with `messageID`, scrolls to that message and selects it.
+    /// Edit → Edit Message (⌘E): the selected message, or the last one you sent.
+    @objc func editMessage(_ sender: Any?) {
+        split.editMessage()
+    }
+
+    /// Opens a chat (e.g. from a notification); with `messageID`, scrolls to that message and selects it.
     func select(threadID: String, revealing messageID: String? = nil) {
         split.select(threadID: threadID, revealing: messageID)
     }
@@ -380,5 +384,9 @@ final class MainSplitViewController: NSSplitViewController {
 
     func attachFiles() {
         chat.attachFiles()
+    }
+
+    func editMessage() {
+        chat.editMessage()
     }
 }

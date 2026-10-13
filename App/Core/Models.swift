@@ -81,6 +81,8 @@ struct ChatMessage: Codable, Identifiable, Hashable {
     var status: Status
     var isUnsent: Bool
     var isEdited: Bool
+    /// Earlier versions of an edited message (oldest first), as far as the app saw them.
+    var previousTexts: [String]?
     /// Set for messages created locally before the server echoed them back.
     var pendingID: String?
 

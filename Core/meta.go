@@ -215,7 +215,9 @@ func (c *Core) handleTable(tbl *table.LSTable) {
 		}
 	}
 	for _, e := range tbl.LSEditMessage {
-		c.store.EditMessage(e.MessageID, e.Text)
+		if threadID := c.store.EditMessage(e.MessageID, e.Text); threadID != "" {
+			cs.thread(threadID)
+		}
 		cs.message(e.MessageID)
 	}
 	for _, d := range tbl.LSDeleteMessage {
