@@ -734,10 +734,11 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     func messageCell(_ cell: MessageCellView, showReactionsOf message: ChatMessage, anchor: NSView) {
         let selfID = store.account?.id
         let people = message.reactions.map { reaction -> ReactionsViewController.Entry in
-            if reaction.senderID == selfID, let account = store.account {
-                return .init(emoji: reaction.emoji, name: "You", avatarURL: account.avatarURL)
-            }
             let participant = store.participant(reaction.senderID, in: message.threadID)
+            if reaction.senderID == selfID, let account = store.account {
+                // The account itself often has no picture; your contact entry does.
+                return .init(emoji: reaction.emoji, name: "You", avatarURL: participant?.avatarURL ?? account.avatarURL)
+            }
             return .init(emoji: reaction.emoji, name: participant?.name ?? "Unknown", avatarURL: participant?.avatarURL)
         }
         guard !people.isEmpty else { return }
