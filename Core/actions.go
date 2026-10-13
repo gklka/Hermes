@@ -175,6 +175,8 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return nil, c.markRead(ctx, p.ThreadID)
 	case "threads.typing":
 		return nil, c.sendTyping(ctx, p.ThreadID, p.IsTyping)
+	case "threads.subscribePresence":
+		return nil, c.subscribePresence(ctx, p.ThreadID)
 	case "messages.list":
 		return c.listMessages(p.ThreadID, p.Before, p.Limit), nil
 	case "messages.send":
@@ -368,6 +370,25 @@ func (c *Core) sendTyping(ctx context.Context, threadID string, typing bool) err
 		task.IsTyping = 1
 	}
 	return cli.ExecuteStatelessTask(ctx, task)
+}
+
+// subscribePresence asks for a 1:1 contact's online status and last-seen time, which arrive
+// as "presence" events. 1:1 thread IDs are the other person's user ID.
+func (c *Core) subscribePresence(ctx context.Context, threadID string) error {
+	t, err := c.thread(threadID)
+	if err != nil {
+		return err
+	}
+	if !t.Type.IsOneToOne() {
+		return nil
+	}
+	e2ee := c.e2eeClient()
+	if e2ee == nil {
+		return errNotConnected
+	}
+	err = e2ee.SubscribePresence(ctx, waTypes.JID{User: threadID, Server: waTypes.MessengerServer})
+	c.log.Debug().Err(err).Str("thread", threadID).Msg("Subscribed to presence")
+	return err
 }
 
 // MARK: - Messages

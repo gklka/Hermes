@@ -27,6 +27,17 @@ func (c *Core) handleWAEvent(rawEvt any) bool {
 			"senderID": evt.Sender.User,
 			"isTyping": evt.State == waTypes.ChatPresenceComposing,
 		})
+	case *events.Presence:
+		c.log.Debug().Str("user", evt.From.User).Bool("unavailable", evt.Unavailable).Time("last_seen", evt.LastSeen).Msg("Presence")
+		var lastSeen int64
+		if !evt.LastSeen.IsZero() {
+			lastSeen = evt.LastSeen.UnixMilli()
+		}
+		emitEvent("presence", map[string]any{
+			"userID":   evt.From.User,
+			"isOnline": !evt.Unavailable,
+			"lastSeen": lastSeen,
+		})
 	case *events.Connected:
 		c.log.Info().Msg("E2EE connected")
 		if cli := c.e2eeClient(); cli != nil {

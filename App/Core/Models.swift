@@ -120,6 +120,13 @@ struct TypingEvent: Decodable {
     let isTyping: Bool
 }
 
+struct PresenceEvent: Decodable {
+    let userID: String
+    let isOnline: Bool
+    /// Milliseconds since 1970; 0 if the contact hides it.
+    let lastSeen: Int64
+}
+
 struct ReadReceiptEvent: Decodable {
     let threadID: String
     let readerID: String

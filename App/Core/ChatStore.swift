@@ -11,6 +11,7 @@ final class ChatStore {
         case conversations
         case messages(threadID: String)
         case typing(threadID: String)
+        case presence(userID: String)
     }
 
     let changes = PassthroughSubject<Change, Never>()
@@ -33,6 +34,9 @@ final class ChatStore {
     /// threadID → set of userIDs currently typing.
     private(set) var typing: [String: Set<String>] = [:]
     private var typingTimers: [String: Timer] = [:]
+
+    /// userID → latest online status / last-seen time (only for 1:1 chats that were opened).
+    private(set) var presence: [String: PresenceEvent] = [:]
 
     private let core = CoreBridge.shared
     private var queuedChanges: [Change] = []
@@ -200,6 +204,12 @@ final class ChatStore {
         Task { try? await core.call("threads.typing", Params(threadID: threadID, isTyping: isTyping)) }
     }
 
+    /// Starts receiving the contact's online status for a 1:1 chat.
+    func subscribePresence(_ threadID: String) {
+        struct Params: Encodable { let threadID: String }
+        Task { try? await core.call("threads.subscribePresence", Params(threadID: threadID)) }
+    }
+
     /// Files downloaded this session, by "messageID|attachmentID" (message events may predate the download).
     private var downloadedFiles: [String: URL] = [:]
 
@@ -278,6 +288,18 @@ final class ChatStore {
         case "typing":
             guard let event = core.decodeEvent(TypingEvent.self, from: payload) else { return }
             setRemoteTyping(event)
+
+        case "presence":
+            guard var event = core.decodeEvent(PresenceEvent.self, from: payload) else { return }
+            // Going offline without a time: keep the last time we saw them online.
+            if !event.isOnline, event.lastSeen == 0, presence[event.userID]?.isOnline == true {
+                event = PresenceEvent(userID: event.userID, isOnline: false,
+                                      lastSeen: Int64(Date().timeIntervalSince1970 * 1000))
+            } else if !event.isOnline, event.lastSeen == 0, let previous = presence[event.userID] {
+                event = PresenceEvent(userID: event.userID, isOnline: false, lastSeen: previous.lastSeen)
+            }
+            presence[event.userID] = event
+            notify(.presence(userID: event.userID))
 
         case "readReceipt":
             guard let event = core.decodeEvent(ReadReceiptEvent.self, from: payload),

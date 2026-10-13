@@ -32,6 +32,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         window.delegate = self
 
         split.onConversationChanged = { [weak self] conversation in
+            self?.subscribePresence(conversation)
             self?.updateTitle(conversation)
         }
         split.onFilterChanged = { [weak self] in
@@ -44,13 +45,37 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
             .sink { [weak self] change in
                 guard let self else { return }
                 switch change {
-                case .connection, .conversations:
+                case .connection:
+                    // Subscriptions don't survive a reconnect.
+                    self.presenceThreadID = nil
+                    self.subscribePresence(self.split.selectedConversation)
+                    self.updateTitle(self.split.selectedConversation)
+                case .conversations:
+                    self.updateTitle(self.split.selectedConversation)
+                case .presence(let userID) where userID == self.split.selectedConversation?.id:
                     self.updateTitle(self.split.selectedConversation)
                 default:
                     break
                 }
             }
             .store(in: &cancellables)
+        // Keeps "Active 5m ago" current.
+        Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.updateTitle(self.split.selectedConversation)
+            }
+            .store(in: &cancellables)
+    }
+
+    /// The 1:1 chat whose contact's presence we're subscribed to.
+    private var presenceThreadID: String?
+
+    private func subscribePresence(_ conversation: Conversation?) {
+        guard let conversation, !conversation.isGroup, conversation.id != presenceThreadID,
+              ChatStore.shared.connectionState == .connected else { return }
+        presenceThreadID = conversation.id
+        ChatStore.shared.subscribePresence(conversation.id)
     }
 
     @available(*, unavailable)
@@ -67,13 +92,25 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
             if let conversation {
                 if conversation.isGroup {
                     subtitle = "\(conversation.participants.count) people"
-                }
-                if conversation.isEncrypted {
-                    subtitle = subtitle.isEmpty ? "End-to-end encrypted" : subtitle + " · End-to-end encrypted"
+                } else if let presence = ChatStore.shared.presence[conversation.id] {
+                    subtitle = Self.presenceText(presence)
                 }
             }
         }
         window.subtitle = subtitle
+    }
+
+    private static func presenceText(_ presence: PresenceEvent) -> String {
+        if presence.isOnline { return "Active now" }
+        guard presence.lastSeen > 0 else { return "" }
+        let date = Date(timeIntervalSince1970: TimeInterval(presence.lastSeen) / 1000)
+        let minutes = Int(-date.timeIntervalSinceNow / 60)
+        switch minutes {
+        case ..<1: return "Active now"
+        case ..<60: return "Active \(minutes)m ago"
+        case ..<(24 * 60): return "Active \(minutes / 60)h ago"
+        default: return "Active \(minutes / (24 * 60))d ago"
+        }
     }
 
     @objc func focusSearch(_ sender: Any?) {
