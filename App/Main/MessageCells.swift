@@ -569,6 +569,11 @@ final class MessageCellView: NSTableCellView {
             .underlineColor: linkColor,
             .cursor: NSCursor.pointingHand,
         ]
+        // Selected text in the chat's theme color (lighter white on the themed bubble itself).
+        let selection = outgoing && !jumbo
+            ? NSColor.white.withAlphaComponent(0.3)
+            : (layout.outgoingColors.last ?? BubbleColors.outgoing).withAlphaComponent(0.35)
+        textView.selectedTextAttributes = [.backgroundColor: selection]
         textView.maxWidth = layout.maxWidth - 24
         textView.setText(Self.attributed(text, font: font, color: color, italic: message.isUnsent))
         textInsets[0].constant = jumbo ? 0 : 12

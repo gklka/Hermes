@@ -415,10 +415,13 @@ final class ComposeView: NSView, NSTextViewDelegate {
         window?.makeFirstResponder(textView)
     }
 
-    /// The chat's quick reaction (nil: the default like) and theme color for the button.
+    /// The chat's quick reaction (nil: the default like) and theme color for the button, the
+    /// cursor and selected text.
     func setQuickReaction(_ emoji: String?, tint: NSColor?) {
         quickEmoji = emoji?.isEmpty == false ? emoji : nil
         self.tint = tint ?? BubbleColors.outgoing
+        textView.insertionPointColor = self.tint
+        textView.selectedTextAttributes = [.backgroundColor: self.tint.withAlphaComponent(0.35)]
         updateActionButton()
     }
 
