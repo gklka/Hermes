@@ -252,6 +252,9 @@ final class MediaViewer: NSObject, NSWindowDelegate {
         imageView.imageScaling = .scaleAxesIndependently
         imageView.autoresizingMask = [.width, .height]
         imageView.wantsLayer = true
+        // The viewer's background from the start, so transparent pictures don't fly as cutouts
+        // (with a shadow following their outline).
+        imageView.layer?.backgroundColor = NSColor.black.cgColor
         imageView.layer?.cornerRadius = 12
         imageView.layer?.cornerCurve = .continuous
         imageView.layer?.masksToBounds = true
