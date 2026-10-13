@@ -198,6 +198,9 @@ final class ConversationCellView: NSTableCellView {
     private let snippetLabel = NSTextField(wrappingLabelWithString: "")
     private let unreadDot = NSView()
     private let mutedIcon = NSImageView()
+    /// A hidden view still takes space; these collapse the muted icon when it's hidden.
+    private lazy var mutedLeading = mutedIcon.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 4)
+    private lazy var mutedCollapsed = mutedIcon.widthAnchor.constraint(equalToConstant: 0)
 
     init() {
         super.init(frame: .zero)
@@ -243,7 +246,7 @@ final class ConversationCellView: NSTableCellView {
 
             nameLabel.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: 10),
             nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 10),
-            mutedIcon.leadingAnchor.constraint(equalTo: nameLabel.trailingAnchor, constant: 4),
+            mutedLeading,
             mutedIcon.centerYAnchor.constraint(equalTo: nameLabel.centerYAnchor),
             dateLabel.leadingAnchor.constraint(greaterThanOrEqualTo: mutedIcon.trailingAnchor, constant: 6),
             dateLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
@@ -271,6 +274,8 @@ final class ConversationCellView: NSTableCellView {
         avatar.configure(conversation, selfID: selfID)
         unreadDot.isHidden = conversation.unreadCount == 0
         mutedIcon.isHidden = !conversation.isMuted
+        mutedLeading.constant = conversation.isMuted ? 4 : 0
+        mutedCollapsed.isActive = !conversation.isMuted
 
         if isTyping {
             snippetLabel.stringValue = "typing…"
