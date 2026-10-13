@@ -200,6 +200,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             stopTyping()
         }
         self.threadID = threadID
+        selectMessage(nil)
         lastConversation = threadID.flatMap { store.conversation($0) }
         updateComposeTheme()
         replyTarget = nil
@@ -475,6 +476,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             let cell = reuse("Message", sizing: sizing, MessageCellView.init)
             cell.delegate = self
             cell.configure(message, layout: layout, store: store)
+            cell.isMessageSelected = !sizing && message.id == selectedMessageID
             return cell
         case .typing:
             return reuse("Typing", sizing: sizing, TypingCellView.init)
@@ -577,6 +579,51 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         } else if wasAtBottom {
             scrollToBottom()
         }
+    }
+
+    // MARK: - Selecting a message
+
+    /// The clicked message, shown dimmed until a click lands anywhere else.
+    private var selectedMessageID: String?
+    private var deselectMonitor: Any?
+
+    func messageCellDidClick(_ cell: MessageCellView, message: ChatMessage) {
+        selectMessage(message.id)
+    }
+
+    private func selectMessage(_ id: String?) {
+        guard id != selectedMessageID else { return }
+        selectedMessageID = id
+        let visible = tableView.rows(in: tableView.visibleRect)
+        for row in visible.lowerBound..<visible.upperBound {
+            guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? MessageCellView else { continue }
+            cell.isMessageSelected = id != nil && cell.message?.id == id
+        }
+        if id == nil, let deselectMonitor {
+            NSEvent.removeMonitor(deselectMonitor)
+            self.deselectMonitor = nil
+        } else if id != nil, deselectMonitor == nil {
+            deselectMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+                self?.deselectUnlessInSelection(event)
+                return event
+            }
+        }
+    }
+
+    /// Any click outside the selected message's bubble deselects it (a click on another bubble
+    /// then selects that one).
+    private func deselectUnlessInSelection(_ event: NSEvent) {
+        guard let selectedMessageID else { return }
+        if event.window === view.window {
+            let visible = tableView.rows(in: tableView.visibleRect)
+            for row in visible.lowerBound..<visible.upperBound {
+                guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? MessageCellView,
+                      cell.message?.id == selectedMessageID else { continue }
+                let anchor = cell.anchorView
+                if anchor.bounds.contains(anchor.convert(event.locationInWindow, from: nil)) { return }
+            }
+        }
+        selectMessage(nil)
     }
 
     func messageCellDidClickFailure(_ message: ChatMessage) {

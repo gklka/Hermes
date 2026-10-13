@@ -44,6 +44,15 @@ final class BubbleView: NSView {
     private var gradientLayer: CAGradientLayer?
     private var gradientArea: NSRect = .zero
 
+    /// Shown over the whole bubble when set.
+    var cursor: NSCursor? {
+        didSet { window?.invalidateCursorRects(for: self) }
+    }
+
+    override func resetCursorRects() {
+        if let cursor { addCursorRect(bounds, cursor: cursor) }
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
@@ -241,6 +250,8 @@ protocol MessageCellDelegate: AnyObject {
     func messageCell(_ cell: MessageCellView, menuFor message: ChatMessage) -> NSMenu?
     func messageCellDidDoubleClick(_ cell: MessageCellView, message: ChatMessage, bubble: NSView)
     func messageCell(_ cell: MessageCellView, open attachment: Attachment, of message: ChatMessage)
+    /// A message's bubble was clicked: select it.
+    func messageCellDidClick(_ cell: MessageCellView, message: ChatMessage)
     /// The "not delivered" icon was clicked: offer to resend or delete.
     func messageCellDidClickFailure(_ message: ChatMessage)
     /// The tapback badge was clicked: show who reacted.
@@ -381,9 +392,15 @@ final class MessageCellView: NSTableCellView {
             self.delegate?.messageCell(self, showReactionsOf: message, anchor: self.reactionsBadge)
         }
 
+        let click = NSClickGestureRecognizer(target: self, action: #selector(clicked))
         let doubleClick = NSClickGestureRecognizer(target: self, action: #selector(doubleClicked))
         doubleClick.numberOfClicksRequired = 2
-        bubble.addGestureRecognizer(doubleClick)
+        for recognizer in [click, doubleClick] {
+            // The text view gets the clicks too, so a selected message's text can be clicked
+            // and double-clicked (a recognized click would otherwise swallow them).
+            recognizer.delaysPrimaryMouseButtonEvents = false
+            bubble.addGestureRecognizer(recognizer)
+        }
     }
 
     @available(*, unavailable)
@@ -558,7 +575,7 @@ final class MessageCellView: NSTableCellView {
         setDarkened(true)
         var token: NSObjectProtocol?
         token = NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.setDarkened(false) }
+            MainActor.assumeIsolated { self?.setDarkened(self?.isMessageSelected ?? false) }
             if let token { NotificationCenter.default.removeObserver(token) }
         }
         return menu
@@ -566,7 +583,25 @@ final class MessageCellView: NSTableCellView {
 
     override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) {
         super.didCloseMenu(menu, with: event)
-        setDarkened(false)
+        setDarkened(isMessageSelected)
+    }
+
+    /// A clicked message stays dimmed (like while its menu is open) until something else is clicked.
+    var isMessageSelected = false {
+        didSet {
+            guard isMessageSelected != oldValue else { return }
+            selectedAt = ProcessInfo.processInfo.systemUptime
+            setDarkened(isMessageSelected)
+            // Text can only be selected in the selected message.
+            textView.allowsTextSelection = isMessageSelected
+            // The I-beam over the whole bubble, including around the text.
+            bubble.cursor = isMessageSelected ? .iBeam : nil
+        }
+    }
+
+    @objc private func clicked() {
+        guard let message, !message.isUnsent else { return }
+        delegate?.messageCellDidClick(self, message: message)
     }
 
     /// Multiplies the message's colors (keeping transparency), so bubbles, photos and text darken.
@@ -595,8 +630,14 @@ final class MessageCellView: NSTableCellView {
         delegate?.messageCellDidClickFailure(message)
     }
 
+    private var selectedAt: TimeInterval = 0
+
+    /// Double-clicking reacts, unless the message was already selected before the double-click
+    /// (its first click selects it): then the text view selects a word instead.
     @objc private func doubleClicked() {
         guard let message, !message.isUnsent else { return }
+        let selectedByThisDoubleClick = ProcessInfo.processInfo.systemUptime - selectedAt < NSEvent.doubleClickInterval + 0.1
+        guard !isMessageSelected || selectedByThisDoubleClick else { return }
         delegate?.messageCellDidDoubleClick(self, message: message, bubble: bubble)
     }
 }
@@ -628,6 +669,56 @@ final class MessageTextView: NSTextView {
         setContentHuggingPriority(.required, for: .vertical)
         setContentCompressionResistancePriority(.required, for: .vertical)
         unregisterDraggedTypes()
+    }
+
+    /// Off until the message is selected: a click then selects the message (the bubble's click
+    /// recognizer) instead of starting a text selection. Links stay clickable.
+    var allowsTextSelection = false {
+        didSet {
+            if !allowsTextSelection { setSelectedRange(NSRange(location: 0, length: 0)) }
+            allowedAt = ProcessInfo.processInfo.systemUptime
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+    private var allowedAt: TimeInterval = 0
+
+    /// The second click of a double-click whose first click selected the message: that one
+    /// reacts (the bubble's recognizer), so the text mustn't track it as a word selection.
+    private func continuesSelectingClick(_ event: NSEvent) -> Bool {
+        event.clickCount > 1 && ProcessInfo.processInfo.systemUptime - allowedAt < NSEvent.doubleClickInterval + 0.1
+    }
+
+    private func isOnLink(_ event: NSEvent) -> Bool {
+        let point = convert(event.locationInWindow, from: nil)
+        guard let storage = textStorage, storage.length > 0, let layoutManager, let textContainer else { return false }
+        // The nearest glyph, if the point is actually on it.
+        let glyph = layoutManager.glyphIndex(for: point, in: textContainer)
+        let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
+        guard rect.contains(point) else { return false }
+        let character = layoutManager.characterIndexForGlyph(at: glyph)
+        return character < storage.length && storage.attribute(.link, at: character, effectiveRange: nil) != nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if (allowsTextSelection && !continuesSelectingClick(event)) || isOnLink(event) {
+            super.mouseDown(with: event)
+        }
+    }
+
+    /// The I-beam once the text can be selected, the arrow before; links get the pointing hand.
+    private func updateCursor(_ event: NSEvent) {
+        if isOnLink(event) {
+            NSCursor.pointingHand.set()
+        } else {
+            (allowsTextSelection ? NSCursor.iBeam : NSCursor.arrow).set()
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) { updateCursor(event) }
+    override func cursorUpdate(with event: NSEvent) { updateCursor(event) }
+
+    override func resetCursorRects() {
+        if allowsTextSelection { addCursorRect(bounds, cursor: .iBeam) }
     }
 
     // Read-only text: let files dropped on a bubble fall through to the chat's drop target.
