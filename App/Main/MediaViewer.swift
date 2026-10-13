@@ -53,6 +53,8 @@ final class MediaViewer: NSObject, NSWindowDelegate {
         )
         window.isReleasedWhenClosed = false
         window.titlebarAppearsTransparent = true
+        // Just the buttons over the picture; the title still names the window (Window menu, etc.).
+        window.titleVisibility = .hidden
         window.backgroundColor = .black
         window.delegate = self
         window.onKey = { [weak self] key in self?.handle(key) ?? false }
