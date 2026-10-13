@@ -214,7 +214,8 @@ final class ConversationCellView: NSTableCellView {
         snippetLabel.font = .systemFont(ofSize: 12)
         snippetLabel.textColor = .secondaryLabelColor
         snippetLabel.maximumNumberOfLines = 2
-        snippetLabel.lineBreakMode = .byTruncatingTail
+        // Word wrap (a truncating mode would keep each paragraph on one line), "…" on line 2.
+        snippetLabel.lineBreakMode = .byWordWrapping
         snippetLabel.cell?.truncatesLastVisibleLine = true
 
         unreadDot.wantsLayer = true
@@ -256,6 +257,13 @@ final class ConversationCellView: NSTableCellView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        // A wrapping label only wraps to its preferred width; it's the space right of the avatar
+        // (16 + 42 + 10 leading, 10 trailing).
+        snippetLabel.preferredMaxLayoutWidth = max(0, bounds.width - 78)
+        super.layout()
+    }
 
     func configure(_ conversation: Conversation, isTyping: Bool, selfID: String?) {
         nameLabel.stringValue = conversation.name

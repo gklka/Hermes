@@ -513,11 +513,25 @@ func (s *Store) Reactions(messageIDs []string) map[string][]apiReaction {
 		var messageID string
 		var r apiReaction
 		if rows.Scan(&messageID, &r.SenderID, &r.Emoji) == nil {
+			r.Emoji = emojiPresentation(r.Emoji)
 			out[messageID] = append(out[messageID], r)
 		}
 	}
 	return out
 }
+
+// emojiPresentation adds the emoji variation selector to lone symbols that otherwise render
+// as black text glyphs (Messenger sends its heart reaction as a bare U+2764 "❤").
+func emojiPresentation(emoji string) string {
+	runes := []rune(emoji)
+	if len(runes) == 1 && runes[0] >= 0x2000 && runes[0] < 0x3300 {
+		return emoji + "️"
+	}
+	return emoji
+}
+
+// likeSticker is the private-use character Messenger uses in snippets for the big like.
+const likeSticker = "\U000F0000"
 
 // MARK: - Conversion to API types
 
@@ -527,7 +541,7 @@ func (s *Store) Conversation(t *threadRow, selfID string) apiConversation {
 		ID:              t.ID,
 		Name:            t.Name,
 		AvatarURL:       t.AvatarURL,
-		Snippet:         t.Snippet,
+		Snippet:         strings.ReplaceAll(t.Snippet, likeSticker, "👍"),
 		SnippetSenderID: t.SnippetSenderID,
 		LastActivity:    t.LastActivity,
 		IsGroup:         !t.Type.IsOneToOne(),
