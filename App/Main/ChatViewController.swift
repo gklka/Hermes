@@ -146,11 +146,16 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     }
 
     private func shouldRedirectTyping(_ event: NSEvent) -> Bool {
-        guard threadID != nil, let window = view.window, event.window === window, window.attachedSheet == nil,
-              event.modifierFlags.intersection([.command, .control]).isEmpty else { return false }
+        guard threadID != nil, let window = view.window, event.window === window, window.attachedSheet == nil else { return false }
         if let text = window.firstResponder as? NSTextView, text.isEditable {
             return false
         }
+        // ⌘V pastes into the message field too.
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        if modifiers == .command, event.charactersIgnoringModifiers?.lowercased() == "v" {
+            return true
+        }
+        guard modifiers.intersection([.command, .control]).isEmpty else { return false }
         // Printable characters only: no Return, Tab, Esc, Delete, arrows or function keys.
         guard let characters = event.charactersIgnoringModifiers, !characters.isEmpty else { return false }
         return characters.unicodeScalars.allSatisfy { scalar in

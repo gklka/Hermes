@@ -24,9 +24,15 @@ final class ComposeTextView: NSTextView {
         Self.attachmentTypes + [.string]
     }
 
+    /// Returns true if the pasted text was a link and was inserted as its preview.
+    var linkHandler: ((String) -> Bool)?
+
     override func paste(_ sender: Any?) {
         if attachmentHandler?(.general) == true { return }
-        pasteAsPlainText(sender)
+        // Inserted directly: pasteAsPlainText inserts nothing in this (rich text) view.
+        guard let string = NSPasteboard.general.string(forType: .string), !string.isEmpty else { return }
+        if linkHandler?(string) == true { return }
+        insertText(string, replacementRange: selectedRange())
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -44,6 +50,69 @@ final class ComposeTextView: NSTextView {
 
     static func hasAttachments(_ pasteboard: NSPasteboard) -> Bool {
         pasteboard.availableType(from: attachmentTypes) != nil
+    }
+}
+
+/// A pasted link, shown in the field as its preview card (like in Messages) and sent as the link.
+final class ComposeLinkAttachment: NSTextAttachment {
+    let url: URL
+
+    init(url: URL, preview: LinkPreviews.Preview) {
+        self.url = url
+        super.init(data: nil, ofType: nil)
+        update(preview)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    private static let width: CGFloat = 240
+
+    func update(_ preview: LinkPreviews.Preview) {
+        attachmentCell = NSTextAttachmentCell(imageCell: Self.card(preview))
+    }
+
+    /// The card: picture (cropped to the usual share-picture shape), title and site.
+    private static func card(_ preview: LinkPreviews.Preview) -> NSImage {
+        let hasPicture = preview.image != nil || preview.imageSize != nil
+        let pictureHeight = hasPicture ? (width / 1.91).rounded() : 0
+        let size = NSSize(width: width, height: pictureHeight + 44)
+        // Drawn when displayed, so the colors follow the appearance.
+        return NSImage(size: size, flipped: true) { rect in
+            NSBezierPath(roundedRect: rect, xRadius: 12, yRadius: 12).addClip()
+            BubbleColors.incoming.setFill()
+            rect.fill()
+            if hasPicture {
+                let pictureRect = NSRect(x: 0, y: 0, width: rect.width, height: pictureHeight)
+                if let image = preview.image, image.size.width > 0, image.size.height > 0 {
+                    let scale = max(pictureRect.width / image.size.width, pictureRect.height / image.size.height)
+                    let crop = NSSize(width: pictureRect.width / scale, height: pictureRect.height / scale)
+                    let source = NSRect(
+                        x: (image.size.width - crop.width) / 2, y: (image.size.height - crop.height) / 2,
+                        width: crop.width, height: crop.height
+                    )
+                    image.draw(in: pictureRect, from: source, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+                } else {
+                    NSColor.quaternaryLabelColor.setFill()
+                    pictureRect.fill()
+                }
+            }
+            let paragraph = NSMutableParagraphStyle()
+            paragraph.lineBreakMode = .byTruncatingTail
+            let title = NSAttributedString(string: preview.title, attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+                .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: paragraph,
+            ])
+            title.draw(in: NSRect(x: 10, y: pictureHeight + 7, width: rect.width - 20, height: 16))
+            let site = NSAttributedString(string: preview.site ?? "", attributes: [
+                .font: NSFont.systemFont(ofSize: 11),
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: paragraph,
+            ])
+            site.draw(in: NSRect(x: 10, y: pictureHeight + 24, width: rect.width - 20, height: 15))
+            return true
+        }
     }
 }
 
@@ -82,6 +151,9 @@ final class ComposeView: NSView, NSTextViewDelegate {
         textView.importsGraphics = false
         textView.attachmentHandler = { [weak self] pasteboard in
             self?.addAttachments(from: pasteboard) ?? false
+        }
+        textView.linkHandler = { [weak self] string in
+            self?.insertLinkPreview(string) ?? false
         }
         textView.allowsUndo = true
         textView.font = .systemFont(ofSize: 14)
@@ -203,9 +275,27 @@ final class ComposeView: NSView, NSTextViewDelegate {
 
     // MARK: - API
 
-    /// The typed text, without staged attachments.
+    /// The typed text, without staged files; link cards become their links (set apart by spaces).
     var text: String {
-        get { textView.string.replacingOccurrences(of: Self.attachmentCharacter, with: "") }
+        get {
+            let storage = textView.attributedString()
+            var result = ""
+            var afterLink = false
+            storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
+                if let link = value as? ComposeLinkAttachment {
+                    if let last = result.last, !last.isWhitespace { result += " " }
+                    result += link.url.absoluteString
+                    afterLink = true
+                    return
+                }
+                let part = (storage.string as NSString).substring(with: range)
+                    .replacingOccurrences(of: Self.attachmentCharacter, with: "")
+                if afterLink, let first = part.first, !first.isWhitespace { result += " " }
+                result += part
+                afterLink = afterLink && part.isEmpty
+            }
+            return result
+        }
         set {
             draft = NSAttributedString(string: newValue, attributes: Self.textAttributes)
         }
@@ -346,6 +436,44 @@ final class ComposeView: NSView, NSTextViewDelegate {
         guard !text.isEmpty || !attachments.isEmpty else { return }
         delegate?.composeView(self, send: text, attachments: attachments)
         self.text = ""
+    }
+
+    // MARK: - Link preview
+
+    /// A pasted web link goes into the field as its preview card (Facebook links, which can't
+    /// be previewed, stay text). Returns false for anything else.
+    private func insertLinkPreview(_ string: String) -> Bool {
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard LinkPreviews.isOnlyLink(trimmed),
+              case .web(let url) = LinkPreviews.source(text: trimmed, attachments: []) else { return false }
+        let source = LinkPreviews.Source.web(url)
+        let attachment = ComposeLinkAttachment(url: url, preview: LinkPreviews.shared.preview(for: source))
+        let insertion = NSMutableAttributedString(attachment: attachment)
+        insertion.addAttributes(Self.textAttributes, range: NSRange(location: 0, length: insertion.length))
+        let range = textView.selectedRange()
+        guard textView.shouldChangeText(in: range, replacementString: insertion.string) else { return true }
+        textView.textStorage?.replaceCharacters(in: range, with: insertion)
+        textView.didChangeText()
+        textView.setSelectedRange(NSRange(location: range.location + insertion.length, length: 0))
+        textView.typingAttributes = Self.textAttributes
+        Task { [weak self] in
+            guard let loaded = await LinkPreviews.shared.load(source) else { return }
+            self?.updateCard(attachment, with: loaded)
+        }
+        return true
+    }
+
+    /// Redraws a card in the field once its preview has loaded (its size may change).
+    private func updateCard(_ attachment: ComposeLinkAttachment, with preview: LinkPreviews.Preview) {
+        guard let storage = textView.textStorage else { return }
+        attachment.update(preview)
+        storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, range, stop in
+            guard value as? ComposeLinkAttachment === attachment else { return }
+            textView.layoutManager?.invalidateLayout(forCharacterRange: range, actualCharacterRange: nil)
+            textView.layoutManager?.invalidateDisplay(forCharacterRange: range)
+            stop.pointee = true
+        }
+        textChanged()
     }
 
     // MARK: - NSTextViewDelegate

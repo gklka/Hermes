@@ -263,6 +263,16 @@ private final class InvisibleWhenTransparentWebView: WKWebView {
         alphaValue == 0 ? nil : super.hitTest(point)
     }
 
+    // While invisible, the page focusing its own fields mustn't take the keyboard (⌘V would
+    // paste into the hidden page instead of the message field).
+    override var acceptsFirstResponder: Bool {
+        alphaValue == 0 ? false : super.acceptsFirstResponder
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        alphaValue == 0 ? false : super.becomeFirstResponder()
+    }
+
     // While invisible behind the chat it still receives drags dropped there; hand them to the
     // chat (its superview), so files can be dropped anywhere on the chat.
     private var dropTarget: NSView? { alphaValue == 0 ? superview : nil }
