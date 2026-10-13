@@ -260,6 +260,8 @@ protocol MessageCellDelegate: AnyObject {
     func messageCell(_ cell: MessageCellView, showReactionsOf message: ChatMessage, anchor: NSView)
     /// A message's link preview finished loading; its row's height may change.
     func messageCellDidLoadLinkPreview(messageID: String)
+    /// The sender's avatar (group chats) was clicked or right-clicked.
+    func messageCell(_ cell: MessageCellView, menuForSenderOf message: ChatMessage) -> NSMenu?
 }
 
 /// One message: optional sender name, reply quote, attachments, text bubble and tapbacks.
@@ -447,6 +449,13 @@ final class MessageCellView: NSTableCellView {
             recognizer.delaysPrimaryMouseButtonEvents = false
             bubble.addGestureRecognizer(recognizer)
         }
+        avatar.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(avatarClicked)))
+    }
+
+    /// Clicking a sender's avatar shows what you can do with that person (as on the web).
+    @objc private func avatarClicked() {
+        guard let message, let menu = delegate?.messageCell(self, menuForSenderOf: message) else { return }
+        menu.popUp(positioning: nil, at: NSPoint(x: avatar.bounds.maxX + 4, y: avatar.bounds.maxY), in: avatar)
     }
 
     @available(*, unavailable)
@@ -523,6 +532,7 @@ final class MessageCellView: NSTableCellView {
         if layout.showAvatar {
             avatar.configure(name: layout.senderName, url: layout.avatarURL)
         }
+        avatar.toolTip = layout.showAvatar ? layout.senderName : nil
 
         // Attachments. Kept when unchanged: rebuilding them reloads their pictures, which blinks
         // on every refresh (e.g. while syncing after login).
@@ -646,7 +656,11 @@ final class MessageCellView: NSTableCellView {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
-        guard let message, let menu = delegate?.messageCell(self, menuFor: message) else { return nil }
+        guard let message else { return nil }
+        if !avatar.isHidden, avatar.bounds.contains(avatar.convert(event.locationInWindow, from: nil)) {
+            return delegate?.messageCell(self, menuForSenderOf: message)
+        }
+        guard let menu = delegate?.messageCell(self, menuFor: message) else { return nil }
         // Darken the message while its context menu is open. AppKit may show a copy of the
         // menu, so listen for any menu closing rather than this one.
         setDarkened(true)

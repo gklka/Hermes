@@ -732,6 +732,62 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         }
     }
 
+    // MARK: - Sender menu
+
+    func messageCell(_ cell: MessageCellView, menuForSenderOf message: ChatMessage) -> NSMenu? {
+        guard !message.isFromMe else { return nil }
+        let name = store.participant(message.senderID, in: message.threadID)?.name ?? "Unknown"
+        let menu = NSMenu()
+        func add(_ title: String, symbol: String, action: Selector) {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            item.representedObject = (message.senderID, name)
+        }
+        add("Message", symbol: "message", action: #selector(messageSender(_:)))
+        add("View Profile", symbol: "person.crop.circle", action: #selector(viewSenderProfile(_:)))
+        menu.addItem(.separator())
+        add("Block…", symbol: "person.crop.circle.badge.xmark", action: #selector(blockSender(_:)))
+        return menu
+    }
+
+    @objc private func messageSender(_ sender: NSMenuItem) {
+        guard let (userID, _) = sender.representedObject as? (String, String) else { return }
+        Task {
+            do {
+                let conversation = try await store.openDirectChat(with: userID)
+                (view.window?.windowController as? MainWindowController)?.select(threadID: conversation.id)
+            } catch {
+                _ = presentError(error)
+            }
+        }
+    }
+
+    @objc private func viewSenderProfile(_ sender: NSMenuItem) {
+        guard let (userID, _) = sender.representedObject as? (String, String),
+              let url = URL(string: "https://www.facebook.com/\(userID)") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func blockSender(_ sender: NSMenuItem) {
+        guard let (userID, name) = sender.representedObject as? (String, String), let window = view.window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Block \(name)?"
+        alert.informativeText = "They won't be able to message or call you on Messenger."
+        alert.addButton(withTitle: "Block").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            Task {
+                do {
+                    try await self?.store.block(userID: userID)
+                } catch {
+                    _ = self?.presentError(error)
+                }
+            }
+        }
+    }
+
     func messageCell(_ cell: MessageCellView, showReactionsOf message: ChatMessage, anchor: NSView) {
         let selfID = store.account?.id
         let people = message.reactions.map { reaction -> ReactionsViewController.Entry in
