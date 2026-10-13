@@ -470,6 +470,12 @@ final class MessageCellView: NSTableCellView {
         return delegate?.messageCell(self, menuFor: message)
     }
 
+    /// What popovers about this message point at: the text bubble, or the attachments.
+    var anchorView: NSView {
+        if !bubble.isHidden { return bubble }
+        return attachmentsStack.isHidden ? self : attachmentsStack
+    }
+
     @objc private func doubleClicked() {
         guard let message, !message.isUnsent else { return }
         delegate?.messageCellDidDoubleClick(self, message: message, bubble: bubble)

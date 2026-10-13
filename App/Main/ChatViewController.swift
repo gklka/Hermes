@@ -35,7 +35,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     private var drafts: [String: NSAttributedString] = [:]
     private var lastConversation: Conversation?
 
-    private static let reactionChoices = ["❤️", "😆", "😮", "😢", "😠", "👍"]
+    private static let reactionChoices = ReactionChoices.standard
 
     override func loadView() {
         let root = DropTargetView()
@@ -489,16 +489,19 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         guard !message.isUnsent, message.status != .pending else { return nil }
         let menu = NSMenu()
 
-        let reactMenu = NSMenu()
+        // Tapback rows, like Messages.
         let mine = message.reactions.first { $0.senderID == store.account?.id }?.emoji
-        for emoji in Self.reactionChoices {
-            let item = NSMenuItem(title: emoji, action: #selector(reactFromMenu(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = (message, emoji)
-            item.state = mine == emoji ? .on : .off
-            reactMenu.addItem(item)
-        }
-        menu.addItem(withTitle: "React", action: nil, keyEquivalent: "").submenu = reactMenu
+        let reactions = NSMenuItem()
+        reactions.view = ReactionMenuView(
+            current: mine,
+            onPick: { [weak self] emoji in self?.toggleReaction(emoji, on: message) },
+            onMore: { [weak self, weak cell] in
+                guard let self, let cell else { return }
+                self.showEmojiInput(for: message, anchor: cell.anchorView)
+            }
+        )
+        menu.addItem(reactions)
+        menu.addItem(.separator())
 
         let reply = menu.addItem(withTitle: "Reply", action: #selector(replyFromMenu(_:)), keyEquivalent: "")
         reply.target = self
@@ -803,9 +806,17 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         store.react(to: message, with: mine == emoji ? "" : emoji)
     }
 
-    @objc private func reactFromMenu(_ sender: NSMenuItem) {
-        guard let (message, emoji) = sender.representedObject as? (ChatMessage, String) else { return }
-        toggleReaction(emoji, on: message)
+    /// Lets you react with any emoji (the "more" button in the context menu's tapback rows).
+    private func showEmojiInput(for message: ChatMessage, anchor: NSView) {
+        let input = EmojiInputViewController()
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = input
+        input.onPick = { [weak self, weak popover] emoji in
+            popover?.close()
+            self?.toggleReaction(emoji, on: message)
+        }
+        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
     }
 
     @objc private func replyFromMenu(_ sender: NSMenuItem) {
