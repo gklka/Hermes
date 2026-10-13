@@ -123,6 +123,22 @@ final class ChatStore {
         await loadPage(threadID, before: nil)
     }
 
+    private var themesRefreshed: Set<String> = []
+
+    /// Fetches the chat's theme colors and quick reaction once per session; the core stores
+    /// them with the chat (a conversations change follows if they changed).
+    func refreshTheme(_ threadID: String) {
+        guard themesRefreshed.insert(threadID).inserted else { return }
+        struct Params: Encodable { let threadID: String }
+        Task {
+            do {
+                try await core.call("threads.refreshTheme", Params(threadID: threadID))
+            } catch {
+                themesRefreshed.remove(threadID)
+            }
+        }
+    }
+
     /// Loads an older page. Returns false when there is nothing more to load.
     @discardableResult
     func loadOlderMessages(_ threadID: String) async -> Bool {

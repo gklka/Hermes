@@ -1,8 +1,8 @@
 import Foundation
 
-/// Reads a chat's custom Messenger theme (outgoing bubble color or gradient) from Messenger's web
-/// app. The sync protocol only sends a theme ID, and the web app shows the actual colors for
-/// every chat, encrypted ones included.
+/// Reads an encrypted chat's custom Messenger theme (outgoing bubble color or gradient) and quick
+/// reaction from Messenger's web app. The core gets other chats' themes from the sync, but an
+/// encrypted chat's theme changed while the app wasn't running only shows in the web app.
 final class WebThemeReader {
     static let shared = WebThemeReader()
 

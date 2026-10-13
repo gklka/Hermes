@@ -9,17 +9,19 @@ func TestParseAge(t *testing.T) {
 	day := 24 * time.Hour
 	cases := map[string]time.Duration{
 		"6 órája": 6 * time.Hour, "6 ó.": 6 * time.Hour, "5 napja": 5 * day, "5 n.": 5 * day,
-		"2 hete": 14 * day, "3 hónapja": 90 * day, "1 éve": 365 * day, "12 perce": 12 * time.Minute,
+		"2 hete": 14 * day, "3 hónapja": 90 * day, "1 éve": 365 * day, "12 perce": 12 * time.Minute, "14 p.": 14 * time.Minute,
+		"kb. egy órája": time.Hour, "egy hete": 7 * day, "about an hour ago": time.Hour, "a week ago": 7 * day,
+		"a minute ago": time.Minute, "one day ago": day,
 		"6h": 6 * time.Hour, "3d": 3 * day, "2w": 14 * day, "1y": 365 * day, "5 minutes ago": 5 * time.Minute,
 		"most": 0,
 	}
 	for label, want := range cases {
-		got, ok := parseAge(label)
+		got, _, ok := parseAge(label)
 		if !ok || got != want {
 			t.Errorf("parseAge(%q) = %v, %v; want %v", label, got, ok, want)
 		}
 	}
-	if _, ok := parseAge("tegnap"); ok {
+	if _, _, ok := parseAge("tegnap"); ok {
 		t.Errorf("parseAge(tegnap) should fail")
 	}
 }
@@ -40,6 +42,13 @@ func TestUnrestoredPlaceholder(t *testing.T) {
 	}
 	if isUnrestoredPlaceholder("Jövő héten egy bor nálunk?") {
 		t.Errorf("a normal message was treated as a placeholder")
+	}
+	// In a language the list doesn't know: a long text on several messages.
+	placeholder := "Impossible de restaurer ce message."
+	messages := []webMessage{{Text: placeholder}, {Text: "ok"}, {Text: placeholder}, {Text: "ok"}, {Text: "ok"}, {Text: placeholder}}
+	repeated := repeatedTexts(messages)
+	if !repeated[placeholder] || repeated["ok"] {
+		t.Errorf("repeatedTexts = %v", repeated)
 	}
 }
 

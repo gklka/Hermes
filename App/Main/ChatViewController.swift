@@ -229,16 +229,18 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         store.clearMarkedUnread(threadID)
         Notifier.shared.clear(threadID: threadID)
         compose.focus()
+        store.refreshTheme(threadID)
         Task {
             await store.openThread(threadID)
             if self.threadID == threadID {
                 reload(scrollToBottom: true)
                 markReadIfVisible()
             }
-            // Theme first (a few seconds): the history import can scroll back for minutes and
-            // would hold the web view the whole time.
-            await WebThemeReader.shared.refresh(threadID: threadID)
             if store.conversation(threadID)?.isEncrypted == true {
+                // An encrypted chat's theme changed while the app wasn't running only shows in
+                // the web app. Read first (a few seconds): the history import can scroll back
+                // for minutes and would hold the web view the whole time.
+                await WebThemeReader.shared.refresh(threadID: threadID)
                 WebHistoryImporter.shared.importHistory(threadID: threadID)
             }
         }

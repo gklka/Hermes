@@ -285,6 +285,12 @@ func (s *Store) BumpThread(id string, ts int64, snippet, senderID string) {
 		WHERE id=? AND last_activity<=?`, ts, snippet, senderID, id, ts)
 }
 
+// SetThreadLatest sets the thread's latest activity even if it's older (to undo a guess).
+func (s *Store) SetThreadLatest(id string, ts int64, snippet, senderID string) {
+	_, _ = s.db.Exec(`UPDATE threads SET last_activity=?, snippet=?, snippet_sender_id=? WHERE id=?`,
+		ts, snippet, senderID, id)
+}
+
 // MARK: - Participants
 
 type participantRow struct {

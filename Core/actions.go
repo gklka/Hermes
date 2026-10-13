@@ -186,6 +186,8 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return nil, c.leaveThread(ctx, p.ThreadID)
 	case "users.block":
 		return nil, c.blockUser(ctx, p.UserID)
+	case "threads.refreshTheme":
+		return nil, c.refreshTheme(ctx, p.ThreadID)
 	case "threads.subscribePresence":
 		return nil, c.subscribePresence(ctx, p.ThreadID)
 	case "messages.list":

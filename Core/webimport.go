@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"go.mau.fi/mautrix-meta/pkg/messagix/table"
 )
@@ -49,40 +50,44 @@ func (s *Store) ContactByAvatarKey(key string) string {
 
 var agePattern = regexp.MustCompile(`(\d+)\s*([^\d\s.]+)`)
 
+var spelledOnePattern = regexp.MustCompile(`\b(an?|one|egy)\b`)
+
 // parseAge turns the chat list's relative time ("6 órája", "5 napja", "2 hete", "6h", "3 days")
-// into a duration. Returns false if it can't be parsed.
-func parseAge(label string) (time.Duration, bool) {
+// into a duration, and its unit: the label is rounded down, so the real age is less than one
+// unit more. Returns false if it can't be parsed.
+func parseAge(label string) (age, unit time.Duration, ok bool) {
 	label = strings.ToLower(strings.TrimSpace(label))
 	switch label {
 	case "", "most", "now", "just now", "épp most":
-		return 0, label != ""
+		return 0, time.Minute, label != ""
 	}
+	// "about an hour ago", "kb. egy órája", "a week ago": a spelled-out one.
+	label = spelledOnePattern.ReplaceAllString(label, "1")
 	m := agePattern.FindStringSubmatch(label)
 	if m == nil {
-		return 0, false
+		return 0, 0, false
 	}
 	n, _ := strconv.Atoi(m[1])
-	unit := m[2]
+	name := m[2]
 	day := 24 * time.Hour
-	var d time.Duration
 	// Order matters: Hungarian "hete" (weeks) and "hónapja" (months) also start with "h".
 	switch {
-	case strings.HasPrefix(unit, "hét"), strings.HasPrefix(unit, "het"), strings.HasPrefix(unit, "w"):
-		d = 7 * day
-	case strings.HasPrefix(unit, "hó"), strings.HasPrefix(unit, "mo"):
-		d = 30 * day
-	case strings.HasPrefix(unit, "perc"), strings.HasPrefix(unit, "m"):
-		d = time.Minute
-	case strings.HasPrefix(unit, "ó"), strings.HasPrefix(unit, "h"):
-		d = time.Hour
-	case strings.HasPrefix(unit, "nap"), strings.HasPrefix(unit, "n"), strings.HasPrefix(unit, "d"):
-		d = day
-	case strings.HasPrefix(unit, "év"), strings.HasPrefix(unit, "y"):
-		d = 365 * day
+	case strings.HasPrefix(name, "hét"), strings.HasPrefix(name, "het"), strings.HasPrefix(name, "w"):
+		unit = 7 * day
+	case strings.HasPrefix(name, "hó"), strings.HasPrefix(name, "mo"):
+		unit = 30 * day
+	case strings.HasPrefix(name, "p"), strings.HasPrefix(name, "m"):
+		unit = time.Minute
+	case strings.HasPrefix(name, "ó"), strings.HasPrefix(name, "h"):
+		unit = time.Hour
+	case strings.HasPrefix(name, "nap"), strings.HasPrefix(name, "n"), strings.HasPrefix(name, "d"):
+		unit = day
+	case strings.HasPrefix(name, "év"), strings.HasPrefix(name, "y"):
+		unit = 365 * day
 	default:
-		return 0, false
+		return 0, 0, false
 	}
-	return time.Duration(n) * d, true
+	return time.Duration(n) * unit, unit, true
 }
 
 // importWebThreads merges encrypted chats from the web app's chat list (in list order, newest
@@ -99,11 +104,24 @@ func (c *Core) importWebThreads(rows []webThreadRow) map[string]any {
 		snippetCounts[r.Snippet]++
 	}
 
+	// The earliest each row's message can be from. The list rounds its times down ("6 órája" is
+	// 6–7 hours ago); a time that can't be read (parseAge knows English and Hungarian) is newer
+	// than the row below it.
+	earliest := make([]int64, len(rows))
+	var below int64
+	for i := len(rows) - 1; i >= 0; i-- {
+		earliest[i] = below
+		if age, unit, ok := parseAge(rows[i].Age); ok {
+			earliest[i] = now - (age + unit).Milliseconds()
+			below = earliest[i]
+		}
+	}
+
 	cs := newChangeSet()
 	unresolved := []string{}
 	imported := 0
 	prevTs := now
-	for _, r := range rows {
+	for i, r := range rows {
 		userID := r.UserID
 		if userID == "" {
 			userID = c.store.Get("webmap:" + r.WebID)
@@ -119,10 +137,11 @@ func (c *Core) importWebThreads(rows []webThreadRow) map[string]any {
 		c.store.Set("webid:"+userID, r.WebID)
 
 		ts := prevTs - 1
-		if age, ok := parseAge(r.Age); ok {
+		if age, _, ok := parseAge(r.Age); ok {
 			ts = min(now-age.Milliseconds(), prevTs-1)
 		}
 		prevTs = ts
+		c.log.Debug().Str("thread_id", userID).Str("age", r.Age).Time("guess", time.UnixMilli(ts)).Msg("Web chat list row")
 
 		snippet := r.Snippet
 		if snippetCounts[snippet] > 2 {
@@ -137,8 +156,15 @@ func (c *Core) importWebThreads(rows []webThreadRow) map[string]any {
 		c.store.SetThreadFolder(userID, "inbox")
 		c.store.AddParticipant(userID, self, "", 0)
 		c.store.AddParticipant(userID, userID, "", 0)
-		// Only moves the chat forward in time; real messages keep their exact timestamps.
-		c.store.BumpThread(userID, ts, snippet, "")
+		if latest := c.store.ListMessages(userID, 0, 1); len(latest) == 1 && latest[0].Timestamp >= earliest[i] {
+			// Our newest message is the one shown: use its exact time and text (this also undoes
+			// an earlier guess that put the chat later than it is).
+			m := latest[0]
+			c.store.SetThreadLatest(userID, m.Timestamp, snippetFor(m.Text, len(m.Attachments) > 0), m.SenderID)
+		} else {
+			// The web app knows a newer message; only moves the chat forward in time.
+			c.store.BumpThread(userID, ts, snippet, "")
+		}
 		cs.thread(userID)
 		imported++
 	}
@@ -270,6 +296,24 @@ func isUnrestoredPlaceholder(text string) bool {
 	return false
 }
 
+// repeatedTexts finds the placeholder in languages unrestoredTexts doesn't know: a long text
+// shown for several messages without pictures.
+func repeatedTexts(messages []webMessage) map[string]bool {
+	counts := map[string]int{}
+	for _, wm := range messages {
+		if len(wm.Images) == 0 && utf8.RuneCountInString(wm.Text) >= 20 {
+			counts[wm.Text]++
+		}
+	}
+	out := map[string]bool{}
+	for text, n := range counts {
+		if n >= 3 {
+			out[text] = true
+		}
+	}
+	return out
+}
+
 // importWebMessages stores decrypted history read from the web app for a 1:1 encrypted chat.
 // Messages the live connection already delivered are left alone, except placeholders stored
 // before the history was restored, which are replaced with the real message.
@@ -279,19 +323,21 @@ func (c *Core) importWebMessages(threadID string, messages []webMessage) map[str
 	imported := 0
 	unrestored := 0
 	var newest *messageRow
+	repeated := repeatedTexts(messages)
+	isPlaceholder := func(text string) bool { return isUnrestoredPlaceholder(text) || repeated[text] }
 	for _, wm := range messages {
 		id, ts, ok := webMessageID(wm.DOMID)
 		if !ok {
 			continue
 		}
-		if isUnrestoredPlaceholder(wm.Text) && len(wm.Images) == 0 {
+		if isPlaceholder(wm.Text) && len(wm.Images) == 0 {
 			unrestored++
 			continue
 		}
 		if c.importWebReactions(id, threadID, wm.FromMe, wm.Reactions) {
 			cs.message(id)
 		}
-		if existing := c.store.GetMessage(id); existing != nil && !isUnrestoredPlaceholder(existing.Text) &&
+		if existing := c.store.GetMessage(id); existing != nil && !isPlaceholder(existing.Text) &&
 			!(len(wm.Links) > 0 && importedBeforeLinks(existing)) {
 			// Text read before emoji were collected gets its emoji.
 			if wm.Text != "" && existing.Text != wm.Text && withoutEmoji(existing.Text) == withoutEmoji(wm.Text) {
@@ -381,41 +427,4 @@ func (c *Core) webThreadPath(threadID string) string {
 		return ""
 	}
 	return fmt.Sprintf("/messages/t/%d/", c.fbThreadKey(threadID))
-}
-
-var hexColorPattern = regexp.MustCompile(`^#[0-9a-f]{6}$`)
-
-// setThreadTheme stores the chat's custom bubble colors and quick reaction emoji read from the
-// web app (empty: Messenger's default theme / like).
-func (c *Core) setThreadTheme(threadID string, colors []string, emoji string) {
-	for _, color := range colors {
-		if !hexColorPattern.MatchString(color) {
-			c.log.Warn().Str("thread_id", threadID).Strs("colors", colors).Msg("Ignoring invalid bubble colors")
-			return
-		}
-	}
-	if len(emoji) > 64 {
-		c.log.Warn().Str("thread_id", threadID).Int("length", len(emoji)).Msg("Ignoring invalid quick reaction emoji")
-		emoji = ""
-	}
-	changed := c.setOrDelete("colors:"+threadID, strings.Join(colors, ","))
-	changed = c.setOrDelete("emoji:"+threadID, emoji) || changed
-	if changed {
-		cs := newChangeSet()
-		cs.thread(threadID)
-		c.flush(cs)
-	}
-}
-
-// setOrDelete stores a kv value (deleting it when empty) and reports whether it changed.
-func (c *Core) setOrDelete(key, value string) bool {
-	if c.store.Get(key) == value {
-		return false
-	}
-	if value == "" {
-		c.store.Delete(key)
-	} else {
-		c.store.Set(key, value)
-	}
-	return true
 }

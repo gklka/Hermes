@@ -138,14 +138,34 @@ func (c *Core) handleTable(tbl *table.LSTable) {
 	for _, t := range tbl.LSDeleteThenInsertThread {
 		c.putThread(t.ThreadKey, t.ThreadType, t.ThreadName, t.ThreadPictureUrl, t.Snippet, t.SnippetSenderContactId,
 			t.LastActivityTimestampMs, t.LastReadWatermarkTimestampMs, t.FolderName, t.MuteExpireTimeMs, cs)
+		// The unencrypted chat an encrypted one replaced keeps its old theme.
+		if t.FolderName != "e2ee_cutover" {
+			c.noteTheme(c.threadID(t.ThreadKey), t.ThemeFbid, t.CustomEmoji)
+		}
 	}
 	for _, t := range tbl.LSUpdateOrInsertThread {
 		c.putThread(t.ThreadKey, t.ThreadType, t.ThreadName, t.ThreadPictureUrl, t.Snippet, t.SnippetSenderContactId,
 			t.LastActivityTimestampMs, t.LastReadWatermarkTimestampMs, t.FolderName, t.MuteExpireTimeMs, cs)
+		// Partial rows may leave the theme out.
+		if t.ThemeFbid != 0 && t.FolderName != "e2ee_cutover" {
+			c.noteTheme(c.threadID(t.ThreadKey), t.ThemeFbid, t.CustomEmoji)
+		}
 	}
 	for _, t := range tbl.LSVerifyThreadExists {
 		id := c.threadID(t.ThreadKey)
 		c.store.EnsureThread(id, t.ThreadType, t.FolderName)
+	}
+	// Someone changed the chat's theme (Unknown1 is the new theme's ID). Encrypted chats are
+	// named by their web ID here.
+	for _, t := range tbl.LSUpdateThreadTheme {
+		id := c.threadID(t.ThreadKey)
+		if userID := c.store.Get("webmap:" + id); userID != "" {
+			id = userID
+		}
+		c.log.Debug().Str("thread_id", id).Any("update", t).Msg("Theme changed")
+		if t.Unknown1 != 0 {
+			c.noteTheme(id, t.Unknown1, c.store.Get("emoji:"+id))
+		}
 	}
 	for _, t := range tbl.LSDeleteThread {
 		id := c.threadID(t.ThreadKey)
