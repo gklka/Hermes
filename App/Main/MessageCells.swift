@@ -259,6 +259,17 @@ final class MessageCellView: NSTableCellView {
     private var badgeOutgoing = NSLayoutConstraint()
     private var textInsets: [NSLayoutConstraint] = []
 
+    // The reply quote sits above the column, on the quoted message's sender's side.
+    private let replyConnector = ReplyConnectorView()
+    private var replyOnLeft = true
+    private var replyLeading = NSLayoutConstraint()
+    private var replyTrailing = NSLayoutConstraint()
+    private var replyTop = NSLayoutConstraint()
+    private var columnBelowReply = NSLayoutConstraint()
+    private var outgoingTrailing = NSLayoutConstraint()
+    /// When a reply and its quote are on the same side, the reply moves in to make room for the line.
+    private static let threadIndent: CGFloat = 30
+
     init() {
         super.init(frame: .zero)
 
@@ -284,7 +295,6 @@ final class MessageCellView: NSTableCellView {
         NSLayoutConstraint.activate(textInsets)
 
         column.addArrangedSubview(senderLabel)
-        column.addArrangedSubview(replyView)
         column.addArrangedSubview(attachmentsStack)
         column.addArrangedSubview(bubble)
         column.addArrangedSubview(linkCard)
@@ -293,7 +303,9 @@ final class MessageCellView: NSTableCellView {
         failedIcon.image = NSImage(systemSymbolName: "exclamationmark.circle.fill", accessibilityDescription: "Not delivered")
         failedIcon.contentTintColor = .systemRed
 
-        for view in [column, reactionsBadge, avatar, failedIcon] as [NSView] {
+        // The connector is laid out by hand in layout().
+        addSubview(replyConnector)
+        for view in [replyView, column, reactionsBadge, avatar, failedIcon] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -302,13 +314,20 @@ final class MessageCellView: NSTableCellView {
         widthConstraint = column.widthAnchor.constraint(lessThanOrEqualToConstant: 400)
         incomingAvatarLeading = column.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14)
         incomingConstraints = [incomingAvatarLeading]
-        outgoingConstraints = [column.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14)]
+        outgoingTrailing = column.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14)
+        outgoingConstraints = [outgoingTrailing]
+        replyTop = replyView.topAnchor.constraint(equalTo: topAnchor, constant: 8)
+        columnBelowReply = column.topAnchor.constraint(equalTo: replyView.bottomAnchor, constant: 4)
+        replyLeading = replyView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14)
+        replyTrailing = replyView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14)
         badgeIncoming = reactionsBadge.centerXAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -2)
         badgeOutgoing = reactionsBadge.centerXAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 2)
 
         NSLayoutConstraint.activate([
             topConstraint,
             widthConstraint,
+            replyView.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 14),
+            replyView.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -14),
             column.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -1),
             column.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 14),
             column.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -14),
@@ -365,9 +384,31 @@ final class MessageCellView: NSTableCellView {
 
         NSLayoutConstraint.deactivate(incomingConstraints + outgoingConstraints + [badgeIncoming, badgeOutgoing])
         NSLayoutConstraint.activate((outgoing ? outgoingConstraints : incomingConstraints) + [outgoing ? badgeOutgoing : badgeIncoming])
-        incomingAvatarLeading.constant = layout.reserveAvatarSpace ? 44 : 14
+        let incomingLeading: CGFloat = layout.reserveAvatarSpace ? 44 : 14
         column.alignment = outgoing ? .trailing : .leading
-        widthConstraint.constant = layout.maxWidth
+
+        // Reply quote: on the quoted sender's side (mine on the right).
+        NSLayoutConstraint.deactivate([topConstraint, replyTop, columnBelowReply, replyLeading, replyTrailing])
+        var indent: CGFloat = 0
+        if let reply = message.replyTo, !message.isUnsent {
+            let quotedIsMe = reply.senderID.map { $0 == store.account?.id } ?? !outgoing
+            replyOnLeft = !quotedIsMe
+            if replyOnLeft != outgoing {
+                indent = Self.threadIndent
+            }
+            replyLeading.constant = incomingLeading
+            replyView.configure(text: reply.text.isEmpty ? "Attachment" : reply.text, maxWidth: layout.maxWidth)
+            replyView.isHidden = false
+            replyConnector.isHidden = false
+            NSLayoutConstraint.activate([replyTop, columnBelowReply, replyOnLeft ? replyLeading : replyTrailing])
+        } else {
+            replyView.isHidden = true
+            replyConnector.isHidden = true
+            NSLayoutConstraint.activate([topConstraint])
+        }
+        incomingAvatarLeading.constant = incomingLeading + (outgoing ? 0 : indent)
+        outgoingTrailing.constant = -14 - (outgoing ? indent : 0)
+        widthConstraint.constant = layout.maxWidth - indent
 
         // Sender name (group chats)
         senderLabel.isHidden = !layout.showSenderName
@@ -377,15 +418,6 @@ final class MessageCellView: NSTableCellView {
         avatar.isHidden = !layout.showAvatar
         if layout.showAvatar {
             avatar.configure(name: layout.senderName, url: layout.avatarURL)
-        }
-
-        // Reply quote
-        if let reply = message.replyTo, !message.isUnsent {
-            replyView.isHidden = false
-            let name = reply.senderID.map { store.participantName($0, in: message.threadID) } ?? ""
-            replyView.configure(name: name, text: reply.text.isEmpty ? "Attachment" : reply.text, maxWidth: layout.maxWidth)
-        } else {
-            replyView.isHidden = true
         }
 
         // Attachments
@@ -442,11 +474,24 @@ final class MessageCellView: NSTableCellView {
         reactionsBadge.configure(emojis: emojis, highlighted: message.reactions.contains { $0.senderID == store.account?.id })
 
         // Spacing: tight within a run, looser between runs, extra room for tapbacks.
-        topConstraint.constant = (layout.isFirstInGroup ? 8 : 1) + (reactionsBadge.isHidden ? 0 : 12)
+        let top: CGFloat = layout.isFirstInGroup ? 8 : 1
+        let badgeRoom: CGFloat = reactionsBadge.isHidden ? 0 : 12
+        topConstraint.constant = top + badgeRoom
+        replyTop.constant = top
+        columnBelowReply.constant = 5 + badgeRoom
+        needsLayout = true
 
         alphaValue = message.status == .pending ? 0.6 : 1
         failedIcon.isHidden = message.status != .failed
         toolTip = Formatters.messageTime(message.date) + (message.isEdited ? " (edited)" : "")
+    }
+
+    override func layout() {
+        super.layout()
+        guard !replyConnector.isHidden else { return }
+        let target = anchorView === self ? column : anchorView
+        replyConnector.frame = bounds
+        replyConnector.update(quote: replyView.frame, target: convert(target.bounds, from: target), onLeft: replyOnLeft)
     }
 
     /// Link styling comes from the text view's linkTextAttributes, so only the URL is attached here.
@@ -585,50 +630,92 @@ final class MessageTextView: NSTextView {
     }
 }
 
-/// Small quoted preview shown above a reply.
+/// The replied-to message above a reply, like Messages: an outlined bubble with gray text.
 final class ReplyQuoteView: NSView {
-    private let bar = NSView()
-    private let nameLabel = NSTextField(labelWithString: "")
     private let textLabel = NSTextField(wrappingLabelWithString: "")
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        bar.wantsLayer = true
-        bar.layer?.cornerRadius = 1.5
-        bar.layer?.backgroundColor = NSColor.tertiaryLabelColor.cgColor
-        nameLabel.font = .systemFont(ofSize: 11, weight: .semibold)
-        nameLabel.textColor = .secondaryLabelColor
-        textLabel.font = .systemFont(ofSize: 12)
+        wantsLayer = true
+        layer?.cornerRadius = 17
+        layer?.cornerCurve = .continuous
+        layer?.borderWidth = 1
+        textLabel.font = .systemFont(ofSize: 13)
         textLabel.textColor = .secondaryLabelColor
-        textLabel.maximumNumberOfLines = 2
-        textLabel.lineBreakMode = .byTruncatingTail
+        textLabel.maximumNumberOfLines = 3
+        textLabel.lineBreakMode = .byWordWrapping
         textLabel.cell?.truncatesLastVisibleLine = true
-        for view in [bar, nameLabel, textLabel] as [NSView] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(view)
-        }
+        textLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(textLabel)
         NSLayoutConstraint.activate([
-            bar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            bar.topAnchor.constraint(equalTo: topAnchor),
-            bar.bottomAnchor.constraint(equalTo: bottomAnchor),
-            bar.widthAnchor.constraint(equalToConstant: 3),
-            nameLabel.leadingAnchor.constraint(equalTo: bar.trailingAnchor, constant: 6),
-            nameLabel.topAnchor.constraint(equalTo: topAnchor),
-            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
-            textLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
-            textLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 1),
-            textLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
-            textLabel.bottomAnchor.constraint(equalTo: bottomAnchor),
+            textLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            textLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            textLabel.topAnchor.constraint(equalTo: topAnchor, constant: 7),
+            textLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -7),
         ])
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(name: String, text: String, maxWidth: CGFloat) {
-        nameLabel.stringValue = name.isEmpty ? "Reply" : name
+    func configure(text: String, maxWidth: CGFloat) {
         textLabel.stringValue = text
-        textLabel.preferredMaxLayoutWidth = maxWidth - 20
+        textLabel.preferredMaxLayoutWidth = maxWidth - 24
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        layer?.borderColor = NSColor.tertiaryLabelColor.cgColor
+    }
+}
+
+/// The thread line from a reply's quote down to the reply, ending in a curve towards it.
+final class ReplyConnectorView: NSView {
+    private let shape = CAShapeLayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        shape.fillColor = nil
+        shape.lineWidth = 2
+        shape.lineCap = .round
+        layer?.addSublayer(shape)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    override func updateLayer() {
+        shape.strokeColor = NSColor.quaternaryLabelColor.cgColor
+    }
+
+    /// `quote` and `target` (the reply's bubble) are in this view's coordinates (y up).
+    /// The line runs down the quote's outer side and curves inward at the target's middle.
+    func update(quote: NSRect, target: NSRect, onLeft: Bool) {
+        let radius: CGFloat = 10
+        let direction: CGFloat = onLeft ? 1 : -1
+        let x = onLeft ? quote.minX + 12 : quote.maxX - 12
+        let endY = target.midY
+        let endX = onLeft ? min(target.minX - 4, x + 44) : max(target.maxX + 4, x - 44)
+        let path = CGMutablePath()
+        path.move(to: CGPoint(x: x, y: quote.minY - 3))
+        if quote.minY - 3 - endY > radius {
+            path.addLine(to: CGPoint(x: x, y: endY + radius))
+            path.addQuadCurve(to: CGPoint(x: x + direction * radius, y: endY), control: CGPoint(x: x, y: endY))
+            if (endX - x) * direction > radius {
+                path.addLine(to: CGPoint(x: endX, y: endY))
+            }
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        shape.frame = bounds
+        shape.path = path
+        CATransaction.commit()
     }
 }
 
