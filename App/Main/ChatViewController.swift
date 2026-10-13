@@ -22,7 +22,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
 
     private let store = ChatStore.shared
     private let scrollView = NSScrollView()
-    private let tableView = NSTableView()
+    private let tableView = ChatTableView()
     private let compose = ComposeView()
     private let emptyLabel = NSTextField(labelWithString: "No Conversation Selected")
     private var rows: [Row] = []
@@ -878,6 +878,17 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         store.setTyping(false, in: threadID)
     }
 
+}
+
+/// The message table. A table view keeps mouse-downs for itself (row tracking) unless the
+/// clicked subview opts in, so attachments get them here and can be dragged out.
+final class ChatTableView: NSTableView {
+    override func validateProposedFirstResponder(_ responder: NSResponder, for event: NSEvent?) -> Bool {
+        if event?.type == .leftMouseDown, responder is AttachmentView {
+            return true
+        }
+        return super.validateProposedFirstResponder(responder, for: event)
+    }
 }
 
 /// Accepts files and images dragged anywhere onto the conversation; they're staged in the

@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 
 enum BubbleColors {
     static let outgoing = NSColor.systemBlue
@@ -711,9 +712,10 @@ final class LinkCardView: NSView {
     }
 }
 
-/// Image / video / file / link attachment.
-final class AttachmentView: NSView {
+/// Image / video / file / link attachment. Can be dragged out to Finder or other apps.
+final class AttachmentView: NSView, NSDraggingSource {
     var onOpen: (() -> Void)?
+    private var mouseDownPoint: NSPoint?
 
     private let attachment: Attachment
     private let message: ChatMessage
@@ -753,6 +755,51 @@ final class AttachmentView: NSView {
 
     @objc private func clicked() {
         onOpen?()
+    }
+
+    // MARK: - Dragging out
+
+    /// Receive mouse events here rather than in the image view, which would track the drag itself.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        super.hitTest(point) == nil ? nil : self
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        // Don't pass it on: the table view would run its own tracking loop and eat the drag.
+        // Clicks still work through the click gesture recognizer.
+        mouseDownPoint = event.locationInWindow
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard attachment.kind != .link, let start = mouseDownPoint,
+              hypot(event.locationInWindow.x - start.x, event.locationInWindow.y - start.y) > 4 else {
+            super.mouseDragged(with: event)
+            return
+        }
+        mouseDownPoint = nil
+        let item = NSDraggingItem(pasteboardWriter: AttachmentFilePromise(attachment: attachment, message: message))
+        item.setDraggingFrame(bounds, contents: snapshot())
+        beginDraggingSession(with: [item], event: event, source: self)
+    }
+
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        .copy
+    }
+
+    private func snapshot() -> NSImage {
+        if let picture = displayedImage {
+            return NSImage(size: bounds.size, flipped: false) { rect in
+                NSBezierPath(roundedRect: rect, xRadius: 16, yRadius: 16).addClip()
+                picture.draw(in: rect)
+                return true
+            }
+        }
+        let image = NSImage(size: bounds.size)
+        if let rep = bitmapImageRepForCachingDisplay(in: bounds) {
+            cacheDisplay(in: bounds, to: rep)
+            image.addRepresentation(rep)
+        }
+        return image
     }
 
     var attachmentID: String { attachment.id }
@@ -860,5 +907,71 @@ final class AttachmentView: NSView {
             texts.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9),
             widthAnchor.constraint(lessThanOrEqualToConstant: maxWidth),
         ])
+    }
+}
+
+/// Drags an attachment out as a file. It's a promise, so attachments that aren't downloaded
+/// (or decrypted) yet are fetched when dropped.
+final class AttachmentFilePromise: NSFilePromiseProvider, NSFilePromiseProviderDelegate {
+    private let attachment: Attachment
+    private let message: ChatMessage
+
+    init(attachment: Attachment, message: ChatMessage) {
+        self.attachment = attachment
+        self.message = message
+        super.init()
+        fileType = Self.type(of: attachment).identifier
+        delegate = self
+    }
+
+    private static func type(of attachment: Attachment) -> UTType {
+        if let mime = attachment.mimeType, let type = UTType(mimeType: mime) {
+            return type
+        }
+        if let ext = attachment.filename.map({ ($0 as NSString).pathExtension }), !ext.isEmpty,
+           let type = UTType(filenameExtension: ext) {
+            return type
+        }
+        switch attachment.kind {
+        case .image, .sticker: return .jpeg
+        case .gif: return .gif
+        case .video: return .mpeg4Movie
+        case .audio: return .mpeg4Audio
+        case .file, .link: return .data
+        }
+    }
+
+    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, fileNameForType fileType: String) -> String {
+        let ext = UTType(fileType)?.preferredFilenameExtension
+        if let name = attachment.filename, !name.isEmpty {
+            return (name as NSString).pathExtension.isEmpty && ext != nil ? "\(name).\(ext!)" : name
+        }
+        let base: String
+        switch attachment.kind {
+        case .image: base = "Photo"
+        case .gif: base = "GIF"
+        case .sticker: base = "Sticker"
+        case .video: base = "Video"
+        case .audio: base = "Audio"
+        case .file, .link: base = "File"
+        }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
+        let name = "\(base) \(formatter.string(from: message.date))"
+        return ext.map { "\(name).\($0)" } ?? name
+    }
+
+    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider, writePromiseTo url: URL,
+                             completionHandler: @escaping (Error?) -> Void) {
+        Task {
+            do {
+                let source = try await ChatStore.shared.localFile(for: attachment, in: message)
+                try FileManager.default.copyItem(at: source, to: url)
+                completionHandler(nil)
+            } catch {
+                CoreBridge.shared.log("Dragging out \(attachment.id) failed: \(error)")
+                completionHandler(error)
+            }
+        }
     }
 }
