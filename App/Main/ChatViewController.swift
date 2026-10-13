@@ -246,9 +246,10 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         }
     }
 
-    /// The compose button shows the chat's quick reaction, tinted with its theme color.
+    /// The compose button shows the chat's quick reaction, tinted with its theme color (a
+    /// gradient's lower color, which is the one next to the compose bar).
     private func updateComposeTheme() {
-        compose.setQuickReaction(lastConversation?.quickEmoji, tint: BubbleColors.theme(lastConversation?.bubbleColors).first)
+        compose.setQuickReaction(lastConversation?.quickEmoji, tint: BubbleColors.theme(lastConversation?.bubbleColors).last)
     }
 
     func markReadIfVisible() {
