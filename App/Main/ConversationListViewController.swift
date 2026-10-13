@@ -21,7 +21,7 @@ enum ConversationFilter: Int, CaseIterable {
     }
 }
 
-final class ConversationListViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+final class ConversationListViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate, NSMenuDelegate {
     var onSelect: ((String?) -> Void)?
     var onFilterChanged: (() -> Void)?
 
@@ -82,6 +82,9 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         tableView.dataSource = self
         tableView.delegate = self
         tableView.allowsEmptySelection = true
+        let menu = NSMenu()
+        menu.delegate = self
+        tableView.menu = menu
 
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = true
@@ -174,6 +177,106 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         }
     }
 
+    // MARK: - Context menu
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let row = tableView.clickedRow
+        guard row >= 0, row < rows.count else { return }
+        let conversation = rows[row]
+        let unread = conversation.unreadCount > 0
+        menu.addItem(item(unread ? "Mark as Read" : "Mark as Unread",
+                          symbol: unread ? "envelope.open" : "envelope.badge", action: #selector(toggleUnread), conversation))
+        menu.addItem(item(conversation.isMuted ? "Unmute" : "Mute",
+                          symbol: conversation.isMuted ? "bell" : "bell.slash", action: #selector(toggleMute), conversation))
+        if !conversation.isGroup {
+            menu.addItem(item("View Profile", symbol: "person.crop.circle", action: #selector(viewProfile), conversation))
+        }
+        menu.addItem(.separator())
+        if !conversation.isGroup {
+            menu.addItem(item("Block…", symbol: "person.crop.circle.badge.xmark", action: #selector(block), conversation))
+        }
+        menu.addItem(item("Delete Chat…", symbol: "trash", action: #selector(deleteChat), conversation))
+        if conversation.isGroup {
+            menu.addItem(item("Leave Group…", symbol: "rectangle.portrait.and.arrow.right", action: #selector(leaveGroup), conversation))
+        }
+    }
+
+    private func item(_ title: String, symbol: String, action: Selector, _ conversation: Conversation) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        item.representedObject = conversation
+        return item
+    }
+
+    @objc private func toggleUnread(_ sender: NSMenuItem) {
+        guard let conversation = sender.representedObject as? Conversation else { return }
+        if conversation.unreadCount > 0 {
+            store.markRead(conversation.id)
+        } else {
+            store.setUnread(true, threadID: conversation.id)
+        }
+    }
+
+    @objc private func toggleMute(_ sender: NSMenuItem) {
+        guard let conversation = sender.representedObject as? Conversation else { return }
+        store.setMuted(!conversation.isMuted, threadID: conversation.id)
+    }
+
+    @objc private func viewProfile(_ sender: NSMenuItem) {
+        guard let conversation = sender.representedObject as? Conversation,
+              let url = URL(string: "https://www.facebook.com/\(conversation.id)") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func block(_ sender: NSMenuItem) {
+        guard let conversation = sender.representedObject as? Conversation else { return }
+        confirm("Block \(conversation.name)?",
+                info: "They won't be able to message or call you on Messenger.", button: "Block") { [store] in
+            try await store.block(userID: conversation.id)
+        }
+    }
+
+    @objc private func deleteChat(_ sender: NSMenuItem) {
+        guard let conversation = sender.representedObject as? Conversation else { return }
+        confirm("Delete the chat with \(conversation.name)?",
+                info: "This deletes your copy of the conversation. It can't be undone.", button: "Delete") { [store] in
+            try await store.deleteThread(conversation.id)
+        }
+    }
+
+    @objc private func leaveGroup(_ sender: NSMenuItem) {
+        guard let conversation = sender.representedObject as? Conversation else { return }
+        confirm("Leave \(conversation.name)?",
+                info: "You won't get messages from this group anymore.", button: "Leave") { [store] in
+            try await store.leaveThread(conversation.id)
+        }
+    }
+
+    /// Asks before a destructive action, then runs it and reports a failure.
+    private func confirm(_ message: String, info: String, button: String, action: @escaping () async throws -> Void) {
+        guard let window = view.window else { return }
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = info
+        alert.addButton(withTitle: button).hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            Task {
+                do {
+                    try await action()
+                } catch {
+                    let failure = NSAlert()
+                    failure.messageText = "\(button) failed"
+                    failure.informativeText = error.localizedDescription
+                    failure.beginSheetModal(for: window, completionHandler: nil)
+                }
+            }
+        }
+    }
+
     // MARK: - Search
 
     func controlTextDidChange(_ obj: Notification) {
@@ -232,6 +335,8 @@ final class ConversationCellView: NSTableCellView {
 
         snippetLabel.font = .systemFont(ofSize: 12)
         snippetLabel.textColor = .secondaryLabelColor
+        // Wrapping labels are selectable by default; clicks should select the row instead.
+        snippetLabel.isSelectable = false
         snippetLabel.maximumNumberOfLines = 2
         // Word wrap (a truncating mode would keep each paragraph on one line), "…" on line 2.
         snippetLabel.lineBreakMode = .byWordWrapping

@@ -204,6 +204,32 @@ final class ChatStore {
         Task { try? await core.call("threads.typing", Params(threadID: threadID, isTyping: isTyping)) }
     }
 
+    // MARK: - Chat list actions
+
+    private struct ToggleParams: Encodable { let threadID: String; let enabled: Bool }
+    private struct ThreadParams: Encodable { let threadID: String }
+
+    func setUnread(_ unread: Bool, threadID: String) {
+        Task { try? await core.call("threads.setUnread", ToggleParams(threadID: threadID, enabled: unread)) }
+    }
+
+    func setMuted(_ muted: Bool, threadID: String) {
+        Task { try? await core.call("threads.mute", ToggleParams(threadID: threadID, enabled: muted)) }
+    }
+
+    func deleteThread(_ threadID: String) async throws {
+        try await core.call("threads.delete", ThreadParams(threadID: threadID))
+    }
+
+    func leaveThread(_ threadID: String) async throws {
+        try await core.call("threads.leave", ThreadParams(threadID: threadID))
+    }
+
+    func block(userID: String) async throws {
+        struct Params: Encodable { let userID: String }
+        try await core.call("users.block", Params(userID: userID))
+    }
+
     /// Starts receiving the contact's online status for a 1:1 chat.
     func subscribePresence(_ threadID: String) {
         struct Params: Encodable { let threadID: String }

@@ -257,6 +257,7 @@ func (c *Core) handleReceipt(evt *events.Receipt) {
 
 func (c *Core) markThreadReadLocally(threadID string, ts int64) {
 	c.store.SetThreadLastRead(threadID, ts)
+	c.store.Delete("unread:" + threadID)
 	cs := newChangeSet()
 	cs.thread(threadID)
 	c.flush(cs)

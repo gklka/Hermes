@@ -83,6 +83,7 @@ type threadParams struct {
 	Emoji        string            `json:"emoji"`
 	Path         string            `json:"path"`
 	IsTyping     bool              `json:"isTyping"`
+	Enabled      bool              `json:"enabled"`
 	Before       int64             `json:"before"`
 	Limit        int               `json:"limit"`
 	Cookies      map[string]string `json:"cookies"`
@@ -175,6 +176,16 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return nil, c.markRead(ctx, p.ThreadID)
 	case "threads.typing":
 		return nil, c.sendTyping(ctx, p.ThreadID, p.IsTyping)
+	case "threads.setUnread":
+		return nil, c.setUnread(ctx, p.ThreadID, p.Enabled)
+	case "threads.mute":
+		return nil, c.muteThread(ctx, p.ThreadID, p.Enabled)
+	case "threads.delete":
+		return nil, c.deleteThread(ctx, p.ThreadID)
+	case "threads.leave":
+		return nil, c.leaveThread(ctx, p.ThreadID)
+	case "users.block":
+		return nil, c.blockUser(ctx, p.UserID)
 	case "threads.subscribePresence":
 		return nil, c.subscribePresence(ctx, p.ThreadID)
 	case "messages.list":
@@ -370,6 +381,112 @@ func (c *Core) sendTyping(ctx context.Context, threadID string, typing bool) err
 		task.IsTyping = 1
 	}
 	return cli.ExecuteStatelessTask(ctx, task)
+}
+
+// setUnread marks a thread unread (or clears that) on this Mac only; reading it clears it too.
+func (c *Core) setUnread(ctx context.Context, threadID string, unread bool) error {
+	if !unread {
+		return c.markRead(ctx, threadID)
+	}
+	c.store.Set("unread:"+threadID, "1")
+	cs := newChangeSet()
+	cs.thread(threadID)
+	c.flush(cs)
+	return nil
+}
+
+// fbTaskTarget is the Facebook thread key and sync group for thread tasks (encrypted chats
+// use their original Facebook thread key in sync group 95).
+func (c *Core) fbTaskTarget(t *threadRow) (int64, int64) {
+	if t.Type.IsWhatsApp() {
+		return c.fbThreadKey(t.ID), 95
+	}
+	return c.fbThreadKey(t.ID), 1
+}
+
+func (c *Core) muteThread(ctx context.Context, threadID string, muted bool) error {
+	t, err := c.thread(threadID)
+	if err != nil {
+		return err
+	}
+	cli := c.client()
+	if cli == nil {
+		return errNotConnected
+	}
+	until := int64(0)
+	if muted {
+		until = -1
+	}
+	key, syncGroup := c.fbTaskTarget(t)
+	if _, err := cli.ExecuteTasks(ctx, &socket.MuteThreadTask{ThreadKey: key, MuteExpireTimeMS: until, SyncGroup: syncGroup}); err != nil {
+		return err
+	}
+	c.store.SetThreadMute(threadID, until)
+	cs := newChangeSet()
+	cs.thread(threadID)
+	c.flush(cs)
+	return nil
+}
+
+func (c *Core) deleteThread(ctx context.Context, threadID string) error {
+	t, err := c.thread(threadID)
+	if err != nil {
+		return err
+	}
+	cli := c.client()
+	if cli == nil {
+		return errNotConnected
+	}
+	key, syncGroup := c.fbTaskTarget(t)
+	if _, err := cli.ExecuteTasks(ctx, &socket.DeleteThreadTask{ThreadKey: key, SyncGroup: syncGroup}); err != nil {
+		return err
+	}
+	c.store.DeleteThread(threadID)
+	emitEvent("threadRemoved", map[string]string{"threadID": threadID})
+	return nil
+}
+
+func (c *Core) leaveThread(ctx context.Context, threadID string) error {
+	t, err := c.thread(threadID)
+	if err != nil {
+		return err
+	}
+	cli := c.client()
+	if cli == nil {
+		return errNotConnected
+	}
+	self, err := strconv.ParseInt(c.selfID(), 10, 64)
+	if err != nil {
+		return err
+	}
+	key, _ := c.fbTaskTarget(t)
+	_, err = cli.ExecuteTasks(ctx, &socket.RemoveParticipantTask{ThreadID: key, ContactID: self})
+	return err
+}
+
+func (c *Core) blockUser(ctx context.Context, userID string) error {
+	cli := c.client()
+	if cli == nil {
+		return errNotConnected
+	}
+	id, err := strconv.ParseInt(userID, 10, 64)
+	if err != nil {
+		return err
+	}
+	resp, err := cli.ExecuteTasks(ctx, &socket.SetUserBlockStatusTask{
+		BlockeeID:       id,
+		RequestID:       strconv.FormatInt(time.Now().UnixNano(), 10),
+		UserBlockAction: 1,
+	})
+	if err != nil {
+		return err
+	}
+	for _, reset := range resp.LSResetUserBlockStatus {
+		if reset.ContactID == id && !reset.Success {
+			return errors.New("the server rejected the block")
+		}
+	}
+	return nil
 }
 
 // subscribePresence asks for a 1:1 contact's online status and last-seen time, which arrive

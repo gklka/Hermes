@@ -602,6 +602,17 @@ func (s *Store) Conversation(t *threadRow, selfID string) apiConversation {
 	// the E2EE cutover); count those as unread only once a message from someone else arrives.
 	known := t.LastRead > 0 || t.SnippetSenderID != ""
 	if known && t.LastActivity > t.LastRead && t.SnippetSenderID != selfID {
+		// Messenger also bumps the activity time without a message (e.g. for encrypted chats),
+		// so when the messages are known, only one from someone else after the last read counts.
+		var newest sql.NullInt64
+		_ = s.db.QueryRow(`SELECT MAX(timestamp) FROM messages WHERE thread_id=? AND sender_id!=? AND is_system=0`,
+			t.ID, selfID).Scan(&newest)
+		if !newest.Valid || newest.Int64 > t.LastRead {
+			conv.UnreadCount = 1
+		}
+	}
+	// Marked unread from the context menu.
+	if s.Get("unread:"+t.ID) == "1" {
 		conv.UnreadCount = 1
 	}
 	return conv
