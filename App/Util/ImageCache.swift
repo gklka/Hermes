@@ -15,9 +15,22 @@ final class ImageCache {
         cache.object(forKey: key as NSString)
     }
 
+    func cached(_ url: URL) -> NSImage? {
+        cached(Self.key(for: url))
+    }
+
+    /// Facebook's CDN links carry signing tokens in the query that change on every sync, so the
+    /// same picture gets a new link each time; it's cached by its path.
+    static func key(for url: URL) -> String {
+        guard let host = url.host(), host.contains("fbcdn") || host.contains("fbsbx"),
+              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url.absoluteString }
+        components.query = nil
+        return components.string ?? url.absoluteString
+    }
+
     /// Loads a remote (http/https) or local file URL.
     func image(for url: URL) async -> NSImage? {
-        await load(key: url.absoluteString) {
+        await load(key: Self.key(for: url)) {
             if url.isFileURL {
                 return NSImage(contentsOf: url)
             }

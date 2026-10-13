@@ -300,6 +300,14 @@ final class MessageCellView: NSTableCellView {
     private var badgeOutgoing = NSLayoutConstraint()
     private var textInsets: [NSLayoutConstraint] = []
 
+    /// What the attachment views currently show.
+    private struct AttachmentsKey: Equatable {
+        let messageID: String
+        let attachments: [Attachment]
+        let maxWidth: CGFloat
+    }
+    private var shownAttachments: AttachmentsKey?
+
     // The reply quote sits above the column, on the quoted message's sender's side.
     private let replyConnector = ReplyConnectorView()
     private var replyOnLeft = true
@@ -478,16 +486,20 @@ final class MessageCellView: NSTableCellView {
             avatar.configure(name: layout.senderName, url: layout.avatarURL)
         }
 
-        // Attachments
-        for view in attachmentsStack.arrangedSubviews {
-            view.removeFromSuperview()
-        }
+        // Attachments. Kept when unchanged: rebuilding them reloads their pictures, which blinks
+        // on every refresh (e.g. while syncing after login).
         // A web link gets Apple's rich preview, which replaces Messenger's own link card.
         let preview = message.isUnsent
             ? nil : LinkPreviews.source(text: message.text, attachments: message.attachments)
-        if !message.isUnsent {
-            for attachment in message.attachments where !(preview != nil && attachment.kind == .link) {
-                let view = AttachmentView(attachment: attachment, message: message, maxWidth: min(layout.maxWidth, 280))
+        let shown = message.isUnsent ? [] : message.attachments.filter { !(preview != nil && $0.kind == .link) }
+        let attachmentsKey = AttachmentsKey(messageID: message.id, attachments: shown, maxWidth: min(layout.maxWidth, 280))
+        if attachmentsKey != shownAttachments {
+            shownAttachments = attachmentsKey
+            for view in attachmentsStack.arrangedSubviews {
+                view.removeFromSuperview()
+            }
+            for attachment in shown {
+                let view = AttachmentView(attachment: attachment, message: message, maxWidth: attachmentsKey.maxWidth)
                 view.onOpen = { [weak self] in
                     guard let self, let message = self.message else { return }
                     self.delegate?.messageCell(self, open: attachment, of: message)
@@ -1143,6 +1155,10 @@ final class AttachmentView: NSView, NSDraggingSource {
             ])
             // Facebook gives video thumbnails; encrypted videos have none.
             if let preview = attachment.previewURL, let url = URL(string: preview) {
+                if let cached = ImageCache.shared.cached(url) {
+                    imageView.image = cached
+                    return
+                }
                 Task { [weak self] in
                     self?.imageView.image = await ImageCache.shared.image(for: url)
                 }

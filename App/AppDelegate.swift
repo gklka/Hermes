@@ -19,10 +19,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         store.start()
 
-        Notifier.shared.onOpenThread = { [weak self] threadID in
+        Notifier.shared.onOpenThread = { [weak self] threadID, messageID in
             guard let self, self.mainWindowController != nil else { return }
             self.showMain()
-            self.mainWindowController?.select(threadID: threadID)
+            self.mainWindowController?.select(threadID: threadID, revealing: messageID)
             NSApp.activate()
         }
         Notifier.shared.start()

@@ -41,7 +41,7 @@ final class LinkPreviews {
                 url: card.url,
                 title: card.title ?? site ?? "Link",
                 site: site,
-                image: card.imageURL.flatMap { ImageCache.shared.cached($0.absoluteString) },
+                image: card.imageURL.flatMap { ImageCache.shared.cached($0) },
                 imageSize: card.imageSize
             )
         }
@@ -54,7 +54,7 @@ final class LinkPreviews {
             guard cachedWeb(url) == nil else { return nil }
             return await fetch(url)
         case .card(let card):
-            guard let imageURL = card.imageURL, ImageCache.shared.cached(imageURL.absoluteString) == nil,
+            guard let imageURL = card.imageURL, ImageCache.shared.cached(imageURL) == nil,
                   await ImageCache.shared.image(for: imageURL) != nil else { return nil }
             return preview(for: source)
         }

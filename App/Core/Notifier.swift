@@ -13,8 +13,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     /// Set by the chat view: true while the given chat is on screen in the active window.
     var isThreadVisible: ((String) -> Bool)?
-    /// Called when a notification is clicked.
-    var onOpenThread: ((String) -> Void)?
+    /// Called when a notification is clicked, with its chat and message.
+    var onOpenThread: ((_ threadID: String, _ messageID: String?) -> Void)?
 
     private let center = UNUserNotificationCenter.current()
     private let store = ChatStore.shared
@@ -91,7 +91,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         content.body = body
         content.sound = .default
         content.threadIdentifier = message.threadID
-        content.userInfo = ["threadID": message.threadID]
+        content.userInfo = ["threadID": message.threadID, "messageID": message.id]
 
         let avatarURL = sender?.avatarURL ?? (isGroup ? nil : conversation?.avatarURL)
         let avatar = await Self.pngData(from: avatarURL)
@@ -219,7 +219,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        guard let threadID = response.notification.request.content.userInfo["threadID"] as? String else { return }
-        await MainActor.run { self.onOpenThread?(threadID) }
+        let userInfo = response.notification.request.content.userInfo
+        guard let threadID = userInfo["threadID"] as? String else { return }
+        let messageID = userInfo["messageID"] as? String
+        await MainActor.run { self.onOpenThread?(threadID, messageID) }
     }
 }

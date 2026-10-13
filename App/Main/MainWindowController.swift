@@ -126,8 +126,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
     }
 
     /// Opens a chat (e.g. from a notification).
-    func select(threadID: String) {
-        split.select(threadID: threadID)
+    /// Opens a chat; with `messageID`, scrolls to that message and selects it.
+    func select(threadID: String, revealing messageID: String? = nil) {
+        split.select(threadID: threadID, revealing: messageID)
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
@@ -308,11 +309,14 @@ final class MainSplitViewController: NSSplitViewController {
         }
     }
 
-    func select(threadID: String) {
+    func select(threadID: String, revealing messageID: String? = nil) {
         if let sidebar = splitViewItems.first, sidebar.isCollapsed {
             sidebar.animator().isCollapsed = false
         }
         list.select(threadID: threadID)
+        if let messageID {
+            chat.reveal(messageID: messageID)
+        }
     }
 
     func attachFiles() {

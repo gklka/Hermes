@@ -53,7 +53,7 @@ final class AvatarView: NSView {
         imageLayer.contents = nil
         initialsLabel.isHidden = false
         guard let url, let parsed = URL(string: url) else { return }
-        if let cached = ImageCache.shared.cached(parsed.absoluteString) {
+        if let cached = ImageCache.shared.cached(parsed) {
             show(cached)
             return
         }

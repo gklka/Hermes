@@ -105,10 +105,18 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
                 case .typing(let id) where id == threadID:
                     self.reload()
                 case .conversations:
-                    // Participant names / read markers may have changed.
+                    // Participant names / read markers or the theme may have changed. Other
+                    // updates (snippet, activity time, unread) happen constantly while syncing
+                    // and don't change the chat, so they don't reload it.
                     let conversation = self.store.conversation(threadID)
-                    if conversation != self.lastConversation {
-                        self.lastConversation = conversation
+                    let old = self.lastConversation
+                    self.lastConversation = conversation
+                    let changed = conversation?.participants != old?.participants
+                        || conversation?.isGroup != old?.isGroup
+                        || conversation?.isEncrypted != old?.isEncrypted
+                        || conversation?.bubbleColors != old?.bubbleColors
+                        || conversation?.quickEmoji != old?.quickEmoji
+                    if changed {
                         self.updateComposeTheme()
                         self.reload()
                     }
@@ -201,6 +209,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         }
         self.threadID = threadID
         selectMessage(nil)
+        pendingReveal = nil
         lastConversation = threadID.flatMap { store.conversation($0) }
         updateComposeTheme()
         replyTarget = nil
@@ -397,7 +406,26 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         } else if forceBottom || wasAtBottom {
             scrollToBottom()
         }
+        revealPendingMessage()
         alignGradients()
+    }
+
+    /// A message to scroll to and select once it's loaded (from a clicked notification).
+    private var pendingReveal: String?
+
+    func reveal(messageID: String) {
+        pendingReveal = messageID
+        revealPendingMessage()
+    }
+
+    private func revealPendingMessage() {
+        guard let id = pendingReveal, let row = rows.firstIndex(where: {
+            if case .message(let message, _) = $0 { return message.id == id }
+            return false
+        }) else { return }
+        pendingReveal = nil
+        tableView.scrollRowToVisible(row)
+        selectMessage(id)
     }
 
     /// Gradient themes span the visible chat, so visible bubbles are realigned as it scrolls.
