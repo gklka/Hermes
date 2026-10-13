@@ -585,7 +585,10 @@ func (s *Store) Conversation(t *threadRow, selfID string) apiConversation {
 	if conv.AvatarURL == "" && !conv.IsGroup && len(others) > 0 {
 		conv.AvatarURL = others[0].AvatarURL
 	}
-	if t.LastActivity > t.LastRead && t.SnippetSenderID != selfID {
+	// No read watermark (LastRead 0) happens for encrypted chats Messenger only lists (e.g. after
+	// the E2EE cutover); count those as unread only once a message from someone else arrives.
+	known := t.LastRead > 0 || t.SnippetSenderID != ""
+	if known && t.LastActivity > t.LastRead && t.SnippetSenderID != selfID {
 		conv.UnreadCount = 1
 	}
 	return conv
