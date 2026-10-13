@@ -380,6 +380,14 @@ final class ComposeView: NSView, NSTextViewDelegate {
             addFiles(urls)
             return true
         }
+        // Raw image data, unless the copied thing is primarily text (some apps add a picture of it).
+        let imageTypes = OutgoingMedia.imagePasteboardTypes
+        let candidates = imageTypes + [.string, .rtf, .html]
+        let isImage = pasteboard.types?.first(where: candidates.contains).map(imageTypes.contains) ?? false
+        // An encoded photo comes first: Continuity Camera also offers a file promise that's never kept.
+        if isImage, addImage(from: pasteboard, types: [.png, .jpeg, .heic]) {
+            return true
+        }
         if let promises = pasteboard.readObjects(forClasses: [NSFilePromiseReceiver.self]) as? [NSFilePromiseReceiver],
            !promises.isEmpty {
             for promise in promises {
@@ -390,13 +398,11 @@ final class ComposeView: NSView, NSTextViewDelegate {
             }
             return true
         }
-        // Raw image data, unless the copied thing is primarily text (some apps add a picture of it).
-        let imageTypes = OutgoingMedia.imagePasteboardTypes
-        let candidates = imageTypes + [.string, .rtf, .html]
-        guard let first = pasteboard.types?.first(where: candidates.contains), imageTypes.contains(first) else {
-            return false
-        }
-        for type in imageTypes {
+        return isImage && addImage(from: pasteboard, types: [.tiff])
+    }
+
+    private func addImage(from pasteboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        for type in types {
             if let data = pasteboard.data(forType: type), let url = OutgoingMedia.save(imageData: data, type: type) {
                 addFiles([url])
                 return true
@@ -551,6 +557,13 @@ final class ComposeView: NSView, NSTextViewDelegate {
         layoutManager.ensureLayout(for: container)
         let used = layoutManager.usedRect(for: container).height + textView.textContainerInset.height * 2
         textHeight.constant = min(Self.maxTextHeight, max(Self.minTextHeight, ceil(used)))
+        if textView.string.isEmpty {
+            // After a tall picture is sent, the field shrinks but would stay scrolled down,
+            // leaving the cursor below the placeholder.
+            textView.sizeToFit()
+            scrollView.contentView.scroll(to: .zero)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
     }
 
     /// Typing a space or newline after an emoticon (":)") turns it into its emoji; Undo brings it back.
