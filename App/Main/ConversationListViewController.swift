@@ -301,12 +301,44 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         return cell
     }
 
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        ConversationRowView()
+    }
+
     func tableViewSelectionDidChange(_ notification: Notification) {
         let row = tableView.selectedRow
         let id = row >= 0 && row < rows.count ? rows[row].id : nil
         guard id != selectedID else { return }
         selectedID = id
         onSelect?(id)
+    }
+}
+
+/// Keeps the selected chat in the accent color (like Messages) even while focus is in the
+/// compose field, instead of turning gray.
+final class ConversationRowView: NSTableRowView {
+    private var observers: [NSObjectProtocol] = []
+
+    /// The table sets this as focus moves; follow the window's key state instead.
+    override var isEmphasized: Bool {
+        get { super.isEmphasized }
+        set { super.isEmphasized = window?.isKeyWindow ?? true }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers = []
+        guard let window else { return }
+        super.isEmphasized = window.isKeyWindow
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let window = self.window else { return }
+                    self.isEmphasized = window.isKeyWindow
+                }
+            })
+        }
     }
 }
 
