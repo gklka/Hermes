@@ -6,13 +6,19 @@ import UniformTypeIdentifiers
 final class ChatViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, MessageCellDelegate, ComposeViewDelegate {
     private(set) var threadID: String?
 
-    private enum Row {
+    private enum Row: Hashable {
         case separator(String)
         case caption(String, CaptionCellView.Placement, NSColor)
         case restore
         case message(ChatMessage, MessageCellView.Layout)
         case typing
     }
+
+    /// Measured row heights, for the current bubble width.
+    private var rowHeights: [Row: CGFloat] = [:]
+    private var rowHeightsWidth: CGFloat = 0
+    /// Cells used only for measuring rows.
+    private var sizingCells: [String: NSView] = [:]
 
     private let store = ChatStore.shared
     private let scrollView = NSScrollView()
@@ -50,7 +56,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         let column = NSTableColumn(identifier: .init("message"))
         tableView.addTableColumn(column)
         tableView.headerView = nil
-        tableView.usesAutomaticRowHeights = true
+        tableView.usesAutomaticRowHeights = false
         tableView.selectionHighlightStyle = .none
         tableView.intercellSpacing = .zero
         tableView.backgroundColor = .clear
@@ -327,10 +333,14 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         let offset: CGFloat
     }
 
-    private func scrollAnchor() -> ScrollAnchor? {
+    /// With `changedRow`, the first message below that row (so a row growing at the top of the
+    /// screen pushes what's above it up, instead of what's below it down).
+    private func scrollAnchor(below changedRow: Int? = nil) -> ScrollAnchor? {
         let visible = scrollView.contentView.bounds
         let range = tableView.rows(in: visible)
-        for row in range.lowerBound..<range.upperBound where rows.indices.contains(row) {
+        let start = max(range.lowerBound, changedRow.map { $0 + 1 } ?? 0)
+        guard start < range.upperBound else { return nil }
+        for row in start..<range.upperBound where rows.indices.contains(row) {
             if case .message(let message, _) = rows[row] {
                 return ScrollAnchor(messageID: message.id, offset: tableView.rect(ofRow: row).minY - visible.minY)
             }
@@ -354,18 +364,18 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         let wasAtBottom = isScrolledToBottom
         let anchor = forceBottom || wasAtBottom ? nil : scrollAnchor()
 
+        // Heights depend on the bubble width; old messages' heights are kept (also across chats).
+        if rowHeightsWidth != bubbleMaxWidth || rowHeights.count > 20_000 {
+            rowHeights.removeAll()
+            rowHeightsWidth = bubbleMaxWidth
+        }
         rows = buildRows()
         tableView.reloadData()
         tableView.layoutSubtreeIfNeeded()
 
         if let anchor {
-            // Keep the same messages on screen (e.g. when older ones are added above). Rows are
-            // measured lazily, so the positions above settle after the next layout; anchor again then.
+            // Keep the same messages on screen (e.g. when older ones are added above).
             restore(anchor)
-            DispatchQueue.main.async { [weak self] in
-                self?.tableView.layoutSubtreeIfNeeded()
-                self?.restore(anchor)
-            }
         } else if forceBottom || wasAtBottom {
             scrollToBottom()
         }
@@ -407,30 +417,54 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        switch rows[row] {
+        cell(for: rows[row], sizing: false)
+    }
+
+    /// Every row is measured up front (and cached), so the chat's height is exact and scrolling
+    /// back doesn't jump as rows get measured (as with automatic row heights).
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        if let height = rowHeights[rows[row]] { return height }
+        let cell = cell(for: rows[row], sizing: true)
+        let width = cell.widthAnchor.constraint(equalToConstant: max(tableView.bounds.width, scrollView.contentSize.width))
+        width.isActive = true
+        let height = max(1, cell.fittingSize.height.rounded(.up))
+        width.isActive = false
+        rowHeights[rows[row]] = height
+        return height
+    }
+
+    /// A configured cell for the row: reused from the table, or for measuring, one kept for that.
+    private func cell(for row: Row, sizing: Bool) -> NSView {
+        switch row {
         case .separator(let text):
-            let cell = reuse("Caption", CaptionCellView.init)
+            let cell = reuse("Caption", sizing: sizing, CaptionCellView.init)
             cell.configure(text, maxWidth: bubbleMaxWidth)
             return cell
         case .caption(let text, let placement, let color):
-            let cell = reuse("Caption", CaptionCellView.init)
+            let cell = reuse("Caption", sizing: sizing, CaptionCellView.init)
             cell.configure(text, placement: placement, color: color, maxWidth: bubbleMaxWidth)
             return cell
         case .restore:
-            let cell = reuse("Restore", RestoreCellView.init)
+            let cell = reuse("Restore", sizing: sizing, RestoreCellView.init)
             cell.configure(maxWidth: bubbleMaxWidth)
             return cell
         case .message(let message, let layout):
-            let cell = reuse("Message", MessageCellView.init)
+            let cell = reuse("Message", sizing: sizing, MessageCellView.init)
             cell.delegate = self
             cell.configure(message, layout: layout, store: store)
             return cell
         case .typing:
-            return reuse("Typing", TypingCellView.init)
+            return reuse("Typing", sizing: sizing, TypingCellView.init)
         }
     }
 
-    private func reuse<T: NSView>(_ identifier: String, _ make: () -> T) -> T {
+    private func reuse<T: NSView>(_ identifier: String, sizing: Bool, _ make: () -> T) -> T {
+        if sizing {
+            if let cell = sizingCells[identifier] as? T { return cell }
+            let cell = make()
+            sizingCells[identifier] = cell
+            return cell
+        }
         let id = NSUserInterfaceItemIdentifier(identifier)
         if let view = tableView.makeView(withIdentifier: id, owner: self) as? T {
             return view
@@ -490,6 +524,33 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             self?.toggleReaction(emoji, on: message)
         }
         popover.show(relativeTo: bubble.bounds, of: bubble, preferredEdge: .maxY)
+    }
+
+    func messageCellDidLoadLinkPreview(messageID: String) {
+        let isThisMessage = { (row: Row) -> Bool in
+            if case .message(let message, _) = row { return message.id == messageID }
+            return false
+        }
+        guard let row = rows.firstIndex(where: isThisMessage) else {
+            // Measured in another chat (heights are kept across chats).
+            rowHeights = rowHeights.filter { !isThisMessage($0.key) }
+            return
+        }
+        let oldHeight = rowHeights.removeValue(forKey: rows[row])
+        guard tableView(tableView, heightOfRow: row) != oldHeight else { return }
+        let wasAtBottom = isScrolledToBottom
+        // Rows below the screen don't move what's shown.
+        let anchor = wasAtBottom ? nil : scrollAnchor(below: row)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
+        }
+        tableView.layoutSubtreeIfNeeded()
+        if let anchor {
+            restore(anchor)
+        } else if wasAtBottom {
+            scrollToBottom()
+        }
     }
 
     func messageCell(_ cell: MessageCellView, open attachment: Attachment, of message: ChatMessage) {

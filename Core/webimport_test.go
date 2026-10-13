@@ -43,6 +43,19 @@ func TestUnrestoredPlaceholder(t *testing.T) {
 	}
 }
 
+func TestWithoutEmoji(t *testing.T) {
+	// The same message read before (no emoji) and after emoji were collected.
+	if withoutEmoji("Lusta felkelni ") != withoutEmoji("Lusta felkelni 😆") {
+		t.Errorf("texts differing only by emoji should match")
+	}
+	if withoutEmoji("👍🏽") != "" || withoutEmoji("❤️") != "" {
+		t.Errorf("emoji with modifiers should be dropped")
+	}
+	if withoutEmoji("ok") == withoutEmoji("okay") {
+		t.Errorf("different texts should differ")
+	}
+}
+
 func TestAvatarKey(t *testing.T) {
 	url := "https://scontent-vie1-1.xx.fbcdn.net/v/t39.30808-1/805854260_28617347014528600_4651105664370678377_n.jpg?stp=cp6"
 	if got := avatarKey(url); got != "805854260_28617347014528600_4651105664370678377" {

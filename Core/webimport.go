@@ -3,12 +3,14 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"go.mau.fi/mautrix-meta/pkg/messagix/table"
 )
@@ -159,7 +161,81 @@ type webMessage struct {
 	DOMID  string     `json:"domID"`
 	FromMe bool       `json:"fromMe"`
 	Text   string     `json:"text"`
-	Images []webImage `json:"images"`
+	Images    []webImage    `json:"images"`
+	Links     []webLink     `json:"links"`
+	Reactions []webReaction `json:"reactions"`
+}
+
+// webReaction is a reaction pill: its emoji and how many reacted (the page doesn't say who).
+type webReaction struct {
+	Emojis []string `json:"emojis"`
+	Count  int      `json:"count"`
+}
+
+// importWebReactions stores the reactions shown on a message in a 1:1 chat. The page doesn't
+// say who reacted, so a single reaction is taken to be the other person's on your messages and
+// yours on theirs; a second emoji (or a count of two) is the other one of you.
+func (c *Core) importWebReactions(messageID, threadID string, fromMe bool, reactions []webReaction) bool {
+	self := c.selfID()
+	first, second := self, threadID
+	if fromMe {
+		first, second = threadID, self
+	}
+	changed := false
+	set := func(actor, emoji string) {
+		c.store.SetReaction(messageID, actor, emoji)
+		changed = true
+	}
+	for _, r := range reactions {
+		switch {
+		case len(r.Emojis) >= 2:
+			set(first, r.Emojis[0])
+			set(second, r.Emojis[1])
+		case len(r.Emojis) == 1:
+			set(first, r.Emojis[0])
+			if r.Count >= 2 {
+				set(second, r.Emojis[0])
+			}
+		}
+	}
+	return changed
+}
+
+// withoutEmoji drops emoji (and joiners/variation selectors) and spacing, to compare a message's
+// text read before emoji were collected with the same text read with them.
+func withoutEmoji(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if unicode.Is(unicode.So, r) || unicode.Is(unicode.Sk, r) || unicode.IsSpace(r) ||
+			r == 0x200D || (r >= 0xFE00 && r <= 0xFE0F) || (r >= 0x1F3FB && r <= 0x1F3FF) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// webLink is a shared link's card as the web app shows it (link, title, picture).
+type webLink struct {
+	URL         string    `json:"url"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	Image       *webImage `json:"image"`
+}
+
+// importedBeforeLinks reports whether a stored message came from an earlier web import that
+// didn't collect links (only web attachments, no link among them), so a newer import with the
+// link may replace it.
+func importedBeforeLinks(m *messageRow) bool {
+	if len(m.Attachments) == 0 {
+		return false
+	}
+	for _, a := range m.Attachments {
+		if !strings.HasPrefix(a.ID, "web") || a.Kind == kindLink {
+			return false
+		}
+	}
+	return true
 }
 
 // webMessageID splits the web app's message element ID into the real end-to-end message ID and
@@ -212,7 +288,17 @@ func (c *Core) importWebMessages(threadID string, messages []webMessage) map[str
 			unrestored++
 			continue
 		}
-		if existing := c.store.GetMessage(id); existing != nil && !isUnrestoredPlaceholder(existing.Text) {
+		if c.importWebReactions(id, threadID, wm.FromMe, wm.Reactions) {
+			cs.message(id)
+		}
+		if existing := c.store.GetMessage(id); existing != nil && !isUnrestoredPlaceholder(existing.Text) &&
+			!(len(wm.Links) > 0 && importedBeforeLinks(existing)) {
+			// Text read before emoji were collected gets its emoji.
+			if wm.Text != "" && existing.Text != wm.Text && withoutEmoji(existing.Text) == withoutEmoji(wm.Text) {
+				existing.Text = wm.Text
+				c.store.PutMessage(existing)
+				cs.message(id)
+			}
 			continue
 		}
 		sender := threadID
@@ -241,6 +327,22 @@ func (c *Core) importWebMessages(threadID string, messages []webMessage) map[str
 			row.Attachments = append(row.Attachments, storedAttachment{apiAttachment: apiAttachment{
 				ID: fmt.Sprintf("web%d", i), Kind: kind, LocalPath: path, Width: img.Width, Height: img.Height, MimeType: img.MimeType,
 			}})
+		}
+		for i, link := range wm.Links {
+			if link.URL == "" {
+				continue
+			}
+			att := apiAttachment{ID: fmt.Sprintf("weblink%d", i), Kind: kindLink, URL: link.URL, Title: firstNonEmpty(link.Title, link.Description)}
+			if link.Image != nil {
+				// Numbered after the photos so the files don't collide.
+				if path, err := c.saveWebImage(id, 100+i, *link.Image); err == nil {
+					att.PreviewURL = (&url.URL{Scheme: "file", Path: path}).String()
+					att.Width, att.Height = link.Image.Width, link.Image.Height
+				} else {
+					c.log.Warn().Err(err).Str("message_id", id).Msg("Failed to save a link's picture")
+				}
+			}
+			row.Attachments = append(row.Attachments, storedAttachment{apiAttachment: att})
 		}
 		if row.Text == "" && len(row.Attachments) == 0 {
 			continue

@@ -215,11 +215,13 @@ protocol MessageCellDelegate: AnyObject {
     func messageCell(_ cell: MessageCellView, menuFor message: ChatMessage) -> NSMenu?
     func messageCellDidDoubleClick(_ cell: MessageCellView, message: ChatMessage, bubble: NSView)
     func messageCell(_ cell: MessageCellView, open attachment: Attachment, of message: ChatMessage)
+    /// A message's link preview finished loading; its row's height may change.
+    func messageCellDidLoadLinkPreview(messageID: String)
 }
 
 /// One message: optional sender name, reply quote, attachments, text bubble and tapbacks.
 final class MessageCellView: NSTableCellView {
-    struct Layout {
+    struct Layout: Hashable {
         var showSenderName = false
         var senderName = ""
         var showAvatar = false
@@ -243,6 +245,8 @@ final class MessageCellView: NSTableCellView {
     private let reactionsBadge = ReactionsBadge()
     private let avatar = AvatarView()
     private let failedIcon = DisplayImageView()
+    /// The preview of a link in the message.
+    private let linkCard = LinkCardView()
 
     // Placeholders; the real constraints are created in init once the views exist.
     private var topConstraint = NSLayoutConstraint()
@@ -282,6 +286,8 @@ final class MessageCellView: NSTableCellView {
         column.addArrangedSubview(replyView)
         column.addArrangedSubview(attachmentsStack)
         column.addArrangedSubview(bubble)
+        column.addArrangedSubview(linkCard)
+        linkCard.isHidden = true
 
         failedIcon.image = NSImage(systemSymbolName: "exclamationmark.circle.fill", accessibilityDescription: "Not delivered")
         failedIcon.contentTintColor = .systemRed
@@ -327,6 +333,26 @@ final class MessageCellView: NSTableCellView {
         bubble.alignGradient(to: bubble.convert(clipView.bounds, from: clipView))
     }
 
+    /// Shows what's known of the link's preview right away and loads the rest (the delegate
+    /// re-measures the row then; this also happens for the controller's sizing cell).
+    private func configureLinkPreview(_ source: LinkPreviews.Source?, message: ChatMessage, maxWidth: CGFloat) {
+        guard let source else {
+            linkCard.isHidden = true
+            return
+        }
+        linkCard.isHidden = false
+        let width = min(maxWidth, 300)
+        linkCard.configure(LinkPreviews.shared.preview(for: source), width: width)
+        let messageID = message.id
+        Task { [weak self] in
+            guard let loaded = await LinkPreviews.shared.load(source), let self else { return }
+            if self.message?.id == messageID {
+                self.linkCard.configure(loaded, width: width)
+            }
+            self.delegate?.messageCellDidLoadLinkPreview(messageID: messageID)
+        }
+    }
+
     /// The view showing one of this message's attachments (for Quick Look's zoom).
     func attachmentView(for attachmentID: String) -> AttachmentView? {
         attachmentsStack.arrangedSubviews.lazy.compactMap { $0 as? AttachmentView }.first { $0.attachmentID == attachmentID }
@@ -365,8 +391,11 @@ final class MessageCellView: NSTableCellView {
         for view in attachmentsStack.arrangedSubviews {
             view.removeFromSuperview()
         }
+        // A web link gets Apple's rich preview, which replaces Messenger's own link card.
+        let preview = message.isUnsent
+            ? nil : LinkPreviews.source(text: message.text, attachments: message.attachments)
         if !message.isUnsent {
-            for attachment in message.attachments {
+            for attachment in message.attachments where !(preview != nil && attachment.kind == .link) {
                 let view = AttachmentView(attachment: attachment, message: message, maxWidth: min(layout.maxWidth, 280))
                 view.onOpen = { [weak self] in
                     guard let self, let message = self.message else { return }
@@ -381,7 +410,9 @@ final class MessageCellView: NSTableCellView {
         // Text bubble
         let text = message.isUnsent ? (outgoing ? "You unsent a message" : "Message unsent") : message.text
         let jumbo = !message.isUnsent && text.isJumboEmoji && message.replyTo == nil
-        bubble.isHidden = text.isEmpty
+        // A message that's only the link shows just the preview.
+        bubble.isHidden = text.isEmpty || (preview != nil && LinkPreviews.isOnlyLink(text))
+        configureLinkPreview(preview, message: message, maxWidth: layout.maxWidth)
         let themed = outgoing && !jumbo && !message.isUnsent
         bubble.color = jumbo || message.isUnsent ? .clear : (outgoing ? layout.outgoingColors.first ?? BubbleColors.outgoing : BubbleColors.incoming)
         bubble.gradientColors = themed && layout.outgoingColors.count > 1 ? layout.outgoingColors : nil
@@ -597,6 +628,86 @@ final class ReactionsBadge: NSView {
         background.color = highlighted ? BubbleColors.outgoing : BubbleColors.incoming
         background.layer?.borderColor = NSColor.windowBackgroundColor.cgColor
         label.textColor = highlighted ? .white : .labelColor
+    }
+}
+
+/// A link's preview: its picture, title and site, like Messages' link previews. Clicking opens
+/// the link.
+final class LinkCardView: NSView {
+    private var url: URL?
+    private let picture = NSView()
+    private let titleLabel = NSTextField(wrappingLabelWithString: "")
+    private let siteLabel = NSTextField(labelWithString: "")
+    private var widthConstraint = NSLayoutConstraint()
+    private var pictureHeight = NSLayoutConstraint()
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 16
+        layer?.masksToBounds = true
+
+        picture.wantsLayer = true
+        picture.layer?.contentsGravity = .resizeAspectFill
+        picture.layer?.masksToBounds = true
+
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.maximumNumberOfLines = 3
+        titleLabel.lineBreakMode = .byTruncatingTail
+        siteLabel.font = .systemFont(ofSize: 11)
+        siteLabel.textColor = .secondaryLabelColor
+        siteLabel.lineBreakMode = .byTruncatingTail
+
+        for view in [picture, titleLabel, siteLabel] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        widthConstraint = widthAnchor.constraint(equalToConstant: 300)
+        pictureHeight = picture.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate([
+            widthConstraint, pictureHeight,
+            titleLabel.topAnchor.constraint(equalTo: picture.bottomAnchor, constant: 8),
+            picture.topAnchor.constraint(equalTo: topAnchor),
+            picture.leadingAnchor.constraint(equalTo: leadingAnchor),
+            picture.trailingAnchor.constraint(equalTo: trailingAnchor),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            siteLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            siteLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            siteLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
+            siteLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9),
+        ])
+
+        addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(clicked)))
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(_ preview: LinkPreviews.Preview, width: CGFloat) {
+        url = preview.url
+        widthConstraint.constant = width
+        titleLabel.preferredMaxLayoutWidth = width - 24
+        titleLabel.stringValue = preview.title
+        siteLabel.stringValue = preview.site ?? ""
+        siteLabel.isHidden = preview.site == nil
+        picture.layer?.contents = preview.image
+        // Tall pictures are cropped, as on the web.
+        if let size = preview.imageSize ?? preview.image?.size, size.width > 0, size.height > 0 {
+            pictureHeight.constant = (width * min(size.height / size.width, 1.4)).rounded()
+        } else {
+            pictureHeight.constant = 0
+        }
+    }
+
+    override func updateLayer() {
+        layer?.backgroundColor = BubbleColors.incoming.cgColor
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+
+    @objc private func clicked() {
+        if let url { NSWorkspace.shared.open(url) }
     }
 }
 
