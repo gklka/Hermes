@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CoreSpotlight
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = ChatStore.shared
@@ -28,6 +29,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Notifier.shared.start()
     }
 
+    /// A chat chosen in Spotlight before the chats were loaded.
+    private var spotlightThreadID: String?
+
+    /// A chat chosen in Spotlight (see SpotlightIndex).
+    func application(_ application: NSApplication, continue userActivity: NSUserActivity,
+                     restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
+        guard userActivity.activityType == CSSearchableItemActionType,
+              let threadID = userActivity.userInfo?[CSSearchableItemActivityIdentifier] as? String else { return false }
+        if didLoadConversations, let mainWindowController {
+            showMain()
+            mainWindowController.select(threadID: threadID)
+            NSApp.activate()
+        } else {
+            spotlightThreadID = threadID
+        }
+        return true
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag { mainWindowController?.showWindow(nil) }
         return true
@@ -37,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch store.connectionState {
         case .loggedOut:
             didLoadConversations = false
+            SpotlightIndex.shared.clear()
             mainWindowController?.close()
             mainWindowController = nil
             showLogin()
@@ -46,8 +66,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showMain()
             if !didLoadConversations {
                 didLoadConversations = true
-                Task { await store.loadConversations() }
+                Task {
+                    await store.loadConversations()
+                    // Launched by choosing a chat in Spotlight.
+                    if let threadID = spotlightThreadID {
+                        spotlightThreadID = nil
+                        mainWindowController?.select(threadID: threadID)
+                    }
+                }
                 WebChatImporter.shared.start()
+                SpotlightIndex.shared.start()
             }
         }
     }
