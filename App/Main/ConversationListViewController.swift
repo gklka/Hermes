@@ -192,7 +192,7 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
 }
 
 final class ConversationCellView: NSTableCellView {
-    private let avatar = AvatarView()
+    private let avatar = ConversationAvatarView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let dateLabel = NSTextField(labelWithString: "")
     private let snippetLabel = NSTextField(wrappingLabelWithString: "")
@@ -268,7 +268,7 @@ final class ConversationCellView: NSTableCellView {
     func configure(_ conversation: Conversation, isTyping: Bool, selfID: String?) {
         nameLabel.stringValue = conversation.name
         dateLabel.stringValue = Formatters.listTimestamp(conversation.lastActivityDate)
-        avatar.configure(name: conversation.name, url: conversation.avatarURL)
+        avatar.configure(conversation, selfID: selfID)
         unreadDot.isHidden = conversation.unreadCount == 0
         mutedIcon.isHidden = !conversation.isMuted
 
