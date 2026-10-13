@@ -124,8 +124,11 @@ final class ComposeView: NSView, NSTextViewDelegate {
 
     let textView = ComposeTextView(usingTextLayoutManager: false)
     private let scrollView = NSScrollView()
+    /// The field and the button are Liquid Glass, like in Messages; messages scroll under them.
+    private let fieldGlass = NSGlassEffectView()
     private let field = NSView()
     private let placeholder = NSTextField(labelWithString: "Message")
+    private let buttonGlass = NSGlassEffectView()
     private let actionButton = NSButton()
     /// The chat's custom quick reaction emoji; nil for the default like (👍).
     private var quickEmoji: String?
@@ -135,7 +138,7 @@ final class ComposeView: NSView, NSTextViewDelegate {
     private var textHeight = NSLayoutConstraint()
     private var bannerCollapsed = NSLayoutConstraint()
 
-    private static let minTextHeight: CGFloat = 30
+    private static let minTextHeight: CGFloat = 34
     private static let maxTextHeight: CGFloat = 220
     private static let textAttributes: [NSAttributedString.Key: Any] = [
         .font: NSFont.systemFont(ofSize: 14),
@@ -159,7 +162,7 @@ final class ComposeView: NSView, NSTextViewDelegate {
         textView.font = .systemFont(ofSize: 14)
         textView.typingAttributes = Self.textAttributes
         textView.drawsBackground = false
-        textView.textContainerInset = NSSize(width: 6, height: 7)
+        textView.textContainerInset = NSSize(width: 6, height: 9)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
@@ -176,10 +179,10 @@ final class ComposeView: NSView, NSTextViewDelegate {
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
 
-        field.wantsLayer = true
-        field.layer?.cornerRadius = 15
-        field.layer?.cornerCurve = .continuous
-        field.layer?.borderWidth = 1
+        fieldGlass.cornerRadius = Self.minTextHeight / 2
+        fieldGlass.contentView = field
+        buttonGlass.cornerRadius = Self.minTextHeight / 2
+        buttonGlass.contentView = actionButton
 
         placeholder.textColor = .placeholderTextColor
         placeholder.font = .systemFont(ofSize: 14)
@@ -204,10 +207,12 @@ final class ComposeView: NSView, NSTextViewDelegate {
         }
         replyBanner.isHidden = true
 
-        for view in [replyBanner, field, actionButton] as [NSView] {
+        for view in [replyBanner, fieldGlass, buttonGlass] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
+        field.translatesAutoresizingMaskIntoConstraints = false
+        actionButton.translatesAutoresizingMaskIntoConstraints = false
         for view in [scrollView, placeholder] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             field.addSubview(view)
@@ -226,15 +231,23 @@ final class ComposeView: NSView, NSTextViewDelegate {
             closeReply.trailingAnchor.constraint(equalTo: replyBanner.trailingAnchor),
             closeReply.centerYAnchor.constraint(equalTo: replyBanner.centerYAnchor),
 
-            field.topAnchor.constraint(equalTo: replyBanner.bottomAnchor, constant: 8),
-            field.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
-            field.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            field.trailingAnchor.constraint(equalTo: actionButton.leadingAnchor, constant: -8),
+            fieldGlass.topAnchor.constraint(equalTo: replyBanner.bottomAnchor, constant: 8),
+            fieldGlass.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+            fieldGlass.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            fieldGlass.trailingAnchor.constraint(equalTo: buttonGlass.leadingAnchor, constant: -8),
+            field.topAnchor.constraint(equalTo: fieldGlass.topAnchor),
+            field.bottomAnchor.constraint(equalTo: fieldGlass.bottomAnchor),
+            field.leadingAnchor.constraint(equalTo: fieldGlass.leadingAnchor),
+            field.trailingAnchor.constraint(equalTo: fieldGlass.trailingAnchor),
 
-            actionButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            actionButton.centerYAnchor.constraint(equalTo: field.bottomAnchor, constant: -Self.minTextHeight / 2),
-            actionButton.widthAnchor.constraint(equalToConstant: 28),
-            actionButton.heightAnchor.constraint(equalToConstant: 28),
+            buttonGlass.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
+            buttonGlass.bottomAnchor.constraint(equalTo: fieldGlass.bottomAnchor),
+            buttonGlass.widthAnchor.constraint(equalToConstant: Self.minTextHeight),
+            buttonGlass.heightAnchor.constraint(equalToConstant: Self.minTextHeight),
+            actionButton.topAnchor.constraint(equalTo: buttonGlass.topAnchor),
+            actionButton.bottomAnchor.constraint(equalTo: buttonGlass.bottomAnchor),
+            actionButton.leadingAnchor.constraint(equalTo: buttonGlass.leadingAnchor),
+            actionButton.trailingAnchor.constraint(equalTo: buttonGlass.trailingAnchor),
 
             scrollView.leadingAnchor.constraint(equalTo: field.leadingAnchor, constant: 4),
             scrollView.trailingAnchor.constraint(equalTo: field.trailingAnchor, constant: -4),
@@ -260,18 +273,6 @@ final class ComposeView: NSView, NSTextViewDelegate {
         button.action = action
         button.toolTip = label
     }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        needsDisplay = true
-    }
-
-    override func updateLayer() {
-        field.layer?.borderColor = NSColor.separatorColor.cgColor
-        field.layer?.backgroundColor = NSColor.textBackgroundColor.withAlphaComponent(0.6).cgColor
-    }
-
-    override var wantsUpdateLayer: Bool { true }
 
     // MARK: - API
 

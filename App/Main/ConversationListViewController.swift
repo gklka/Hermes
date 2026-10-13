@@ -45,13 +45,32 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
     private var cancellables: Set<AnyCancellable> = []
     private var isLoadingMore = false
 
-    override func loadView() {
-        view = NSView()
-
+    /// The search field, shown above the sidebar's list (which scrolls under it, like Messages).
+    lazy var searchAccessory: NSSplitViewItemAccessoryViewController = {
         searchField.placeholderString = "Search"
         searchField.delegate = self
         searchField.sendsSearchStringImmediately = true
+        searchField.controlSize = .large
         searchField.translatesAutoresizingMaskIntoConstraints = false
+        let container = NSView()
+        container.addSubview(searchField)
+        NSLayoutConstraint.activate([
+            searchField.topAnchor.constraint(equalTo: container.topAnchor, constant: 4),
+            searchField.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8),
+            searchField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
+            searchField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+        ])
+        let accessory = NSSplitViewItemAccessoryViewController()
+        accessory.view = container
+        accessory.automaticallyAppliesContentInsets = false
+        if #available(macOS 26.1, *) {
+            accessory.preferredScrollEdgeEffectStyle = .soft
+        }
+        return accessory
+    }()
+
+    override func loadView() {
+        view = NSView()
 
         let column = NSTableColumn(identifier: .init("conversation"))
         tableView.addTableColumn(column)
@@ -70,13 +89,10 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         scrollView.automaticallyAdjustsContentInsets = true
         scrollView.translatesAutoresizingMaskIntoConstraints = false
 
-        view.addSubview(searchField)
+        // Full height: the list scrolls under the titlebar and the search accessory.
         view.addSubview(scrollView)
         NSLayoutConstraint.activate([
-            searchField.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-            searchField.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            searchField.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-            scrollView.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
+            scrollView.topAnchor.constraint(equalTo: view.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: view.bottomAnchor),

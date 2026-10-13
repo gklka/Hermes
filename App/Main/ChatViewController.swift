@@ -75,7 +75,8 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         emptyLabel.font = .systemFont(ofSize: 15, weight: .medium)
         emptyLabel.textColor = .tertiaryLabelColor
 
-        for view in [scrollView, compose, emptyLabel] as [NSView] {
+        // The compose bar is a split view accessory (see composeAccessory); messages scroll under it.
+        for view in [scrollView, emptyLabel] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
@@ -83,10 +84,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             scrollView.topAnchor.constraint(equalTo: root.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            scrollView.bottomAnchor.constraint(equalTo: compose.topAnchor),
-            compose.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            compose.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            compose.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             emptyLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             emptyLabel.centerYAnchor.constraint(equalTo: root.centerYAnchor),
         ])
@@ -243,8 +241,20 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     private func updateEmptyState() {
         emptyLabel.isHidden = threadID != nil
         scrollView.isHidden = threadID == nil
-        compose.isHidden = threadID == nil
+        composeAccessory.isHidden = threadID == nil
     }
+
+    /// The compose bar, at the bottom of the chat's split view item; messages scroll under it
+    /// with a soft edge, like Messages.
+    lazy var composeAccessory: NSSplitViewItemAccessoryViewController = {
+        let accessory = NSSplitViewItemAccessoryViewController()
+        accessory.view = compose
+        accessory.automaticallyAppliesContentInsets = false
+        if #available(macOS 26.1, *) {
+            accessory.preferredScrollEdgeEffectStyle = .soft
+        }
+        return accessory
+    }()
 
     // MARK: - Rows
 

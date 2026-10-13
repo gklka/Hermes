@@ -238,9 +238,11 @@ final class MainSplitViewController: NSSplitViewController {
         sidebar.canCollapse = true
         // Keep the sidebar's width when the window is resized.
         sidebar.holdingPriority = .defaultLow + 10
+        sidebar.addTopAlignedAccessoryViewController(list.searchAccessory)
 
         let content = NSSplitViewItem(viewController: chat)
         content.minimumThickness = 380
+        content.addBottomAlignedAccessoryViewController(chat.composeAccessory)
 
         addSplitViewItem(sidebar)
         addSplitViewItem(content)
