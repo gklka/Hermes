@@ -175,6 +175,19 @@ final class ChatStore {
         }
     }
 
+    /// Removes a message that failed to send (it only exists in this view model).
+    func discard(_ message: ChatMessage) {
+        messagesByThread[message.threadID]?.removeAll { $0.id == message.id }
+        notify(.messages(threadID: message.threadID))
+    }
+
+    /// Sends a failed message again, with its text, files and reply target.
+    func resend(_ message: ChatMessage) {
+        discard(message)
+        let files = message.attachments.compactMap { $0.localPath.map { URL(fileURLWithPath: $0) } }
+        send(text: message.text, attachments: files, in: message.threadID, replyTo: message.replyTo?.messageID)
+    }
+
     /// Pass an empty emoji to remove your reaction.
     func react(to message: ChatMessage, with emoji: String) {
         struct Params: Encodable { let threadID: String; let messageID: String; let emoji: String }

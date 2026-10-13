@@ -53,6 +53,30 @@ final class ComposeTextView: NSTextView {
     }
 }
 
+/// Turns text emoticons like ":)" into emoji as you type, like Messenger does.
+enum Emoticons {
+    static func emoji(for token: String) -> String? { map[token] }
+
+    private static let map: [String: String] = [
+        ":)": "🙂", ":-)": "🙂", "(:": "🙂",
+        ":(": "🙁", ":-(": "🙁",
+        ":D": "😀", ":-D": "😀",
+        "xD": "😆", "XD": "😆",
+        ";)": "😉", ";-)": "😉",
+        ":P": "😛", ":-P": "😛", ":p": "😛", ":-p": "😛",
+        ":O": "😮", ":-O": "😮", ":o": "😮", ":-o": "😮",
+        ":'(": "😢",
+        ":*": "😘", ":-*": "😘",
+        ":/": "😕", ":-/": "😕",
+        ":|": "😐", ":-|": "😐",
+        ">:(": "😠", ">:-(": "😠",
+        "B)": "😎", "B-)": "😎", "8)": "😎", "8-)": "😎",
+        "^_^": "😊", "-_-": "😑",
+        "<3": "❤️", "</3": "💔",
+    ]
+
+}
+
 /// A pasted link, shown in the field as its preview card (like in Messages) and sent as the link.
 final class ComposeLinkAttachment: NSTextAttachment {
     let url: URL
@@ -433,6 +457,8 @@ final class ComposeView: NSView, NSTextViewDelegate {
                 attachments.append(attachment.fileURL)
             }
         }
+        // An emoticon right before Return hasn't been replaced yet (that happens at the next space).
+        replaceEmoticon(before: textView.string.utf16.count)
         let text = self.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !attachments.isEmpty else { return }
         delegate?.composeView(self, send: text, attachments: attachments)
@@ -494,6 +520,34 @@ final class ComposeView: NSView, NSTextViewDelegate {
         layoutManager.ensureLayout(for: container)
         let used = layoutManager.usedRect(for: container).height + textView.textContainerInset.height * 2
         textHeight.constant = min(Self.maxTextHeight, max(Self.minTextHeight, ceil(used)))
+    }
+
+    /// Typing a space or newline after an emoticon (":)") turns it into its emoji; Undo brings it back.
+    func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+        guard let replacementString, replacementString.count == 1, replacementString.first?.isWhitespace == true,
+              let tokenRange = emoticonRange(before: range.location),
+              let emoji = Emoticons.emoji(for: (textView.string as NSString).substring(with: tokenRange)) else { return true }
+        textView.insertText(emoji + replacementString, replacementRange: NSRange(
+            location: tokenRange.location, length: range.location + range.length - tokenRange.location))
+        return false
+    }
+
+    /// The whitespace-delimited word ending at `location`, if any.
+    private func emoticonRange(before location: Int) -> NSRange? {
+        let string = textView.string as NSString
+        guard location > 0, location <= string.length else { return nil }
+        var start = location
+        while start > 0, let scalar = Unicode.Scalar(string.character(at: start - 1)),
+              !CharacterSet.whitespacesAndNewlines.contains(scalar) {
+            start -= 1
+        }
+        return start < location ? NSRange(location: start, length: location - start) : nil
+    }
+
+    private func replaceEmoticon(before location: Int) {
+        guard let range = emoticonRange(before: location),
+              let emoji = Emoticons.emoji(for: (textView.string as NSString).substring(with: range)) else { return }
+        textView.insertText(emoji, replacementRange: range)
     }
 
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {

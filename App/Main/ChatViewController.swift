@@ -9,6 +9,8 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     private enum Row: Hashable {
         case separator(String)
         case caption(String, CaptionCellView.Placement, NSColor)
+        /// "Not Delivered" under a failed message; clicking offers to resend or delete it.
+        case notDelivered(ChatMessage)
         case restore
         case message(ChatMessage, MessageCellView.Layout)
         case typing
@@ -317,7 +319,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             case .pending:
                 result.append(.caption("Sending…", .trailing, .secondaryLabelColor))
             case .failed:
-                result.append(.caption("Not Delivered", .trailing, .systemRed))
+                result.append(.notDelivered(last))
             default:
                 let readers = conversation.participants.filter { $0.id != selfID && ($0.readWatermark ?? 0) >= last.timestamp }
                 if readers.isEmpty {
@@ -458,6 +460,12 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         case .caption(let text, let placement, let color):
             let cell = reuse("Caption", sizing: sizing, CaptionCellView.init)
             cell.configure(text, placement: placement, color: color, maxWidth: bubbleMaxWidth)
+            cell.onClick = nil
+            return cell
+        case .notDelivered(let message):
+            let cell = reuse("Caption", sizing: sizing, CaptionCellView.init)
+            cell.configure("Not Delivered", placement: .trailing, color: .systemRed, maxWidth: bubbleMaxWidth)
+            cell.onClick = { [weak self] in self?.messageCellDidClickFailure(message) }
             return cell
         case .restore:
             let cell = reuse("Restore", sizing: sizing, RestoreCellView.init)
@@ -568,6 +576,26 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             restore(anchor)
         } else if wasAtBottom {
             scrollToBottom()
+        }
+    }
+
+    func messageCellDidClickFailure(_ message: ChatMessage) {
+        guard let window = view.window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Your message was not delivered."
+        alert.informativeText = "You can try sending it again or delete it."
+        alert.addButton(withTitle: "Try Again")
+        alert.addButton(withTitle: "Delete").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            switch response {
+            case .alertFirstButtonReturn:
+                self?.store.resend(message)
+            case .alertSecondButtonReturn:
+                self?.store.discard(message)
+            default:
+                break
+            }
         }
     }
 
@@ -921,7 +949,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
 /// clicked subview opts in, so attachments get them here and can be dragged out.
 final class ChatTableView: NSTableView {
     override func validateProposedFirstResponder(_ responder: NSResponder, for event: NSEvent?) -> Bool {
-        if event?.type == .leftMouseDown, responder is AttachmentView || responder is ReactionsBadge {
+        if event?.type == .leftMouseDown, responder is AttachmentView || responder is ReactionsBadge || responder is CaptionCellView {
             return true
         }
         return super.validateProposedFirstResponder(responder, for: event)

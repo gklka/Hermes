@@ -55,6 +55,13 @@ final class BubbleView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    /// One-line bubbles are capsules; a radius over half the height would distort the
+    /// continuous corners.
+    override func layout() {
+        super.layout()
+        layer?.cornerRadius = min(17, bounds.height / 2)
+    }
+
     override var wantsUpdateLayer: Bool { true }
 
     override func updateLayer() {
@@ -90,6 +97,8 @@ final class BubbleView: NSView {
 
 /// Centered gray text: timestamps, system notices, "Read"/"Delivered".
 final class CaptionCellView: NSTableCellView {
+    /// Makes the text clickable (e.g. "Not Delivered").
+    var onClick: (() -> Void)?
     private let label = NSTextField(wrappingLabelWithString: "")
     private var alignmentConstraints: [NSLayoutConstraint] = []
 
@@ -109,6 +118,22 @@ final class CaptionCellView: NSTableCellView {
     required init?(coder: NSCoder) { fatalError() }
 
     enum Placement { case center, trailing, leading }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard onClick != nil else { return super.hitTest(point) }
+        return label.frame.contains(convert(point, from: superview)) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if onClick == nil { super.mouseDown(with: event) }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let onClick else { return super.mouseUp(with: event) }
+        if label.frame.contains(convert(event.locationInWindow, from: nil)) {
+            onClick()
+        }
+    }
 
     func configure(_ text: String, placement: Placement = .center, color: NSColor = .secondaryLabelColor, maxWidth: CGFloat) {
         label.stringValue = text
@@ -216,6 +241,8 @@ protocol MessageCellDelegate: AnyObject {
     func messageCell(_ cell: MessageCellView, menuFor message: ChatMessage) -> NSMenu?
     func messageCellDidDoubleClick(_ cell: MessageCellView, message: ChatMessage, bubble: NSView)
     func messageCell(_ cell: MessageCellView, open attachment: Attachment, of message: ChatMessage)
+    /// The "not delivered" icon was clicked: offer to resend or delete.
+    func messageCellDidClickFailure(_ message: ChatMessage)
     /// The tapback badge was clicked: show who reacted.
     func messageCell(_ cell: MessageCellView, showReactionsOf message: ChatMessage, anchor: NSView)
     /// A message's link preview finished loading; its row's height may change.
@@ -247,7 +274,8 @@ final class MessageCellView: NSTableCellView {
     private let textView = MessageTextView()
     private let reactionsBadge = ReactionsBadge()
     private let avatar = AvatarView()
-    private let failedIcon = DisplayImageView()
+    /// Clicking offers to resend or delete the message.
+    private let failedIcon = NSButton()
     /// The preview of a link in the message.
     private let linkCard = LinkCardView()
 
@@ -303,7 +331,13 @@ final class MessageCellView: NSTableCellView {
         linkCard.isHidden = true
 
         failedIcon.image = NSImage(systemSymbolName: "exclamationmark.circle.fill", accessibilityDescription: "Not delivered")
+        failedIcon.symbolConfiguration = .init(pointSize: 15, weight: .regular)
         failedIcon.contentTintColor = .systemRed
+        failedIcon.isBordered = false
+        failedIcon.bezelStyle = .regularSquare
+        failedIcon.toolTip = "Not Delivered"
+        failedIcon.target = self
+        failedIcon.action = #selector(failedIconClicked)
 
         // The connector is laid out by hand in layout().
         addSubview(replyConnector)
@@ -554,6 +588,11 @@ final class MessageCellView: NSTableCellView {
     var anchorView: NSView {
         if !bubble.isHidden { return bubble }
         return attachmentsStack.isHidden ? self : attachmentsStack
+    }
+
+    @objc private func failedIconClicked() {
+        guard let message else { return }
+        delegate?.messageCellDidClickFailure(message)
     }
 
     @objc private func doubleClicked() {
