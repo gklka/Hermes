@@ -52,6 +52,12 @@ enum MainMenu {
         sidebar.keyEquivalentModifierMask = [.command, .control]
         main.addItem(withTitle: "View", action: nil, keyEquivalent: "").submenu = viewMenu
 
+        let conversationMenu = NSMenu(title: "Conversation")
+        let unread = conversationMenu.addItem(withTitle: "Mark as Unread", action: #selector(MainWindowController.toggleUnread(_:)), keyEquivalent: "u")
+        unread.keyEquivalentModifierMask = [.command, .shift]
+        conversationMenu.addItem(withTitle: "Like", action: #selector(MainWindowController.sendLike(_:)), keyEquivalent: "l")
+        main.addItem(withTitle: "Conversation", action: nil, keyEquivalent: "").submenu = conversationMenu
+
         let windowMenu = NSMenu(title: "Window")
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")

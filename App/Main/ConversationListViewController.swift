@@ -128,6 +128,13 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         view.window?.makeFirstResponder(searchField)
     }
 
+    /// ⌘1–⌘9: selects the nth chat in the list as it's shown (filtered and searched).
+    func selectConversation(at index: Int) {
+        guard index < rows.count else { return }
+        tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        tableView.scrollRowToVisible(index)
+    }
+
     /// Selects a conversation programmatically (e.g. after "New Message").
     func select(threadID: String) {
         searchField.stringValue = ""

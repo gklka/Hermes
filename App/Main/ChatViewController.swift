@@ -222,6 +222,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         updateEmptyState()
         reload(scrollToBottom: true)
         guard let threadID else { return }
+        store.clearMarkedUnread(threadID)
         Notifier.shared.clear(threadID: threadID)
         compose.focus()
         Task {
@@ -245,7 +246,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     }
 
     func markReadIfVisible() {
-        guard let threadID, let window = view.window, window.isKeyWindow, NSApp.isActive,
+        guard let threadID, !store.markedUnread.contains(threadID), let window = view.window, window.isKeyWindow, NSApp.isActive,
               let conversation = store.conversation(threadID), conversation.unreadCount > 0 else { return }
         store.markRead(threadID)
     }
@@ -442,6 +443,38 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     private func scrollToBottom() {
         guard !rows.isEmpty else { return }
         tableView.scrollRowToVisible(rows.count - 1)
+    }
+
+    enum ScrollKey {
+        case pageUp, pageDown, home, end
+    }
+
+    /// Page Up/Down, Home and End scroll the messages, wherever the focus is.
+    func scroll(_ key: ScrollKey) {
+        guard threadID != nil, !rows.isEmpty else { return }
+        let clip = scrollView.contentView
+        let insets = clip.contentInsets
+        let page = max(clip.bounds.height - insets.top - insets.bottom - 40, 40)
+        var origin = clip.bounds.origin
+        switch key {
+        case .pageUp: origin.y -= page
+        case .pageDown: origin.y += page
+        case .home: origin.y = -insets.top
+        case .end: origin.y = tableView.frame.height - clip.bounds.height + insets.bottom
+        }
+        let target = clip.constrainBoundsRect(NSRect(origin: origin, size: clip.bounds.size)).origin
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            clip.animator().setBoundsOrigin(target)
+        }
+        scrollView.reflectScrolledClipView(clip)
+        // Overlay scrollers only appear by themselves for trackpad and mouse scrolling.
+        scrollView.flashScrollers()
+    }
+
+    /// ⌘L: sends the chat's quick reaction (like the compose button does when it's empty).
+    func sendLike() {
+        compose.sendQuickReaction()
     }
 
     @objc private func scrolled() {
@@ -970,6 +1003,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
 
     func composeView(_ view: ComposeView, send text: String, attachments: [URL]) {
         guard let threadID else { return }
+        store.clearMarkedUnread(threadID)
         store.send(text: text, attachments: attachments, in: threadID, replyTo: replyTarget?.id)
         replyTarget = nil
         compose.hideReply()

@@ -135,14 +135,31 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         split.windowDidBecomeKey()
     }
 
+    @objc func toggleUnread(_ sender: Any?) {
+        split.toggleUnread()
+    }
+
+    @objc func sendLike(_ sender: Any?) {
+        split.sendLike()
+    }
+
     @objc private func selectFilter(_ sender: NSMenuItem) {
         guard let filter = ConversationFilter(rawValue: sender.tag) else { return }
         split.filter = filter
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.action == #selector(selectFilter(_:)) {
+        switch menuItem.action {
+        case #selector(selectFilter(_:)):
             menuItem.state = menuItem.tag == split.filter.rawValue ? .on : .off
+        case #selector(toggleUnread(_:)):
+            let unread = (split.selectedConversation?.unreadCount ?? 0) > 0
+            menuItem.title = unread ? "Mark as Read" : "Mark as Unread"
+            return split.selectedConversation != nil
+        case #selector(sendLike(_:)):
+            return split.selectedConversation != nil
+        default:
+            break
         }
         return true
     }
@@ -257,6 +274,48 @@ final class MainSplitViewController: NSSplitViewController {
             self.chat.show(threadID: threadID)
             self.onConversationChanged?(self.selectedConversation)
         }
+
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.handleShortcut(event) else { return event }
+            return nil
+        }
+    }
+
+    /// ⌘1–⌘9 pick a chat from the list; Page Up/Down, Home and End scroll the messages even
+    /// while the message field has the focus.
+    private func handleShortcut(_ event: NSEvent) -> Bool {
+        guard let window = view.window, event.window === window, window.attachedSheet == nil else { return false }
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        guard let character = event.charactersIgnoringModifiers?.unicodeScalars.first else { return false }
+        if modifiers == .command, let digit = Int(String(character)), (1...9).contains(digit) {
+            list.selectConversation(at: digit - 1)
+            return true
+        }
+        guard modifiers.isEmpty else { return false }
+        let key: ChatViewController.ScrollKey? = switch Int(character.value) {
+        case NSPageUpFunctionKey: .pageUp
+        case NSPageDownFunctionKey: .pageDown
+        case NSHomeFunctionKey: .home
+        case NSEndFunctionKey: .end
+        default: nil
+        }
+        guard let key, chat.threadID != nil else { return false }
+        chat.scroll(key)
+        return true
+    }
+
+    /// Conversation → Mark as Unread/Read for the open chat.
+    func toggleUnread() {
+        guard let conversation = selectedConversation else { return }
+        if conversation.unreadCount > 0 {
+            ChatStore.shared.markRead(conversation.id)
+        } else {
+            ChatStore.shared.setUnread(true, threadID: conversation.id)
+        }
+    }
+
+    func sendLike() {
+        chat.sendLike()
     }
 
     override func viewDidAppear() {

@@ -440,9 +440,14 @@ final class ComposeView: NSView, NSTextViewDelegate {
         if hasContent {
             send()
         } else {
-            delegate?.composeView(self, send: quickEmoji ?? "👍", attachments: [])
+            sendQuickReaction()
         }
         focus()
+    }
+
+    /// Sends the chat's quick reaction (👍 by default), keeping what's typed.
+    func sendQuickReaction() {
+        delegate?.composeView(self, send: quickEmoji ?? "👍", attachments: [])
     }
 
     @objc private func cancelReply() {

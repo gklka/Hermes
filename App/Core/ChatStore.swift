@@ -205,6 +205,7 @@ final class ChatStore {
 
     func markRead(_ threadID: String) {
         struct Params: Encodable { let threadID: String }
+        markedUnread.remove(threadID)
         guard var conversation = conversationsByID[threadID], conversation.unreadCount > 0 else { return }
         conversation.unreadCount = 0
         conversationsByID[threadID] = conversation
@@ -222,7 +223,20 @@ final class ChatStore {
     private struct ToggleParams: Encodable { let threadID: String; let enabled: Bool }
     private struct ThreadParams: Encodable { let threadID: String }
 
+    /// Chats the user marked unread: the open chat isn't marked read again until it's reopened
+    /// or answered.
+    private(set) var markedUnread: Set<String> = []
+
+    func clearMarkedUnread(_ threadID: String) {
+        markedUnread.remove(threadID)
+    }
+
     func setUnread(_ unread: Bool, threadID: String) {
+        if unread {
+            markedUnread.insert(threadID)
+        } else {
+            markedUnread.remove(threadID)
+        }
         Task { try? await core.call("threads.setUnread", ToggleParams(threadID: threadID, enabled: unread)) }
     }
 
