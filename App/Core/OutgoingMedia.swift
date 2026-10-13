@@ -2,6 +2,11 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
+extension NSPasteboard.PasteboardType {
+    static let jpeg = NSPasteboard.PasteboardType(UTType.jpeg.identifier)
+    static let heic = NSPasteboard.PasteboardType(UTType.heic.identifier)
+}
+
 /// Files staged in the compose field and prepared for upload.
 enum OutgoingMedia {
     /// Pasted/dropped images and copies of every sent file live here, so sent messages keep
@@ -20,11 +25,17 @@ enum OutgoingMedia {
         return url
     }
 
-    /// Saves raw image data from the pasteboard (screenshots, images copied in a browser).
+    /// Raw image types read from the pasteboard (Continuity Camera photos are JPEG or HEIC).
+    static let imagePasteboardTypes: [NSPasteboard.PasteboardType] = [.png, .jpeg, .heic, .tiff]
+
+    /// Saves raw image data from the pasteboard (screenshots, images copied in a browser,
+    /// Continuity Camera photos).
     static func save(imageData data: Data, type: NSPasteboard.PasteboardType) -> URL? {
         let slot = newSlot()
-        if type == .png {
-            let url = slot.appendingPathComponent("Image.png")
+        // Kept as they are (HEIC is converted when it's sent).
+        let extensions: [NSPasteboard.PasteboardType: String] = [.png: "png", .jpeg: "jpg", .heic: "heic"]
+        if let pathExtension = extensions[type] {
+            let url = slot.appendingPathComponent("Image").appendingPathExtension(pathExtension)
             return (try? data.write(to: url)) != nil ? url : nil
         }
         // TIFF and anything else: re-encode as PNG (lossless, widely supported).

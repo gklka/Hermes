@@ -14,7 +14,7 @@ final class ComposeTextView: NSTextView {
     var attachmentHandler: ((NSPasteboard) -> Bool)?
 
     static let attachmentTypes: [NSPasteboard.PasteboardType] =
-        [.fileURL, .png, .tiff] + NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) }
+        [.fileURL] + OutgoingMedia.imagePasteboardTypes + NSFilePromiseReceiver.readableDraggedTypes.map { NSPasteboard.PasteboardType($0) }
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         Self.attachmentTypes + [.string]
@@ -33,6 +33,19 @@ final class ComposeTextView: NSTextView {
         guard let string = NSPasteboard.general.string(forType: .string), !string.isEmpty else { return }
         if linkHandler?(string) == true { return }
         insertText(string, replacementRange: selectedRange())
+    }
+
+    /// Continuity Camera (Insert from iPhone) and services: staged like a paste, instead of
+    /// a full-size picture in the text.
+    override func readSelection(from pboard: NSPasteboard) -> Bool {
+        CoreBridge.shared.log("Compose: inserting from services, types \(pboard.types?.map(\.rawValue) ?? [])")
+        if attachmentHandler?(pboard) == true { return true }
+        return super.readSelection(from: pboard)
+    }
+
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if attachmentHandler?(pboard) == true { return true }
+        return super.readSelection(from: pboard, type: type)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -378,11 +391,12 @@ final class ComposeView: NSView, NSTextViewDelegate {
             return true
         }
         // Raw image data, unless the copied thing is primarily text (some apps add a picture of it).
-        let candidates: [NSPasteboard.PasteboardType] = [.png, .tiff, .string, .rtf, .html]
-        guard let first = pasteboard.types?.first(where: candidates.contains), first == .png || first == .tiff else {
+        let imageTypes = OutgoingMedia.imagePasteboardTypes
+        let candidates = imageTypes + [.string, .rtf, .html]
+        guard let first = pasteboard.types?.first(where: candidates.contains), imageTypes.contains(first) else {
             return false
         }
-        for type in [NSPasteboard.PasteboardType.png, .tiff] {
+        for type in imageTypes {
             if let data = pasteboard.data(forType: type), let url = OutgoingMedia.save(imageData: data, type: type) {
                 addFiles([url])
                 return true
