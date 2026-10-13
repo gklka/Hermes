@@ -466,8 +466,36 @@ final class MessageCellView: NSTableCellView {
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
-        guard let message else { return nil }
-        return delegate?.messageCell(self, menuFor: message)
+        guard let message, let menu = delegate?.messageCell(self, menuFor: message) else { return nil }
+        // Darken the message while its context menu is open. AppKit may show a copy of the
+        // menu, so listen for any menu closing rather than this one.
+        setDarkened(true)
+        var token: NSObjectProtocol?
+        token = NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.setDarkened(false) }
+            if let token { NotificationCenter.default.removeObserver(token) }
+        }
+        return menu
+    }
+
+    override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) {
+        super.didCloseMenu(menu, with: event)
+        setDarkened(false)
+    }
+
+    /// Multiplies the message's colors (keeping transparency), so bubbles, photos and text darken.
+    private static let darkenFilter: CIFilter? = {
+        let filter = CIFilter(name: "CIColorMatrix")
+        filter?.setValue(CIVector(x: 0.72, y: 0, z: 0, w: 0), forKey: "inputRVector")
+        filter?.setValue(CIVector(x: 0, y: 0.72, z: 0, w: 0), forKey: "inputGVector")
+        filter?.setValue(CIVector(x: 0, y: 0, z: 0.72, w: 0), forKey: "inputBVector")
+        return filter
+    }()
+
+    private func setDarkened(_ darkened: Bool) {
+        column.wantsLayer = true
+        column.layerUsesCoreImageFilters = true
+        column.contentFilters = darkened ? Self.darkenFilter.map { [$0] } ?? [] : []
     }
 
     /// What popovers about this message point at: the text bubble, or the attachments.
@@ -540,11 +568,20 @@ final class MessageTextView: NSTextView {
 
     /// Right-click shows the message's menu (react, reply, …) rather than the text menu.
     override func menu(for event: NSEvent) -> NSMenu? {
+        enclosingCell?.menu(for: event)
+    }
+
+    override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) {
+        super.didCloseMenu(menu, with: event)
+        enclosingCell?.didCloseMenu(menu, with: event)
+    }
+
+    private var enclosingCell: MessageCellView? {
         var view = superview
         while let current = view, !(current is MessageCellView) {
             view = current.superview
         }
-        return view?.menu(for: event)
+        return view as? MessageCellView
     }
 }
 
