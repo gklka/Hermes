@@ -533,6 +533,9 @@ func emojiPresentation(emoji string) string {
 // likeSticker is the private-use character Messenger uses in snippets for the big like.
 const likeSticker = "\U000F0000"
 
+// stickerSnippet is the snippet Messenger sends for a sticker message (a middle dot).
+const stickerSnippet = "·"
+
 // MARK: - Conversion to API types
 
 func (s *Store) Conversation(t *threadRow, selfID string) apiConversation {
@@ -549,6 +552,16 @@ func (s *Store) Conversation(t *threadRow, selfID string) apiConversation {
 		IsMuted:         t.MuteUntil == -1 || t.MuteUntil > time.Now().UnixMilli(),
 		IsMarketplace:   t.Type == table.MARKETPLACE,
 		Participants:    make([]apiParticipant, 0, len(participants)),
+	}
+	if t.Snippet == stickerSnippet {
+		// Messenger's snippet for stickers (including the big like); use the latest message instead.
+		var text, sender string
+		if s.db.QueryRow(`SELECT text, sender_id FROM messages WHERE thread_id=? ORDER BY timestamp DESC LIMIT 1`, t.ID).
+			Scan(&text, &sender) == nil && text != "" {
+			conv.Snippet, conv.SnippetSenderID = text, sender
+		} else {
+			conv.Snippet = "Sticker"
+		}
 	}
 	if colors := s.Get("colors:" + t.ID); colors != "" {
 		conv.BubbleColors = strings.Split(colors, ",")

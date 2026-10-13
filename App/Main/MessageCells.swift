@@ -216,6 +216,8 @@ protocol MessageCellDelegate: AnyObject {
     func messageCell(_ cell: MessageCellView, menuFor message: ChatMessage) -> NSMenu?
     func messageCellDidDoubleClick(_ cell: MessageCellView, message: ChatMessage, bubble: NSView)
     func messageCell(_ cell: MessageCellView, open attachment: Attachment, of message: ChatMessage)
+    /// The tapback badge was clicked: show who reacted.
+    func messageCell(_ cell: MessageCellView, showReactionsOf message: ChatMessage, anchor: NSView)
     /// A message's link preview finished loading; its row's height may change.
     func messageCellDidLoadLinkPreview(messageID: String)
 }
@@ -339,6 +341,11 @@ final class MessageCellView: NSTableCellView {
             failedIcon.trailingAnchor.constraint(equalTo: column.leadingAnchor, constant: -6),
             failedIcon.centerYAnchor.constraint(equalTo: column.centerYAnchor),
         ])
+
+        reactionsBadge.onClick = { [weak self] in
+            guard let self, let message = self.message else { return }
+            self.delegate?.messageCell(self, showReactionsOf: message, anchor: self.reactionsBadge)
+        }
 
         let doubleClick = NSClickGestureRecognizer(target: self, action: #selector(doubleClicked))
         doubleClick.numberOfClicksRequired = 2
@@ -721,11 +728,14 @@ final class ReplyConnectorView: NSView {
 
 /// Tapback-style bubble with reaction emojis.
 final class ReactionsBadge: NSView {
+    /// Clicking shows who reacted.
+    var onClick: (() -> Void)?
     private let label = NSTextField(labelWithString: "")
     private let background = BubbleView()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        toolTip = "Show Reactions"
         background.layer?.cornerRadius = 12
         background.layer?.borderWidth = 2
         for view in [background, label] as [NSView] {
@@ -748,6 +758,27 @@ final class ReactionsBadge: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        frame.contains(point) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {}
+
+    override func mouseUp(with event: NSEvent) {
+        if bounds.contains(convert(event.locationInWindow, from: nil)) {
+            onClick?()
+        }
+    }
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func accessibilityLabel() -> String? { "Reactions: \(label.stringValue)" }
+
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return true
+    }
 
     func configure(emojis: [String], highlighted: Bool) {
         var unique: [String] = []

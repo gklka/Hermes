@@ -561,6 +561,22 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         }
     }
 
+    func messageCell(_ cell: MessageCellView, showReactionsOf message: ChatMessage, anchor: NSView) {
+        let selfID = store.account?.id
+        let people = message.reactions.map { reaction -> ReactionsViewController.Entry in
+            if reaction.senderID == selfID, let account = store.account {
+                return .init(emoji: reaction.emoji, name: "You", avatarURL: account.avatarURL)
+            }
+            let participant = store.participant(reaction.senderID, in: message.threadID)
+            return .init(emoji: reaction.emoji, name: participant?.name ?? "Unknown", avatarURL: participant?.avatarURL)
+        }
+        guard !people.isEmpty else { return }
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = ReactionsViewController(entries: people)
+        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxY)
+    }
+
     func messageCell(_ cell: MessageCellView, open attachment: Attachment, of message: ChatMessage) {
         if attachment.kind == .link {
             if let string = attachment.url, let url = URL(string: string) {
@@ -895,7 +911,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
 /// clicked subview opts in, so attachments get them here and can be dragged out.
 final class ChatTableView: NSTableView {
     override func validateProposedFirstResponder(_ responder: NSResponder, for event: NSEvent?) -> Bool {
-        if event?.type == .leftMouseDown, responder is AttachmentView {
+        if event?.type == .leftMouseDown, responder is AttachmentView || responder is ReactionsBadge {
             return true
         }
         return super.validateProposedFirstResponder(responder, for: event)

@@ -137,6 +137,117 @@ private final class EmojiButton: NSView {
     }
 }
 
+/// Who reacted to a message, like Messages: each reaction in a thought bubble above the
+/// person's avatar.
+final class ReactionsViewController: NSViewController {
+    struct Entry {
+        let emoji: String
+        let name: String
+        let avatarURL: String?
+    }
+
+    private let entries: [Entry]
+    private static let perRow = 6
+
+    init(entries: [Entry]) {
+        self.entries = entries
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        let rows = stride(from: 0, to: entries.count, by: Self.perRow).map { start in
+            let views = entries[start..<min(start + Self.perRow, entries.count)].map(ReactionPersonView.init)
+            let row = NSStackView(views: views)
+            row.orientation = .horizontal
+            // Each item already has room for its shadow around it.
+            row.spacing = 12 - 2 * ReactionPersonView.margin
+            return row
+        }
+        let stack = NSStackView(views: rows)
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 14
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        // Pinned with explicit margins: the popover ignores a root stack view's edge insets.
+        let container = NSView()
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 22 - ReactionPersonView.margin),
+            stack.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -22 + ReactionPersonView.margin),
+            stack.topAnchor.constraint(equalTo: container.topAnchor, constant: 16 - ReactionPersonView.margin),
+            stack.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -16),
+        ])
+        view = container
+        preferredContentSize = container.fittingSize
+    }
+}
+
+/// One reaction: the emoji in a thought bubble, and below it who sent it.
+private final class ReactionPersonView: NSView {
+    private static let bubble: CGFloat = 60
+    private static let avatarSize: CGFloat = 40
+    /// Room around the bubble for its shadow.
+    static let margin: CGFloat = 8
+
+    init(_ entry: ReactionsViewController.Entry) {
+        super.init(frame: .zero)
+        toolTip = entry.name
+
+        let emoji = NSTextField(labelWithString: entry.emoji)
+        emoji.font = .systemFont(ofSize: 34)
+        emoji.alignment = .center
+        let avatar = AvatarView()
+        avatar.configure(name: entry.name, url: entry.avatarURL)
+        for view in [emoji, avatar] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: Self.bubble + 2 * Self.margin),
+            emoji.centerXAnchor.constraint(equalTo: centerXAnchor),
+            emoji.centerYAnchor.constraint(equalTo: topAnchor, constant: Self.margin + Self.bubble / 2),
+            avatar.centerXAnchor.constraint(equalTo: centerXAnchor),
+            avatar.topAnchor.constraint(equalTo: topAnchor, constant: Self.margin + Self.bubble + 24),
+            avatar.widthAnchor.constraint(equalToConstant: Self.avatarSize),
+            avatar.heightAnchor.constraint(equalToConstant: Self.avatarSize),
+            avatar.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var isFlipped: Bool { true }
+
+    private static let fill = NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 1, alpha: 0.16)
+            : .white
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.12)
+        shadow.shadowBlurRadius = 6
+        // Shadow offsets ignore flipping: a negative height is down.
+        shadow.shadowOffset = NSSize(width: 0, height: -2)
+        shadow.set()
+        Self.fill.setFill()
+        let size = Self.bubble
+        let top = Self.margin
+        let midX = bounds.midX
+        // The bubble, a nub merging into its bottom, and a small dot below.
+        let path = NSBezierPath(ovalIn: NSRect(x: midX - size / 2, y: top, width: size, height: size))
+        path.append(NSBezierPath(ovalIn: NSRect(x: midX - 7, y: top + size - 7, width: 14, height: 14)))
+        path.append(NSBezierPath(ovalIn: NSRect(x: midX - 3.5, y: top + size + 11, width: 7, height: 7)))
+        path.windingRule = .nonZero
+        path.fill()
+    }
+}
+
 /// A small popover for reacting with any emoji: type one or pick it from the emoji palette.
 final class EmojiInputViewController: NSViewController, NSTextFieldDelegate {
     var onPick: ((String) -> Void)?
