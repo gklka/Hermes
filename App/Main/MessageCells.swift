@@ -748,9 +748,10 @@ final class MessageTextView: NSTextView {
         return NSSize(width: ceil(used.width), height: ceil(used.height))
     }
 
-    /// Right-click shows the message's menu (react, reply, …) rather than the text menu.
+    /// Right-click shows the message's menu (react, reply, …), or the text menu (Copy, Look Up, …)
+    /// once the message is selected.
     override func menu(for event: NSEvent) -> NSMenu? {
-        enclosingCell?.menu(for: event)
+        allowsTextSelection ? super.menu(for: event) : enclosingCell?.menu(for: event)
     }
 
     override func didCloseMenu(_ menu: NSMenu, with event: NSEvent?) {
