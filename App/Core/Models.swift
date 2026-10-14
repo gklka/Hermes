@@ -112,6 +112,12 @@ struct MessageRemovedEvent: Decodable {
     let messageID: String
 }
 
+/// messages.fetchOlder's result (apiFetchOlderResult): one page of history from Messenger.
+struct FetchOlderResult: Decodable {
+    let fetched: Int
+    let hasMore: Bool
+}
+
 /// The chat was read up to `timestamp`, here or on another device (apiThreadReadEvent).
 struct ThreadReadEvent: Decodable {
     let threadID: String

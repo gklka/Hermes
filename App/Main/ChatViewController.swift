@@ -218,6 +218,8 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             stopTyping()
         }
         self.threadID = threadID
+        // Find in Chat belongs to the chat it was opened in.
+        resetSearch()
         selectMessage(nil)
         pendingReveal = nil
         lastConversation = threadID.flatMap { store.conversation($0) }
@@ -271,6 +273,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         emptyLabel.isHidden = threadID != nil
         scrollView.isHidden = threadID == nil
         composeAccessory.isHidden = threadID == nil
+        if threadID == nil { searchAccessory.isHidden = true }
     }
 
     /// The compose bar, at the bottom of the chat's split view item; messages scroll under it
@@ -285,6 +288,92 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         return accessory
     }()
 
+    // MARK: - Find in Chat
+
+    private let searchBar = ChatSearchBar()
+    /// The messages found while Find in Chat has text (shown instead of the chat's messages).
+    private var searchResults: [ChatMessage]?
+    private var searchTask: Task<Void, Never>?
+    /// How many pages of older history a search may fetch from Messenger.
+    private static let searchPageLimit = 50
+
+    /// Find in Chat's bar, at the top of the chat's split view item (hidden until used).
+    lazy var searchAccessory: NSSplitViewItemAccessoryViewController = {
+        searchBar.onChange = { [weak self] text in self?.searchChanged(text) }
+        searchBar.onClose = { [weak self] in self?.endSearch() }
+        let accessory = NSSplitViewItemAccessoryViewController()
+        accessory.view = searchBar
+        accessory.automaticallyAppliesContentInsets = false
+        if #available(macOS 26.1, *) {
+            accessory.preferredScrollEdgeEffectStyle = .soft
+        }
+        accessory.isHidden = true
+        return accessory
+    }()
+
+    /// Edit → Find in Chat.
+    func startSearch() {
+        guard threadID != nil else { return }
+        searchAccessory.isHidden = false
+        view.window?.makeFirstResponder(searchBar.searchField)
+        searchBar.searchField.currentEditor()?.selectAll(nil)
+    }
+
+    func endSearch() {
+        let wasSearching = searchResults != nil
+        resetSearch()
+        if wasSearching { reload(scrollToBottom: true) }
+        compose.focus()
+    }
+
+    private func resetSearch() {
+        searchTask?.cancel()
+        searchTask = nil
+        searchResults = nil
+        searchBar.searchField.stringValue = ""
+        searchBar.status = ""
+        searchAccessory.isHidden = true
+    }
+
+    /// Searches the stored messages, then fetches older history page by page (where Messenger
+    /// has it) and searches again after each, until the start, the page limit, or a new search.
+    private func searchChanged(_ text: String) {
+        searchTask?.cancel()
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let threadID, !text.isEmpty else {
+            searchResults = nil
+            searchBar.status = ""
+            reload(scrollToBottom: true)
+            return
+        }
+        searchTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            var pages = 0
+            var canFetch = true
+            while !Task.isCancelled {
+                guard let self, let page = await self.store.searchMessages(in: threadID, text: text),
+                      !Task.isCancelled, self.threadID == threadID else { return }
+                let fetching = canFetch && page.hasMore && pages < Self.searchPageLimit
+                self.showSearchResults(page.messages, fetchingOlder: fetching)
+                guard fetching, let result = await self.store.fetchOlderForSearch(threadID) else { return }
+                pages += 1
+                // No progress: search once more, then stop.
+                canFetch = result.fetched > 0
+            }
+        }
+    }
+
+    private func showSearchResults(_ messages: [ChatMessage], fetchingOlder: Bool) {
+        searchResults = messages
+        let found = switch messages.count {
+        case 0: "No matches"
+        case 1: "1 found"
+        default: "\(messages.count) found"
+        }
+        searchBar.status = fetchingOlder ? "\(found) · searching older…" : found
+        reload(scrollToBottom: true)
+    }
+
     // MARK: - Rows
 
     private var bubbleMaxWidth: CGFloat {
@@ -293,14 +382,18 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
 
     private func buildRows() -> [Row] {
         guard let threadID, let conversation = store.conversation(threadID) else { return [] }
-        let messages = store.messages(in: threadID)
+        // Find in Chat shows only what it found.
+        let isSearching = searchResults != nil
+        let messages = searchResults ?? store.messages(in: threadID)
         let selfID = store.account?.id
         var result: [Row] = []
         let groupGap: Int64 = 5 * 60 * 1000
         let outgoingColors = BubbleColors.theme(conversation.bubbleColors)
         var previous: ChatMessage?
 
-        if WebHistoryImporter.shared.importing.contains(threadID) {
+        if isSearching {
+            // The result count is in the search bar.
+        } else if WebHistoryImporter.shared.importing.contains(threadID) {
             result.append(.caption("Loading earlier messages from Messenger web…", .center, .secondaryLabelColor))
         } else if conversation.isEncrypted && (messages.isEmpty || WebHistoryImporter.shared.needsRestore.contains(threadID)) {
             result.append(.restore)
@@ -308,7 +401,11 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
 
         for (index, message) in messages.enumerated() {
             var startsSection = false
-            if previous == nil || message.timestamp - (previous?.timestamp ?? 0) > 60 * 60 * 1000 {
+            if isSearching {
+                // Each result stands alone, under its exact time.
+                result.append(.separator(Formatters.exact(message.date)))
+                startsSection = true
+            } else if previous == nil || message.timestamp - (previous?.timestamp ?? 0) > 60 * 60 * 1000 {
                 result.append(.separator(Formatters.separator(message.date)))
                 startsSection = true
             }
@@ -321,7 +418,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             let continuesPrevious = !startsSection && previous.map {
                 !$0.isSystem && $0.senderID == message.senderID && message.timestamp - $0.timestamp < groupGap
             } ?? false
-            let continuesToNext = next.map {
+            let continuesToNext = !isSearching && next.map {
                 !$0.isSystem && $0.senderID == message.senderID && $0.timestamp - message.timestamp < groupGap
             } ?? false
 
@@ -341,6 +438,8 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             result.append(.message(message, layout))
             previous = message
         }
+
+        if isSearching { return result }
 
         if let last = messages.last(where: { !$0.isSystem }), last.isFromMe, last.id == messages.last?.id {
             switch last.status {
@@ -428,15 +527,23 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         alignGradients()
     }
 
-    /// A message to scroll to and select once it's loaded (from a clicked notification or a
-    /// Spotlight result).
+    /// A message to scroll to and select once it's loaded (from a clicked notification, a
+    /// Spotlight result or a Find in Chat result).
     private var pendingReveal: String?
-    /// Older pages loaded while looking for the pending message.
+    /// Older pages loaded while looking for the pending message, and the most to load.
     private var revealPagesLoaded = 0
+    private var revealPageLimit = 40
 
-    func reveal(messageID: String) {
+    /// `stored`: the message is known to be in the database (a search result), so earlier pages
+    /// are loaded until it shows up, even if the chat had seemed to have no more history (the
+    /// search may have fetched more since).
+    func reveal(messageID: String, stored: Bool = false) {
         pendingReveal = messageID
         revealPagesLoaded = 0
+        revealPageLimit = stored ? 1000 : 40
+        if stored, let threadID {
+            store.resetHistoryEnd(threadID)
+        }
         revealPendingMessage()
     }
 
@@ -447,13 +554,18 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             return false
         }) else {
             // An older message (e.g. from Spotlight): load earlier pages until it shows up.
-            guard let threadID, !store.messages(in: threadID).isEmpty, revealPagesLoaded < 40 else { return }
+            guard let threadID, !store.messages(in: threadID).isEmpty, revealPagesLoaded < revealPageLimit else { return }
             revealPagesLoaded += 1
             Task { await store.loadOlderMessages(threadID) }
             return
         }
         pendingReveal = nil
-        tableView.scrollRowToVisible(row)
+        // In the middle of the view, with the messages around it.
+        let rect = tableView.rect(ofRow: row)
+        let visible = scrollView.contentView.bounds
+        let y = min(max(0, rect.midY - visible.height / 2), max(0, tableView.bounds.height - visible.height))
+        scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
+        scrollView.reflectScrolledClipView(scrollView.contentView)
         selectMessage(id)
     }
 
@@ -507,7 +619,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
 
     @objc private func scrolled() {
         alignGradients()
-        guard let threadID, !isLoadingOlder, scrollView.contentView.bounds.minY < 200, !rows.isEmpty else { return }
+        guard let threadID, !isLoadingOlder, searchResults == nil, scrollView.contentView.bounds.minY < 200, !rows.isEmpty else { return }
         isLoadingOlder = true
         Task {
             let started = await store.loadOlderMessages(threadID)
@@ -694,6 +806,12 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     private var deselectMonitor: Any?
 
     func messageCellDidClick(_ cell: MessageCellView, message: ChatMessage) {
+        guard searchResults == nil else {
+            // A found message: back to the chat, at that message.
+            endSearch()
+            reveal(messageID: message.id, stored: true)
+            return
+        }
         selectMessage(message.id)
     }
 

@@ -126,6 +126,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         split.attachFiles()
     }
 
+    /// Edit → Find in Chat (⌥⌘F): search the open chat's messages.
+    @objc func findInChat(_ sender: Any?) {
+        split.findInChat()
+    }
+
     /// Edit → Edit Message (⌘E): the selected message, or the last one you sent.
     @objc func editMessage(_ sender: Any?) {
         split.editMessage()
@@ -161,7 +166,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
             let unread = (split.selectedConversation?.unreadCount ?? 0) > 0
             menuItem.title = unread ? "Mark as Read" : "Mark as Unread"
             return split.selectedConversation != nil
-        case #selector(sendLike(_:)), #selector(editMessage(_:)):
+        case #selector(sendLike(_:)), #selector(editMessage(_:)), #selector(findInChat(_:)):
             return split.selectedConversation != nil
         default:
             break
@@ -266,6 +271,7 @@ final class MainSplitViewController: NSSplitViewController {
         let content = NSSplitViewItem(viewController: chat)
         content.minimumThickness = 380
         content.addBottomAlignedAccessoryViewController(chat.composeAccessory)
+        content.addTopAlignedAccessoryViewController(chat.searchAccessory)
 
         addSplitViewItem(sidebar)
         addSplitViewItem(content)
@@ -385,6 +391,10 @@ final class MainSplitViewController: NSSplitViewController {
 
     func attachFiles() {
         chat.attachFiles()
+    }
+
+    func findInChat() {
+        chat.startSearch()
     }
 
     func editMessage() {

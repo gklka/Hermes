@@ -10,6 +10,7 @@ require (
 	go.mau.fi/mautrix-meta v0.2609.1-0.20261012134301-e0e55caa0f60
 	go.mau.fi/util v0.10.2-0.20260918225449-a4c0d5b86aa8
 	go.mau.fi/whatsmeow v0.0.0-20260919103545-0057a822e79a
+	golang.org/x/text v0.42.0
 	google.golang.org/protobuf v1.36.12
 	modernc.org/sqlite v1.60.1
 )
@@ -50,7 +51,6 @@ require (
 	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	maunium.net/go/mautrix v0.31.1-0.20261005141226-f14e6b5fc009 // indirect

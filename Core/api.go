@@ -114,6 +114,13 @@ type apiThreadReadEvent struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
+// apiFetchOlderResult is messages.fetchOlder's result: how many messages one page of history
+// added, and whether Messenger has more.
+type apiFetchOlderResult struct {
+	Fetched int  `json:"fetched"`
+	HasMore bool `json:"hasMore"`
+}
+
 type apiState struct {
 	State   string      `json:"state"`
 	Account *apiAccount `json:"account,omitempty"`

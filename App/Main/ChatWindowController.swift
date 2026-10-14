@@ -30,6 +30,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         item.minimumThickness = 380
         // The compose bar sits at the bottom of the split view item, as in the main window.
         item.addBottomAlignedAccessoryViewController(chat.composeAccessory)
+        item.addTopAlignedAccessoryViewController(chat.searchAccessory)
         split.addSplitViewItem(item)
 
         let window = NSWindow(
@@ -178,6 +179,10 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
 
     @objc func attachFiles(_ sender: Any?) {
         chat.attachFiles()
+    }
+
+    @objc func findInChat(_ sender: Any?) {
+        chat.startSearch()
     }
 
     @objc func editMessage(_ sender: Any?) {

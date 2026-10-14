@@ -43,6 +43,8 @@ enum MainMenu {
         editMenu.addItem(.separator())
         let find = editMenu.addItem(withTitle: "Find…", action: #selector(MainWindowController.focusSearch(_:)), keyEquivalent: "f")
         find.keyEquivalentModifierMask = [.command]
+        let findInChat = editMenu.addItem(withTitle: "Find in Chat…", action: #selector(MainWindowController.findInChat(_:)), keyEquivalent: "f")
+        findInChat.keyEquivalentModifierMask = [.command, .option]
         let emoji = editMenu.addItem(withTitle: "Emoji & Symbols", action: #selector(NSApplication.orderFrontCharacterPalette(_:)), keyEquivalent: " ")
         emoji.keyEquivalentModifierMask = [.command, .control]
         main.addItem(withTitle: "Edit", action: nil, keyEquivalent: "").submenu = editMenu

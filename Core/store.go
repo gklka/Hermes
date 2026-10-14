@@ -434,6 +434,36 @@ func (s *Store) GetMessage(id string) *messageRow {
 }
 
 // ListMessages returns up to `limit` messages older than `before` (ms; 0 = newest), oldest first.
+// AllMessages is every stored message of the chat, oldest first (for search).
+func (s *Store) AllMessages(threadID string) []*messageRow {
+	rows, err := s.db.Query(`SELECT `+messageColumns+` FROM messages WHERE thread_id=? ORDER BY timestamp`, threadID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []*messageRow
+	for rows.Next() {
+		if m, err := scanMessage(rows); err == nil {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+func (s *Store) MessageCount(threadID string) int {
+	var count int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE thread_id=?`, threadID).Scan(&count)
+	return count
+}
+
+// OldestMessage is the time and ID of the chat's oldest stored message (0 and "" if none).
+func (s *Store) OldestMessage(threadID string) (int64, string) {
+	var ts int64
+	var id string
+	_ = s.db.QueryRow(`SELECT timestamp, id FROM messages WHERE thread_id=? ORDER BY timestamp LIMIT 1`, threadID).Scan(&ts, &id)
+	return ts, id
+}
+
 func (s *Store) ListMessages(threadID string, before int64, limit int) []*messageRow {
 	if before <= 0 {
 		before = 1 << 62

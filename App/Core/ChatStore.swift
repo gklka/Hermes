@@ -144,6 +144,12 @@ final class ChatStore {
         }
     }
 
+    /// Lets loadOlderMessages try again after it found the start (more history may have been
+    /// fetched into the database since, e.g. by a search).
+    func resetHistoryEnd(_ threadID: String) {
+        hasMoreHistory[threadID] = nil
+    }
+
     /// Loads an older page. Returns false when there is nothing more to load.
     @discardableResult
     func loadOlderMessages(_ threadID: String) async -> Bool {
@@ -159,6 +165,22 @@ final class ChatStore {
         struct Result: Decodable { let path: String }
         let path = (try? await core.call("web.threadPath", Params(threadID: threadID), as: Result.self).path) ?? ""
         return URL(string: "https://www.facebook.com" + (path.isEmpty ? "/messages/" : path))
+    }
+
+    // MARK: - Search
+
+    /// The chat's stored messages containing the text (ignoring case and accents), oldest
+    /// first; `hasMore` if Messenger has older history to fetch (fetchOlderForSearch).
+    func searchMessages(in threadID: String, text: String) async -> MessagesPage? {
+        struct Params: Encodable { let threadID: String; let text: String; let limit: Int }
+        return try? await core.call("messages.search", Params(threadID: threadID, text: text, limit: 500), as: MessagesPage.self)
+    }
+
+    /// Fetches one page of older history from Messenger into the database (not into the
+    /// loaded messages), so a search can find it.
+    func fetchOlderForSearch(_ threadID: String) async -> FetchOlderResult? {
+        struct Params: Encodable { let threadID: String }
+        return try? await core.call("messages.fetchOlder", Params(threadID: threadID), as: FetchOlderResult.self)
     }
 
     /// The chat's newest stored messages, without fetching history or touching what the UI shows.

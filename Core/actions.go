@@ -200,6 +200,11 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 			"messages": c.store.APIMessages(c.store.ListMessages(p.ThreadID, p.Before, p.Limit), c.selfID()),
 			"hasMore":  false,
 		}, nil
+	case "messages.search":
+		// Stored messages containing the text; hasMore: Messenger has older history to fetch.
+		return c.searchMessages(p.ThreadID, p.Text, p.Limit), nil
+	case "messages.fetchOlder":
+		return c.fetchOlder(p.ThreadID), nil
 	case "messages.send":
 		return nil, c.sendText(ctx, p.ThreadID, p.Text, p.ReplyTo)
 	case "messages.sendMedia":
