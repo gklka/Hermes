@@ -32,6 +32,7 @@ These come from the user's global `~/.claude/CLAUDE.md` plus feedback given duri
    xcodebuild -project MessengerMac.xcodeproj -scheme MessengerMac -configuration Debug -derivedDataPath build/DerivedData build
    ```
 3. Run: `open build/DerivedData/Build/Products/Debug/MessengerMac.app`. Quit with `pkill -x MessengerMac`.
+   - Day to day, use `Support/install.sh` instead: it builds Release, installs it to `/Applications` and relaunches it. Siri and Shortcuts only work with a team-signed app (the project signs with the personal team `ZWNU8P9B33`) and get confused by several registered copies, so the script unregisters the build-folder ones.
 4. Run Go tests:
    ```sh
    cd Core && CC="xcrun --sdk macosx clang" go test -run 'TestParseAge|TestAvatarKey|TestWebMessageID' .
