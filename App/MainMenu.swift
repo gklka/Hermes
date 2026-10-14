@@ -26,6 +26,8 @@ enum MainMenu {
         fileMenu.addItem(withTitle: "New Message", action: #selector(MainWindowController.newMessage(_:)), keyEquivalent: "n")
         let attach = fileMenu.addItem(withTitle: "Attach Files…", action: #selector(MainWindowController.attachFiles(_:)), keyEquivalent: "a")
         attach.keyEquivalentModifierMask = [.command, .shift]
+        let export = fileMenu.addItem(withTitle: "Export Chat…", action: #selector(MainWindowController.exportChat(_:)), keyEquivalent: "e")
+        export.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(withTitle: "Restore Encrypted Chats…", action: #selector(AppDelegate.showWebSync(_:)), keyEquivalent: "")
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")

@@ -131,6 +131,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         split.findInChat()
     }
 
+    /// File → Export Chat (⇧⌘E): a Markdown transcript of the open chat.
+    @objc func exportChat(_ sender: Any?) {
+        guard let conversation = split.selectedConversation else { return }
+        ChatExport.run(threadID: conversation.id, in: window)
+    }
+
     /// Edit → Edit Message (⌘E): the selected message, or the last one you sent.
     @objc func editMessage(_ sender: Any?) {
         split.editMessage()
@@ -166,7 +172,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
             let unread = (split.selectedConversation?.unreadCount ?? 0) > 0
             menuItem.title = unread ? "Mark as Read" : "Mark as Unread"
             return split.selectedConversation != nil
-        case #selector(sendLike(_:)), #selector(editMessage(_:)), #selector(findInChat(_:)):
+        case #selector(sendLike(_:)), #selector(editMessage(_:)), #selector(findInChat(_:)), #selector(exportChat(_:)):
             return split.selectedConversation != nil
         default:
             break

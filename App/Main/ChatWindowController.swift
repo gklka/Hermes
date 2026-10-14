@@ -185,6 +185,10 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         chat.startSearch()
     }
 
+    @objc func exportChat(_ sender: Any?) {
+        ChatExport.run(threadID: threadID, in: window)
+    }
+
     @objc func editMessage(_ sender: Any?) {
         chat.editMessage()
     }
