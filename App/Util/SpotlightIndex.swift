@@ -136,8 +136,8 @@ final class SpotlightIndex {
         return CSSearchableItem(uniqueIdentifier: conversation.id, domainIdentifier: domain, attributeSet: attributes)
     }
 
-    /// A small PNG of the chat's picture.
-    private static func thumbnail(_ image: NSImage) -> Data? {
+    /// A small PNG of the chat's picture (also for share suggestions).
+    static func thumbnail(_ image: NSImage) -> Data? {
         let size = 128
         guard let rep = NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: size, pixelsHigh: size, bitsPerSample: 8, samplesPerPixel: 4,

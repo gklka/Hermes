@@ -7,5 +7,17 @@
 	<array>
 		<string>INSendMessageIntent</string>
 	</array>
+	<!-- messengermac://share?id=… : the share extension handing over what to send (ShareHandoff). -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.kristofgruber.MessengerMac</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>messengermac</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

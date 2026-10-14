@@ -54,6 +54,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    /// `messengermac://share?id=…` from the share extension (ShareSupport).
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls {
+            _ = ShareSupport.shared.handle(url)
+        }
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag { mainWindowController?.showWindow(nil) }
         return true
@@ -64,6 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .loggedOut:
             didLoadConversations = false
             SpotlightIndex.shared.clear()
+            ShareSupport.shared.clear()
             ChatWindowController.closeAll()
             mainWindowController?.close()
             mainWindowController = nil
@@ -84,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 WebChatImporter.shared.start()
                 SpotlightIndex.shared.start()
+                ShareSupport.shared.start()
             }
         }
     }
