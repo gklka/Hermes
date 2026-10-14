@@ -813,20 +813,49 @@ final class MessageTextView: NSTextView {
         event.clickCount > 1 && ProcessInfo.processInfo.systemUptime - allowedAt < NSEvent.doubleClickInterval + 0.1
     }
 
-    private func isOnLink(_ event: NSEvent) -> Bool {
+    /// The link under the event, with its character index and range.
+    private func link(at event: NSEvent) -> (url: URL, index: Int, range: NSRange)? {
         let point = convert(event.locationInWindow, from: nil)
-        guard let storage = textStorage, storage.length > 0, let layoutManager, let textContainer else { return false }
+        guard let storage = textStorage, storage.length > 0, let layoutManager, let textContainer else { return nil }
         // The nearest glyph, if the point is actually on it.
         let glyph = layoutManager.glyphIndex(for: point, in: textContainer)
         let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: textContainer)
-        guard rect.contains(point) else { return false }
+        guard rect.contains(point) else { return nil }
         let character = layoutManager.characterIndexForGlyph(at: glyph)
-        return character < storage.length && storage.attribute(.link, at: character, effectiveRange: nil) != nil
+        guard character < storage.length else { return nil }
+        var range = NSRange()
+        let value = storage.attribute(.link, at: character, effectiveRange: &range)
+        guard let url = value as? URL ?? (value as? String).flatMap(URL.init(string:)) else { return nil }
+        return (url, character, range)
     }
 
+    private func isOnLink(_ event: NSEvent) -> Bool { link(at: event) != nil }
+
     override func mouseDown(with event: NSEvent) {
-        if (allowsTextSelection && !continuesSelectingClick(event)) || isOnLink(event) {
+        if let link = link(at: event) {
+            trackLink(link, from: event)
+        } else if allowsTextSelection && !continuesSelectingClick(event) {
             super.mouseDown(with: event)
+        }
+    }
+
+    /// A click opens the link; dragging takes it out, like a link in Safari.
+    private func trackLink(_ link: (url: URL, index: Int, range: NSRange), from event: NSEvent) {
+        let start = event.locationInWindow
+        while let next = window?.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) {
+            if next.type == .leftMouseUp {
+                clicked(onLink: link.url, at: link.index)
+                return
+            }
+            guard hypot(next.locationInWindow.x - start.x, next.locationInWindow.y - start.y) > 4 else { continue }
+            guard let layoutManager, let textContainer else { return }
+            let glyphs = layoutManager.glyphRange(forCharacterRange: link.range, actualCharacterRange: nil)
+            let frame = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+                .offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+            let title = textStorage?.attributedSubstring(from: link.range).string
+            let item = LinkDrag.item(url: link.url, title: title, frame: frame, image: LinkDrag.snapshot(of: self, in: frame))
+            beginDraggingSession(with: [item], event: next, source: self)
+            return
         }
     }
 
@@ -1049,10 +1078,38 @@ final class ReactionsBadge: NSView {
     }
 }
 
+/// Dragging a link out of a message: other apps get the URL, Finder makes a .webloc named after
+/// the title.
+enum LinkDrag {
+    static func item(url: URL, title: String?, frame: NSRect, image: NSImage) -> NSDraggingItem {
+        let pasteboardItem = NSPasteboardItem()
+        pasteboardItem.setString(url.absoluteString, forType: .URL)
+        pasteboardItem.setString(url.absoluteString, forType: .string)
+        if let title, !title.isEmpty {
+            pasteboardItem.setString(title, forType: NSPasteboard.PasteboardType("public.url-name"))
+        }
+        let item = NSDraggingItem(pasteboardWriter: pasteboardItem)
+        item.setDraggingFrame(frame, contents: image)
+        return item
+    }
+
+    /// What the view shows in the rect, as the drag image.
+    static func snapshot(of view: NSView, in rect: NSRect) -> NSImage {
+        let image = NSImage(size: rect.size)
+        if let rep = view.bitmapImageRepForCachingDisplay(in: rect) {
+            view.cacheDisplay(in: rect, to: rep)
+            image.addRepresentation(rep)
+        }
+        return image
+    }
+}
+
 /// A link's preview: its picture, title and site, like Messages' link previews. Clicking opens
-/// the link.
-final class LinkCardView: NSView {
+/// the link; dragging takes it out.
+final class LinkCardView: NSView, NSDraggingSource {
     private var url: URL?
+    private var title: String?
+    private var mouseDownPoint: NSPoint?
     private let picture = NSView()
     private let titleLabel = NSTextField(wrappingLabelWithString: "")
     private let siteLabel = NSTextField(labelWithString: "")
@@ -1104,6 +1161,7 @@ final class LinkCardView: NSView {
 
     func configure(_ preview: LinkPreviews.Preview, width: CGFloat) {
         url = preview.url
+        title = preview.title
         widthConstraint.constant = width
         titleLabel.preferredMaxLayoutWidth = width - 24
         titleLabel.stringValue = preview.title
@@ -1126,6 +1184,33 @@ final class LinkCardView: NSView {
 
     @objc private func clicked() {
         if let url { NSWorkspace.shared.open(url) }
+    }
+
+    // MARK: - Dragging out
+
+    /// Mouse events come here, not to the labels.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        super.hitTest(point) == nil ? nil : self
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        // Not passed on, so the table doesn't track the drag; clicks go to the click recognizer.
+        mouseDownPoint = event.locationInWindow
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let url, let start = mouseDownPoint,
+              hypot(event.locationInWindow.x - start.x, event.locationInWindow.y - start.y) > 4 else {
+            super.mouseDragged(with: event)
+            return
+        }
+        mouseDownPoint = nil
+        let item = LinkDrag.item(url: url, title: title, frame: bounds, image: LinkDrag.snapshot(of: self, in: bounds))
+        beginDraggingSession(with: [item], event: event, source: self)
+    }
+
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        .copy
     }
 }
 
@@ -1188,14 +1273,20 @@ final class AttachmentView: NSView, NSDraggingSource {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard attachment.kind != .link, let start = mouseDownPoint,
+        guard let start = mouseDownPoint,
               hypot(event.locationInWindow.x - start.x, event.locationInWindow.y - start.y) > 4 else {
             super.mouseDragged(with: event)
             return
         }
         mouseDownPoint = nil
-        let item = NSDraggingItem(pasteboardWriter: AttachmentFilePromise(attachment: attachment, message: message))
-        item.setDraggingFrame(bounds, contents: snapshot())
+        let item: NSDraggingItem
+        if attachment.kind == .link {
+            guard let url = attachment.url.flatMap(URL.init(string:)) else { return }
+            item = LinkDrag.item(url: url, title: attachment.title, frame: bounds, image: snapshot())
+        } else {
+            item = NSDraggingItem(pasteboardWriter: AttachmentFilePromise(attachment: attachment, message: message))
+            item.setDraggingFrame(bounds, contents: snapshot())
+        }
         beginDraggingSession(with: [item], event: event, source: self)
     }
 
