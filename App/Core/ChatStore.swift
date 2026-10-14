@@ -148,6 +148,13 @@ final class ChatStore {
         return true
     }
 
+    /// The chat's newest stored messages, without fetching history or touching what the UI shows.
+    func storedMessages(in threadID: String, limit: Int) async -> [ChatMessage] {
+        struct Params: Encodable { let threadID: String; let limit: Int }
+        let page = try? await core.call("messages.stored", Params(threadID: threadID, limit: limit), as: MessagesPage.self)
+        return page?.messages ?? []
+    }
+
     private func loadPage(_ threadID: String, before: Int64?) async {
         struct Params: Encodable { let threadID: String; let before: Int64?; let limit: Int }
         loadingHistory.insert(threadID)

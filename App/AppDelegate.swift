@@ -29,20 +29,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Notifier.shared.start()
     }
 
-    /// A chat chosen in Spotlight before the chats were loaded.
-    private var spotlightThreadID: String?
+    /// A chat (and message) chosen in Spotlight before the chats were loaded.
+    private var spotlightTarget: (threadID: String, messageID: String?)?
 
-    /// A chat chosen in Spotlight (see SpotlightIndex).
+    /// A chat or message chosen in Spotlight (see SpotlightIndex). Chats are identified by their
+    /// thread ID, messages by "MessageEntity/<thread ID>|<message ID>" (the entity's type, then its ID).
     func application(_ application: NSApplication, continue userActivity: NSUserActivity,
                      restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
         guard userActivity.activityType == CSSearchableItemActionType,
-              let threadID = userActivity.userInfo?[CSSearchableItemActivityIdentifier] as? String else { return false }
+              var identifier = userActivity.userInfo?[CSSearchableItemActivityIdentifier] as? String else { return false }
+        let entityPrefix = "MessageEntity/"
+        if identifier.hasPrefix(entityPrefix) {
+            identifier.removeFirst(entityPrefix.count)
+        }
+        let parts = identifier.split(separator: "|", maxSplits: 1).map(String.init)
+        let target = (threadID: parts[0], messageID: parts.count > 1 ? parts[1] : nil)
         if didLoadConversations, let mainWindowController {
             showMain()
-            mainWindowController.select(threadID: threadID)
+            mainWindowController.select(threadID: target.threadID, revealing: target.messageID)
             NSApp.activate()
         } else {
-            spotlightThreadID = threadID
+            spotlightTarget = target
         }
         return true
     }
@@ -69,9 +76,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task {
                     await store.loadConversations()
                     // Launched by choosing a chat in Spotlight.
-                    if let threadID = spotlightThreadID {
-                        spotlightThreadID = nil
-                        mainWindowController?.select(threadID: threadID)
+                    if let target = spotlightTarget {
+                        spotlightTarget = nil
+                        mainWindowController?.select(threadID: target.threadID, revealing: target.messageID)
                     }
                 }
                 WebChatImporter.shared.start()

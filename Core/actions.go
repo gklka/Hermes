@@ -192,6 +192,12 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return nil, c.subscribePresence(ctx, p.ThreadID)
 	case "messages.list":
 		return c.listMessages(p.ThreadID, p.Before, p.Limit), nil
+	case "messages.stored":
+		// The newest stored messages, without fetching history (for the Spotlight index).
+		return map[string]any{
+			"messages": c.store.APIMessages(c.store.ListMessages(p.ThreadID, p.Before, p.Limit), c.selfID()),
+			"hasMore":  false,
+		}, nil
 	case "messages.send":
 		return nil, c.sendText(ctx, p.ThreadID, p.Text, p.ReplyTo)
 	case "messages.sendMedia":

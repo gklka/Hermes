@@ -419,19 +419,30 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         alignGradients()
     }
 
-    /// A message to scroll to and select once it's loaded (from a clicked notification).
+    /// A message to scroll to and select once it's loaded (from a clicked notification or a
+    /// Spotlight result).
     private var pendingReveal: String?
+    /// Older pages loaded while looking for the pending message.
+    private var revealPagesLoaded = 0
 
     func reveal(messageID: String) {
         pendingReveal = messageID
+        revealPagesLoaded = 0
         revealPendingMessage()
     }
 
     private func revealPendingMessage() {
-        guard let id = pendingReveal, let row = rows.firstIndex(where: {
+        guard let id = pendingReveal else { return }
+        guard let row = rows.firstIndex(where: {
             if case .message(let message, _) = $0 { return message.id == id }
             return false
-        }) else { return }
+        }) else {
+            // An older message (e.g. from Spotlight): load earlier pages until it shows up.
+            guard let threadID, !store.messages(in: threadID).isEmpty, revealPagesLoaded < 40 else { return }
+            revealPagesLoaded += 1
+            Task { await store.loadOlderMessages(threadID) }
+            return
+        }
         pendingReveal = nil
         tableView.scrollRowToVisible(row)
         selectMessage(id)

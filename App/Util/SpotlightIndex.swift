@@ -3,9 +3,10 @@ import Combine
 import CoreSpotlight
 import UniformTypeIdentifiers
 
-/// Puts the chats (names and pictures, not messages) in Spotlight: type the app's name, Tab,
-/// then a chat's name. Choosing one opens the app on that chat (AppDelegate's
-/// `application(_:continue:restorationHandler:)`).
+/// Puts the chats (names and pictures) in Spotlight: type the app's name, Tab, then a chat's
+/// name. Choosing one opens the app on that chat (AppDelegate's
+/// `application(_:continue:restorationHandler:)`). On macOS 27 the messages go in too, as Siri
+/// entities.
 final class SpotlightIndex {
     static let shared = SpotlightIndex()
 
@@ -29,8 +30,12 @@ final class SpotlightIndex {
     func clear() {
         pending?.cancel()
         indexed = [:]
+        indexedUpTo = [:]
         CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: [Self.domain]) { error in
             if let error { CoreBridge.shared.log("Spotlight: couldn't clear the index: \(error.localizedDescription)") }
+        }
+        if #available(macOS 27.0, *) {
+            Task { try? await CSSearchableIndex.default().deleteAppEntities(ofType: MessageEntity.self) }
         }
     }
 
@@ -71,8 +76,55 @@ final class SpotlightIndex {
             if !removed.isEmpty {
                 try await index.deleteSearchableItems(withIdentifiers: removed)
             }
+            if #available(macOS 27.0, *) {
+                if !didClearOldEntities {
+                    didClearOldEntities = true
+                    try await Self.deleteEntities()
+                }
+                try await indexMessages()
+            }
         } catch {
             CoreBridge.shared.log("Spotlight: indexing failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// People and chats were once indexed as App Intents entities for Siri. Spotlight's results
+    /// view crashed showing them (macOS 27.1), and Siri's lookup of them timed out anyway.
+    private var didClearOldEntities = false
+
+    @available(macOS 27.0, *)
+    private static func deleteEntities() async throws {
+        let index = CSSearchableIndex.default()
+        try await index.deleteAppEntities(ofType: MessagePersonEntity.self)
+        try await index.deleteAppEntities(ofType: ConversationEntity.self)
+        // Rebuilt each launch, so unsent and deleted messages don't linger.
+        try await index.deleteAppEntities(ofType: MessageEntity.self)
+    }
+
+    /// Per chat, the newest message time already indexed.
+    private var indexedUpTo: [String: Int64] = [:]
+
+    /// Messages as Siri entities (MessageEntity), like Messages does: the stored ones, then new
+    /// ones as chats update.
+    @available(macOS 27.0, *)
+    private func indexMessages() async throws {
+        let index = CSSearchableIndex.default()
+        var entities: [MessageEntity] = []
+        for conversation in store.conversations where conversation.lastActivity > indexedUpTo[conversation.id, default: 0] {
+            let since = indexedUpTo[conversation.id, default: 0]
+            let messages = await store.storedMessages(in: conversation.id, limit: since == 0 ? 2000 : 50)
+            guard let newest = messages.map(\.timestamp).max() else { continue }
+            indexedUpTo[conversation.id] = max(since, newest)
+            entities += messages
+                .filter { $0.timestamp > since && !$0.isUnsent && !$0.text.isEmpty }
+                .map { MessageEntity($0, in: conversation) }
+            if entities.count >= 500 {
+                try await index.indexAppEntities(entities)
+                entities = []
+            }
+        }
+        if !entities.isEmpty {
+            try await index.indexAppEntities(entities)
         }
     }
 
