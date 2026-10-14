@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.activate()
         }
         Notifier.shared.start()
+        DockBadge.shared.start()
     }
 
     /// A chat (and message) chosen in Spotlight before the chats were loaded.
