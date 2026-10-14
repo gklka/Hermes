@@ -27,6 +27,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     func start() {
         center.delegate = self
+        registerActions()
         Task {
             do {
                 let granted = try await center.requestAuthorization(options: [.alert, .sound, .badge])
@@ -161,6 +162,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         content.body = body
         content.sound = .default
         content.threadIdentifier = threadID
+        content.categoryIdentifier = Self.category
         content.userInfo = ["threadID": threadID, "messageID": messageID]
 
         let avatarURL = sender?.avatarURL ?? (isGroup ? nil : conversation?.avatarURL)
@@ -296,6 +298,58 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let userInfo = response.notification.request.content.userInfo
         guard let threadID = userInfo["threadID"] as? String else { return }
         let messageID = userInfo["messageID"] as? String
-        await MainActor.run { self.onOpenThread?(threadID, messageID) }
+        let replyText = (response as? UNTextInputNotificationResponse)?.userText
+        switch response.actionIdentifier {
+        case Self.replyAction:
+            await reply(replyText ?? "", in: threadID)
+        case Self.markReadAction:
+            await markRead(threadID)
+        case UNNotificationDefaultActionIdentifier:
+            await MainActor.run { self.onOpenThread?(threadID, messageID) }
+        default:
+            break
+        }
+    }
+
+    // MARK: - Notification actions
+
+    nonisolated private static let category = "message"
+    nonisolated private static let replyAction = "reply"
+    nonisolated private static let markReadAction = "markRead"
+
+    /// Reply (a text field) and Mark as Read on message and reaction notifications.
+    private func registerActions() {
+        let reply = UNTextInputNotificationAction(
+            identifier: Self.replyAction, title: "Reply", options: [],
+            textInputButtonTitle: "Send", textInputPlaceholder: "Message"
+        )
+        let markRead = UNNotificationAction(identifier: Self.markReadAction, title: "Mark as Read", options: [])
+        let category = UNNotificationCategory(
+            identifier: Self.category, actions: [reply, markRead], intentIdentifiers: [], options: []
+        )
+        center.setNotificationCategories([category])
+    }
+
+    /// Sends the reply; answering reads the chat.
+    private func reply(_ text: String, in threadID: String) async {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, await waitUntilReady() else { return }
+        store.send(text: text, in: threadID)
+        await markRead(threadID)
+    }
+
+    private func markRead(_ threadID: String) async {
+        guard await waitUntilReady() else { return }
+        store.markRead(threadID)
+        store.clearUnseenReactions(threadID)
+        clear(threadID: threadID)
+    }
+
+    /// An action can launch the app: wait for the login and the chats.
+    private func waitUntilReady() async -> Bool {
+        for _ in 0..<120 where store.account == nil || store.conversations.isEmpty {
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        return store.account != nil
     }
 }
