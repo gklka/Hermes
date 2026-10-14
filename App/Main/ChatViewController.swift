@@ -93,6 +93,9 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         updateEmptyState()
     }
 
+    /// Every chat view (the main window's and those in chat windows), for app-wide callbacks.
+    private static let instances = NSHashTable<ChatViewController>.weakObjects()
+
     override func viewDidLoad() {
         super.viewDidLoad()
         store.changes
@@ -131,17 +134,20 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: scrollView.contentView
         )
 
-        WebHistoryImporter.shared.onStateChange = { [weak self] threadID, _ in
-            if threadID == self?.threadID { self?.reload() }
+        Self.instances.add(self)
+        WebHistoryImporter.shared.onStateChange = { threadID, _ in
+            for chat in Self.instances.allObjects where chat.threadID == threadID { chat.reload() }
         }
         NotificationCenter.default.addObserver(
             self, selector: #selector(restoreWindowClosed), name: NSWindow.willCloseNotification, object: WebSyncController.shared.window
         )
 
-        // No notifications for the chat that's on screen.
-        Notifier.shared.isThreadVisible = { [weak self] threadID in
-            guard let self, self.threadID == threadID, let window = self.view.window else { return false }
-            return NSApp.isActive && window.isKeyWindow && !window.isMiniaturized
+        // No notifications for a chat that's on screen (in the main window or its own).
+        Notifier.shared.isThreadVisible = { threadID in
+            Self.instances.allObjects.contains { chat in
+                guard chat.threadID == threadID, let window = chat.view.window else { return false }
+                return NSApp.isActive && window.isKeyWindow && !window.isMiniaturized
+            }
         }
 
         // Typing while no text field is active goes to the compose field. The event is returned,

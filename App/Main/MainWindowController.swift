@@ -84,20 +84,21 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
     private func updateTitle(_ conversation: Conversation?) {
         guard let window else { return }
         window.title = conversation?.name ?? "Messenger"
-        var subtitle = ""
+        window.subtitle = Self.subtitle(for: conversation)
+    }
+
+    /// The connection state, or the chat's member count or presence. Also used by chat windows.
+    static func subtitle(for conversation: Conversation?) -> String {
         switch ChatStore.shared.connectionState {
-        case .connecting: subtitle = "Connecting…"
-        case .disconnected: subtitle = "Waiting for network…"
+        case .connecting: return "Connecting…"
+        case .disconnected: return "Waiting for network…"
         default:
-            if let conversation {
-                if conversation.isGroup {
-                    subtitle = "\(conversation.participants.count) people"
-                } else if let presence = ChatStore.shared.presence[conversation.id] {
-                    subtitle = Self.presenceText(presence)
-                }
+            guard let conversation else { return "" }
+            if conversation.isGroup {
+                return "\(conversation.participants.count) people"
             }
+            return ChatStore.shared.presence[conversation.id].map(presenceText) ?? ""
         }
-        window.subtitle = subtitle
     }
 
     private static func presenceText(_ presence: PresenceEvent) -> String {

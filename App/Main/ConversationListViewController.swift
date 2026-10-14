@@ -82,6 +82,8 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         tableView.dataSource = self
         tableView.delegate = self
         tableView.allowsEmptySelection = true
+        tableView.target = self
+        tableView.doubleAction = #selector(doubleClicked(_:))
         let menu = NSMenu()
         menu.delegate = self
         tableView.menu = menu
@@ -193,6 +195,8 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         guard row >= 0, row < rows.count else { return }
         let conversation = rows[row]
         let unread = conversation.unreadCount > 0
+        menu.addItem(item("Open in New Window", symbol: "macwindow.badge.plus", action: #selector(openInWindow(_:)), conversation))
+        menu.addItem(.separator())
         menu.addItem(item(unread ? "Mark as Read" : "Mark as Unread",
                           symbol: unread ? "envelope.open" : "envelope.badge", action: #selector(toggleUnread), conversation))
         menu.addItem(item(conversation.isMuted ? "Unmute" : "Mute",
@@ -216,6 +220,18 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         item.representedObject = conversation
         return item
+    }
+
+    @objc private func openInWindow(_ sender: NSMenuItem) {
+        guard let conversation = sender.representedObject as? Conversation else { return }
+        ChatWindowController.show(threadID: conversation.id)
+    }
+
+    /// Double-clicking a chat opens it in its own window.
+    @objc private func doubleClicked(_ sender: Any?) {
+        let row = tableView.clickedRow
+        guard row >= 0, row < rows.count else { return }
+        ChatWindowController.show(threadID: rows[row].id)
     }
 
     @objc private func toggleUnread(_ sender: NSMenuItem) {

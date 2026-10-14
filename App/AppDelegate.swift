@@ -64,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .loggedOut:
             didLoadConversations = false
             SpotlightIndex.shared.clear()
+            ChatWindowController.closeAll()
             mainWindowController?.close()
             mainWindowController = nil
             showLogin()
