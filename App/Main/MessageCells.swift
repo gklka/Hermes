@@ -206,44 +206,41 @@ final class RestoreCellView: NSTableCellView {
 }
 
 /// "•••" bubble shown while someone is typing.
-final class TypingCellView: NSTableCellView {
-    private let bubble = BubbleView()
-    private let dots = NSTextField(labelWithString: "•••")
+extension NSView {
+    /// A new message or typing bubble arriving: zooms up from its center with a little spring,
+    /// fading in.
+    func animateAppearance() {
+        wantsLayer = true
+        guard let layer else { return }
+        // Layer-backed views scale around their corner; move the scaling to the center.
+        let center = CGPoint(x: layer.bounds.midX, y: layer.bounds.midY)
+        var from = CATransform3DMakeTranslation(center.x, center.y, 0)
+        from = CATransform3DScale(from, 0.5, 0.5, 1)
+        from = CATransform3DTranslate(from, -center.x, -center.y, 0)
 
-    init() {
-        super.init(frame: .zero)
-        dots.font = .systemFont(ofSize: 20, weight: .bold)
-        dots.textColor = .secondaryLabelColor
-        for view in [bubble, dots] as [NSView] {
-            view.translatesAutoresizingMaskIntoConstraints = false
-        }
-        addSubview(bubble)
-        bubble.addSubview(dots)
-        NSLayoutConstraint.activate([
-            bubble.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
-            bubble.topAnchor.constraint(equalTo: topAnchor, constant: 6),
-            bubble.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
-            bubble.heightAnchor.constraint(equalToConstant: 34),
-            dots.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 14),
-            dots.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -14),
-            dots.centerYAnchor.constraint(equalTo: bubble.centerYAnchor, constant: -1),
-        ])
+        let zoom = CASpringAnimation(keyPath: "transform")
+        zoom.fromValue = from
+        zoom.toValue = CATransform3DIdentity
+        zoom.damping = 18
+        zoom.stiffness = 300
+        zoom.mass = 1
+        zoom.duration = zoom.settlingDuration
+
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.duration = 0.18
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+
+        layer.add(zoom, forKey: "appear.zoom")
+        layer.add(fade, forKey: "appear.fade")
     }
+}
 
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        let pulse = CABasicAnimation(keyPath: "opacity")
-        pulse.fromValue = 1
-        pulse.toValue = 0.35
-        pulse.duration = 0.7
-        pulse.autoreverses = true
-        pulse.repeatCount = .infinity
-        dots.wantsLayer = true
-        dots.layer?.add(pulse, forKey: "pulse")
-    }
+/// Cells whose content animates in when it first appears (ChatViewController).
+protocol AppearingCell: NSView {
+    /// The part that zooms in: the bubble and what belongs to it.
+    var appearingContent: NSView { get }
 }
 
 protocol MessageCellDelegate: AnyObject {
@@ -265,7 +262,16 @@ protocol MessageCellDelegate: AnyObject {
 }
 
 /// One message: optional sender name, reply quote, attachments, text bubble and tapbacks.
-final class MessageCellView: NSTableCellView {
+final class MessageCellView: NSTableCellView, AppearingCell {
+    /// The bubble with its sender name, attachments, link preview and "Edited".
+    var appearingContent: NSView { column }
+
+    /// The typing indicator is this cell in its typing state: an empty bubble with pulsing dots.
+    /// When the message arrives, the same cell turns into it (`transitionFromTyping`).
+    private let typingDots = NSTextField(labelWithString: "•••")
+    private var typingConstraints: [NSLayoutConstraint] = []
+    private(set) var isTyping = false
+
     struct Layout: Hashable {
         var showSenderName = false
         var senderName = ""
@@ -358,6 +364,18 @@ final class MessageCellView: NSTableCellView {
             textView.bottomAnchor.constraint(equalTo: bubble.bottomAnchor, constant: -7),
         ]
         NSLayoutConstraint.activate(textInsets)
+
+        typingDots.font = .systemFont(ofSize: 20, weight: .bold)
+        typingDots.textColor = .secondaryLabelColor
+        typingDots.translatesAutoresizingMaskIntoConstraints = false
+        typingDots.isHidden = true
+        bubble.addSubview(typingDots)
+        typingConstraints = [
+            typingDots.leadingAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 14),
+            typingDots.trailingAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -14),
+            typingDots.centerYAnchor.constraint(equalTo: bubble.centerYAnchor, constant: -1),
+            bubble.heightAnchor.constraint(equalToConstant: 34),
+        ]
 
         column.addArrangedSubview(senderLabel)
         column.addArrangedSubview(attachmentsStack)
@@ -491,8 +509,141 @@ final class MessageCellView: NSTableCellView {
         attachmentsStack.arrangedSubviews.lazy.compactMap { $0 as? AttachmentView }.first { $0.attachmentID == attachmentID }
     }
 
+    /// The typing indicator: just the incoming bubble with the dots, where the next message
+    /// will be (the layout's avatar space keeps it aligned with the chat's messages).
+    func configureTyping(layout: Layout) {
+        message = nil
+        setTyping(true)
+        NSLayoutConstraint.deactivate(outgoingConstraints + [badgeOutgoing, replyTop, columnBelowReply, replyLeading, replyTrailing])
+        NSLayoutConstraint.activate(incomingConstraints + [topConstraint, badgeIncoming])
+        column.alignment = .leading
+        incomingAvatarLeading.constant = layout.reserveAvatarSpace ? 44 : 14
+        widthConstraint.constant = layout.maxWidth
+        topConstraint.constant = 8
+        for view in [senderLabel, replyView, replyConnector, attachmentsStack, linkCard, reactionsBadge, avatar,
+                     editedRow, historyStack, failedIcon] as [NSView] {
+            view.isHidden = true
+        }
+        bubble.isHidden = false
+        bubble.color = BubbleColors.incoming
+        bubble.gradientColors = nil
+        bubble.layer?.borderWidth = 0
+        alphaValue = 1
+        toolTip = nil
+        needsLayout = true
+    }
+
+    private func setTyping(_ typing: Bool) {
+        guard typing != isTyping else { return }
+        isTyping = typing
+        textView.isHidden = typing
+        typingDots.isHidden = !typing
+        if typing {
+            NSLayoutConstraint.deactivate(textInsets)
+            NSLayoutConstraint.activate(typingConstraints)
+            pulseTypingDots()
+        } else {
+            typingDots.layer?.removeAnimation(forKey: "pulse")
+            NSLayoutConstraint.deactivate(typingConstraints)
+            NSLayoutConstraint.activate(textInsets)
+        }
+    }
+
+    private func pulseTypingDots() {
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1
+        pulse.toValue = 0.35
+        pulse.duration = 0.7
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        typingDots.wantsLayer = true
+        typingDots.layer?.add(pulse, forKey: "pulse")
+    }
+
+    /// Animations stop when a cell leaves the window; the dots keep pulsing when it's back.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if isTyping, window != nil { pulseTypingDots() }
+    }
+
+    /// Where the typing bubble is: its distance from the cell's top, its left edge and size
+    /// (taken before the row grows for the message).
+    struct TypingBubble {
+        let top: CGFloat
+        let x: CGFloat
+        let size: CGSize
+    }
+
+    var typingBubble: TypingBubble? {
+        guard isTyping, bubble.bounds.width > 0 else { return nil }
+        let frame = bubble.convert(bubble.bounds, to: self)
+        let top = isFlipped ? frame.minY : bounds.height - frame.maxY
+        return TypingBubble(top: top, x: frame.minX, size: frame.size)
+    }
+
+    /// The typing bubble becomes the message: the bubble opens from where and how big the typing
+    /// bubble was to the message's frame (revealing the text, which fades in), the dots fade away,
+    /// and the rest of the message (sender name, attachments) fades in. Call once the row has
+    /// the message's height.
+    func transitionFromTyping(_ typing: TypingBubble, to message: ChatMessage, layout: Layout, store: ChatStore, duration: TimeInterval) {
+        configure(message, layout: layout, store: store)
+        layoutSubtreeIfNeeded()
+        guard let bubbleLayer = bubble.layer, let column = bubble.superview, !bubble.isHidden else {
+            appearingContent.animateAppearance()
+            return
+        }
+        let newFrame = bubble.frame
+        // The typing bubble's place, in the bubble's superview (the column).
+        let y = isFlipped ? typing.top : bounds.height - typing.top - typing.size.height
+        let oldFrame = column.convert(NSRect(x: typing.x, y: y, width: typing.size.width, height: typing.size.height), from: self)
+        let timing = CAMediaTimingFunction(controlPoints: 0.3, 1.15, 0.5, 1)
+        // A layer-backed view's layer has its anchor at the corner: position is the origin.
+        let size = CABasicAnimation(keyPath: "bounds.size")
+        size.fromValue = NSValue(size: oldFrame.size)
+        size.toValue = NSValue(size: newFrame.size)
+        let position = CABasicAnimation(keyPath: "position")
+        position.fromValue = NSValue(point: oldFrame.origin)
+        position.toValue = NSValue(point: newFrame.origin)
+        let radius = CABasicAnimation(keyPath: "cornerRadius")
+        radius.fromValue = min(17, typing.size.height / 2)
+        radius.toValue = min(17, newFrame.height / 2)
+        for animation in [size, position, radius] {
+            animation.duration = duration
+            animation.timingFunction = timing
+            bubbleLayer.add(animation, forKey: "typing.\(animation.keyPath ?? "")")
+        }
+
+        // The dots: a picture of them fading out where they were, as the text replaces them.
+        let dots = CATextLayer()
+        dots.string = NSAttributedString(string: "•••", attributes: [
+            .font: NSFont.systemFont(ofSize: 20, weight: .bold), .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        dots.contentsScale = window?.backingScaleFactor ?? 2
+        dots.frame = CGRect(x: 14, y: (34 - 26) / 2 - 1, width: 40, height: 26)
+        dots.opacity = 0
+        let dotsFade = CABasicAnimation(keyPath: "opacity")
+        dotsFade.fromValue = 1
+        dotsFade.toValue = 0
+        dotsFade.duration = duration * 0.4
+        bubbleLayer.addSublayer(dots)
+        dots.add(dotsFade, forKey: "fade")
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { dots.removeFromSuperlayer() }
+
+        let fadeIn = CAKeyframeAnimation(keyPath: "opacity")
+        fadeIn.values = [0, 0, 1]
+        fadeIn.keyTimes = [0, 0.3, 1]
+        fadeIn.duration = duration
+        textView.wantsLayer = true
+        textView.layer?.add(fadeIn, forKey: "typing.fade")
+        for view in [senderLabel, attachmentsStack, linkCard, editedRow, avatar, reactionsBadge] as [NSView] where !view.isHidden {
+            view.wantsLayer = true
+            view.layer?.add(fadeIn, forKey: "typing.fade")
+        }
+    }
+
     func configure(_ message: ChatMessage, layout: Layout, store: ChatStore) {
         self.message = message
+        setTyping(false)
         let outgoing = message.isFromMe
 
         NSLayoutConstraint.deactivate(incomingConstraints + outgoingConstraints + [badgeIncoming, badgeOutgoing])

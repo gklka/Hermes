@@ -106,6 +106,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
                     self.reload()
                     self.markReadIfVisible()
                 case .typing(let id) where id == threadID:
+                    self.typingChanged()
                     self.reload()
                 case .conversations:
                     // Participant names / read markers or the theme may have changed. Other
@@ -218,8 +219,9 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             stopTyping()
         }
         self.threadID = threadID
-        // Find in Chat belongs to the chat it was opened in.
+        // Find in Chat and a lingering typing bubble belong to the chat they were in.
         resetSearch()
+        endTypingLinger()
         selectMessage(nil)
         pendingReveal = nil
         lastConversation = threadID.flatMap { store.conversation($0) }
@@ -330,6 +332,8 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         searchTask?.cancel()
         searchTask = nil
         searchResults = nil
+        // Back from results to the chat isn't new messages arriving.
+        shownThreadID = nil
         searchBar.searchField.stringValue = ""
         searchBar.status = ""
         searchAccessory.isHidden = true
@@ -342,6 +346,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let threadID, !text.isEmpty else {
             searchResults = nil
+            shownThreadID = nil
             searchBar.status = ""
             reload(scrollToBottom: true)
             return
@@ -365,6 +370,8 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
 
     private func showSearchResults(_ messages: [ChatMessage], fetchingOlder: Bool) {
         searchResults = messages
+        // Results don't animate in.
+        shownThreadID = nil
         let found = switch messages.count {
         case 0: "No matches"
         case 1: "1 found"
@@ -460,7 +467,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             }
         }
 
-        if !(store.typing[threadID]?.isEmpty ?? true) {
+        if !(store.typing[threadID]?.isEmpty ?? true) || isTypingLingering {
             result.append(.typing)
         }
         return result
@@ -505,7 +512,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     }
 
     private func reload(scrollToBottom forceBottom: Bool = false) {
-        let wasAtBottom = isScrolledToBottom
+        let wasAtBottom = isScrolledToBottom || Date() < pinnedToBottomUntil
         let anchor = forceBottom || wasAtBottom ? nil : scrollAnchor()
 
         // Heights depend on the bubble width; old messages' heights are kept (also across chats).
@@ -513,18 +520,200 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             rowHeights.removeAll()
             rowHeightsWidth = bubbleMaxWidth
         }
-        rows = buildRows()
+        var newRows = buildRows()
+        let sameChat = shownThreadID == threadID
+        // New messages (or the typing indicator) at the bottom of the chat being read animate in.
+        var fresh = anchor == nil ? Self.appended(newRows, after: shownKeys, sameChat: sameChat) : []
+        // A message arriving while the typing bubble showed: the bubble turns into it. (Typing
+        // may have stopped before or with the message; the updates come in either order.)
+        var arrivedFromTyping: (index: Int, row: Row)?
+        if sameChat, shownKeys.contains("typing"), typingCellOnScreen() != nil,
+           let arrived = newRows.last(where: { Self.isIncoming($0, in: fresh) }),
+           let key = Self.appearanceKey(arrived) {
+            endTypingLinger()
+            newRows = buildRows()
+            fresh.remove("typing")
+            fresh.remove(key)
+            if let index = newRows.firstIndex(where: { Self.appearanceKey($0) == key }) {
+                arrivedFromTyping = (index, newRows[index])
+                // First the chat around it, with the typing bubble still in the message's place
+                // (the typing cell is unique, so it's the same cell after the reload).
+                newRows[index] = .typing
+            }
+        }
+        if !sameChat { appearing = [:] }
+        let shown = Set(newRows.compactMap(Self.appearanceKey))
+        // Earlier reloads' new rows keep their animation until their cells appear (a reload can
+        // follow before the animated scroll brings them on screen).
+        appearing = appearing.filter { shown.contains($0.key) }
+        for key in fresh where appearing[key] == nil { appearing[key] = .zoom }
+        shownKeys = shown
+        shownThreadID = threadID
+        rows = newRows
         tableView.reloadData()
         tableView.layoutSubtreeIfNeeded()
+        if let arrived = arrivedFromTyping {
+            finishTypingTransition(at: arrived.index, into: arrived.row)
+        }
 
         if let anchor {
             // Keep the same messages on screen (e.g. when older ones are added above).
             restore(anchor)
         } else if forceBottom || wasAtBottom {
-            scrollToBottom()
+            scrollToBottom(animated: !fresh.isEmpty || !appearing.isEmpty || arrivedFromTyping != nil
+                || Date() < pinnedToBottomUntil)
         }
         revealPendingMessage()
         alignGradients()
+    }
+
+    // MARK: - Appearance animations
+
+    /// What the last reload showed (messages and the typing indicator), to tell what's new.
+    private var shownKeys: Set<String> = []
+    private var shownThreadID: String?
+
+    private enum Appearance {
+        /// Zooms up from its center.
+        case zoom
+    }
+
+    /// Rows to animate when their cells appear.
+    private var appearing: [String: Appearance] = [:]
+
+    /// While an animated scroll to the bottom runs, reloads keep following the bottom (mid-way
+    /// the view isn't at the bottom yet).
+    private var pinnedToBottomUntil = Date.distantPast
+
+    private static func isIncoming(_ row: Row, in keys: Set<String>) -> Bool {
+        guard case .message(let message, _) = row, !message.isFromMe, !message.isSystem,
+              let key = appearanceKey(row) else { return false }
+        return keys.contains(key)
+    }
+
+    // MARK: - Typing bubble
+
+    /// The typing bubble stays a little after typing stops, so a message arriving right after
+    /// can take its place.
+    private var typingLingerUntil: Date?
+    private var typingLingerTimer: Timer?
+    private static let typingLinger: TimeInterval = 2
+
+    private var isTypingLingering: Bool {
+        typingLingerUntil.map { $0 > Date() } ?? false
+    }
+
+    /// Typing started or stopped in the open chat.
+    private func typingChanged() {
+        guard let threadID else { return }
+        if !(store.typing[threadID]?.isEmpty ?? true) {
+            endTypingLinger()
+        } else if shownKeys.contains("typing"), typingLingerUntil == nil {
+            typingLingerUntil = Date().addingTimeInterval(Self.typingLinger)
+            typingLingerTimer = Timer.scheduledTimer(withTimeInterval: Self.typingLinger, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.endTypingLinger()
+                    self?.reload()
+                }
+            }
+        }
+    }
+
+    private func endTypingLinger() {
+        typingLingerTimer?.invalidate()
+        typingLingerTimer = nil
+        typingLingerUntil = nil
+    }
+
+    /// The typing bubble's cell, if it's on screen.
+    private func typingCellOnScreen() -> MessageCellView? {
+        guard let row = rows.firstIndex(where: { if case .typing = $0 { return true }; return false }) else { return nil }
+        let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? MessageCellView
+        return cell?.isTyping == true ? cell : nil
+    }
+
+    /// The message takes the typing bubble's row, in the same cell: the row gets the message's
+    /// height and the cell animates from typing to the message (see `transitionFromTyping`).
+    private func finishTypingTransition(at index: Int, into row: Row) {
+        guard index < rows.count, case .message(let message, let layout) = row,
+              let cell = tableView.view(atColumn: 0, row: index, makeIfNecessary: false) as? MessageCellView,
+              let typing = cell.typingBubble else {
+            CoreBridge.shared.log("Chat: typing → message without transition (cell not on screen)")
+            // Not on screen after all: just show it.
+            rows[index] = row
+            tableView.reloadData(forRowIndexes: IndexSet(integer: index), columnIndexes: IndexSet(integer: 0))
+            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integer: index))
+            return
+        }
+        rows[index] = row
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integer: index))
+        }
+        tableView.layoutSubtreeIfNeeded()
+        cell.delegate = self
+        CoreBridge.shared.log("Chat: typing → message transition (from \(typing.size.width)×\(typing.size.height))")
+        cell.transitionFromTyping(typing, to: message, layout: layout, store: store, duration: Self.typingTransition)
+        appearing[Self.appearanceKey(row) ?? ""] = nil
+        if let key = Self.appearanceKey(row) {
+            transitioning = (key, cell, Date().addingTimeInterval(Self.typingTransition + 0.1))
+        }
+    }
+
+    private static let typingTransition: TimeInterval = 0.35
+
+    /// The cell animating from typing to the message. Reloads (e.g. the read receipt right
+    /// after) get this same cell for its row until it's done; a new cell would cut it short.
+    private var transitioning: (key: String, cell: MessageCellView, until: Date)?
+
+    private func transitioningCell(for row: Row) -> MessageCellView? {
+        guard let transitioning, Date() < transitioning.until else {
+            self.transitioning = nil
+            return nil
+        }
+        return Self.appearanceKey(row) == transitioning.key ? transitioning.cell : nil
+    }
+
+    /// A message keeps its key when the server confirms it (its local echo's ID), so a sent
+    /// message animates once.
+    private static func appearanceKey(_ row: Row) -> String? {
+        switch row {
+        case .message(let message, _): message.pendingID ?? message.id
+        case .typing: "typing"
+        default: nil
+        }
+    }
+
+    /// The rows newly added at the end: a few at most (a burst is a load or sync, not arrivals),
+    /// in the chat that was already showing, outside search.
+    private static func appended(_ rows: [Row], after shown: Set<String>, sameChat: Bool) -> Set<String> {
+        guard sameChat, !shown.isEmpty else { return [] }
+        var keys: Set<String> = []
+        for row in rows.reversed() {
+            // Captions ("Sent", "Read") change with every receipt; they don't animate.
+            guard let key = appearanceKey(row) else { continue }
+            // The typing bubble stays last (it lingers), so a message arriving lands above it.
+            if case .typing = row {
+                if !shown.contains(key) { keys.insert(key) }
+                continue
+            }
+            if shown.contains(key) { break }
+            keys.insert(key)
+            if keys.count > 3 { return [] }
+        }
+        return keys
+    }
+
+    func tableView(_ tableView: NSTableView, didAdd rowView: NSTableRowView, forRow row: Int) {
+        guard !appearing.isEmpty, row < rows.count, let key = Self.appearanceKey(rows[row]),
+              let appearance = appearing.removeValue(forKey: key),
+              let cell = rowView.view(atColumn: 0) as? AppearingCell else { return }
+        // Once laid out, so it starts from the bubble's real geometry.
+        DispatchQueue.main.async {
+            switch appearance {
+            case .zoom: cell.appearingContent.animateAppearance()
+            }
+        }
     }
 
     /// A message to scroll to and select once it's loaded (from a clicked notification, a
@@ -580,9 +769,27 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         }
     }
 
-    private func scrollToBottom() {
+    private func scrollToBottom(animated: Bool = false) {
         guard !rows.isEmpty else { return }
-        tableView.scrollRowToVisible(rows.count - 1)
+        guard animated else {
+            tableView.scrollRowToVisible(rows.count - 1)
+            return
+        }
+        let clip = scrollView.contentView
+        // The last row just above the compose bar, which overlaps the bottom (content inset).
+        let insets = scrollView.contentInsets
+        let bottom = tableView.bounds.height + insets.bottom - clip.bounds.height
+        let origin = NSPoint(x: clip.bounds.origin.x, y: max(-insets.top, bottom))
+        guard abs(origin.y - clip.bounds.origin.y) > 0.5 else { return }
+        pinnedToBottomUntil = Date().addingTimeInterval(0.35)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.25
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            clip.animator().setBoundsOrigin(origin)
+        } completionHandler: { [weak self] in
+            guard let self else { return }
+            self.scrollView.reflectScrolledClipView(clip)
+        }
     }
 
     enum ScrollKey {
@@ -674,13 +881,20 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             cell.configure(maxWidth: bubbleMaxWidth)
             return cell
         case .message(let message, let layout):
-            let cell = reuse("Message", sizing: sizing, MessageCellView.init)
+            let cell = (sizing ? nil : transitioningCell(for: row)) ?? reuse("Message", sizing: sizing, MessageCellView.init)
             cell.delegate = self
             cell.configure(message, layout: layout, store: store)
             cell.isMessageSelected = !sizing && message.id == selectedMessageID
             return cell
         case .typing:
-            return reuse("Typing", sizing: sizing, TypingCellView.init)
+            // A message cell in its typing state, under its own identifier: there's one typing
+            // row, so it's the same cell across reloads and can turn into the message.
+            let cell = reuse("TypingMessage", sizing: sizing, MessageCellView.init)
+            var layout = MessageCellView.Layout()
+            layout.maxWidth = bubbleMaxWidth
+            layout.reserveAvatarSpace = threadID.flatMap { store.conversation($0) }?.isGroup ?? false
+            cell.configureTyping(layout: layout)
+            return cell
         }
     }
 
