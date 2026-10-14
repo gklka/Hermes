@@ -23,7 +23,6 @@ final class ChatStore {
     let threadReadEvents = PassthroughSubject<ThreadReadEvent, Never>()
 
     private(set) var connectionState: ConnectionState = .disconnected
-    private(set) var connectionError: String?
     private(set) var account: Account?
 
     /// Sorted by most recent activity.
@@ -54,6 +53,20 @@ final class ChatStore {
 
     // MARK: - Queries
 
+    /// Waits until the app is logged in with its chats loaded: a Shortcuts action, a
+    /// notification's button or a share can launch it. False if it isn't logged in by then.
+    func waitUntilReady(seconds: Int = 60) async -> Bool {
+        for _ in 0..<(seconds * 2) where account == nil || conversations.isEmpty {
+            do {
+                try await Task.sleep(for: .milliseconds(500))
+            } catch {
+                // Cancelled.
+                return false
+            }
+        }
+        return account != nil
+    }
+
     func conversation(_ id: String) -> Conversation? { conversationsByID[id] }
 
     func messages(in threadID: String) -> [ChatMessage] { messagesByThread[threadID] ?? [] }
@@ -70,8 +83,7 @@ final class ChatStore {
     // MARK: - Commands
 
     func start() {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        core.start(dataDirectory: support.appendingPathComponent("MessengerMac", isDirectory: true))
+        core.start(dataDirectory: AppData.folder)
     }
 
     func login(cookies: [String: String]) async throws {
@@ -99,7 +111,7 @@ final class ChatStore {
             conversationsByID = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
             resortConversations()
         } catch {
-            NSLog("threads.list failed: \(error)")
+            core.log("threads.list failed: \(error)")
         }
     }
 
@@ -134,10 +146,9 @@ final class ChatStore {
     /// them with the chat (a conversations change follows if they changed).
     func refreshTheme(_ threadID: String) {
         guard themesRefreshed.insert(threadID).inserted else { return }
-        struct Params: Encodable { let threadID: String }
         Task {
             do {
-                try await core.call("threads.refreshTheme", Params(threadID: threadID))
+                try await core.call("threads.refreshTheme", ThreadParams(threadID: threadID))
             } catch {
                 themesRefreshed.remove(threadID)
             }
@@ -161,10 +172,9 @@ final class ChatStore {
 
     /// The chat on facebook.com; Messenger's inbox for an encrypted chat whose web ID isn't known yet.
     func webURL(for threadID: String) async -> URL? {
-        struct Params: Encodable { let threadID: String }
         struct Result: Decodable { let path: String }
-        let path = (try? await core.call("web.threadPath", Params(threadID: threadID), as: Result.self).path) ?? ""
-        return URL(string: "https://www.facebook.com" + (path.isEmpty ? "/messages/" : path))
+        let path = (try? await core.call("web.threadPath", ThreadParams(threadID: threadID), as: Result.self).path) ?? ""
+        return Facebook.url(path.isEmpty ? "/messages/" : path)
     }
 
     // MARK: - Search
@@ -179,8 +189,7 @@ final class ChatStore {
     /// Fetches one page of older history from Messenger into the database (not into the
     /// loaded messages), so a search can find it.
     func fetchOlderForSearch(_ threadID: String) async -> FetchOlderResult? {
-        struct Params: Encodable { let threadID: String }
-        return try? await core.call("messages.fetchOlder", Params(threadID: threadID), as: FetchOlderResult.self)
+        try? await core.call("messages.fetchOlder", ThreadParams(threadID: threadID), as: FetchOlderResult.self)
     }
 
     /// The chat's newest stored messages, without fetching history or touching what the UI shows.
@@ -206,7 +215,7 @@ final class ChatStore {
             messagesByThread[threadID] = existing
             notify(.messages(threadID: threadID))
         } catch {
-            NSLog("messages.list failed: \(error)")
+            core.log("messages.list failed: \(error)")
         }
     }
 
@@ -228,7 +237,7 @@ final class ChatStore {
             do {
                 try await core.call("messages.send", TextParams(threadID: threadID, text: text, replyTo: replyTo))
             } catch {
-                NSLog("messages.send failed: \(error)")
+                core.log("messages.send failed: \(error)")
             }
         }
     }
@@ -248,22 +257,36 @@ final class ChatStore {
 
     /// Pass an empty emoji to remove your reaction.
     func react(to message: ChatMessage, with emoji: String) {
-        struct Params: Encodable { let threadID: String; let messageID: String; let emoji: String }
-        Task {
-            try? await core.call("messages.react", Params(threadID: message.threadID, messageID: message.id, emoji: emoji))
-        }
+        post("messages.react", MessageParams(message, emoji: emoji))
     }
 
     func edit(_ message: ChatMessage, text: String) async throws {
-        struct Params: Encodable { let threadID: String; let messageID: String; let text: String }
-        try await core.call("messages.edit", Params(threadID: message.threadID, messageID: message.id, text: text))
+        try await core.call("messages.edit", MessageParams(message, text: text))
     }
 
     func unsend(_ message: ChatMessage) {
-        struct Params: Encodable { let threadID: String; let messageID: String }
-        Task {
-            try? await core.call("messages.unsend", Params(threadID: message.threadID, messageID: message.id))
+        post("messages.unsend", MessageParams(message))
+    }
+
+    /// A request about one message.
+    private struct MessageParams: Encodable {
+        let threadID: String
+        let messageID: String
+        var emoji: String?
+        var text: String?
+
+        init(_ message: ChatMessage, emoji: String? = nil, text: String? = nil) {
+            threadID = message.threadID
+            messageID = message.id
+            self.emoji = emoji
+            self.text = text
         }
+    }
+
+    /// Sends a request the UI doesn't wait for (its result arrives as events). A failure is in
+    /// the core's log.
+    private func post(_ method: String, _ params: some Encodable) {
+        Task { try? await core.call(method, params) }
     }
 
     // MARK: - Unseen reactions
@@ -296,18 +319,17 @@ final class ChatStore {
     }
 
     func markRead(_ threadID: String) {
-        struct Params: Encodable { let threadID: String }
         markedUnread.remove(threadID)
         guard var conversation = conversationsByID[threadID], conversation.unreadCount > 0 else { return }
         conversation.unreadCount = 0
         conversationsByID[threadID] = conversation
         resortConversations()
-        Task { try? await core.call("threads.markRead", Params(threadID: threadID)) }
+        post("threads.markRead", ThreadParams(threadID: threadID))
     }
 
     func setTyping(_ isTyping: Bool, in threadID: String) {
         struct Params: Encodable { let threadID: String; let isTyping: Bool }
-        Task { try? await core.call("threads.typing", Params(threadID: threadID, isTyping: isTyping)) }
+        post("threads.typing", Params(threadID: threadID, isTyping: isTyping))
     }
 
     // MARK: - Chat list actions
@@ -323,17 +345,26 @@ final class ChatStore {
         markedUnread.remove(threadID)
     }
 
+    /// Mark as Read / Mark as Unread (the menus).
+    func toggleRead(_ conversation: Conversation) {
+        if conversation.unreadCount > 0 {
+            markRead(conversation.id)
+        } else {
+            setUnread(true, threadID: conversation.id)
+        }
+    }
+
     func setUnread(_ unread: Bool, threadID: String) {
         if unread {
             markedUnread.insert(threadID)
         } else {
             markedUnread.remove(threadID)
         }
-        Task { try? await core.call("threads.setUnread", ToggleParams(threadID: threadID, enabled: unread)) }
+        post("threads.setUnread", ToggleParams(threadID: threadID, enabled: unread))
     }
 
     func setMuted(_ muted: Bool, threadID: String) {
-        Task { try? await core.call("threads.mute", ToggleParams(threadID: threadID, enabled: muted)) }
+        post("threads.mute", ToggleParams(threadID: threadID, enabled: muted))
     }
 
     func deleteThread(_ threadID: String) async throws {
@@ -351,8 +382,7 @@ final class ChatStore {
 
     /// Starts receiving the contact's online status for a 1:1 chat.
     func subscribePresence(_ threadID: String) {
-        struct Params: Encodable { let threadID: String }
-        Task { try? await core.call("threads.subscribePresence", Params(threadID: threadID)) }
+        post("threads.subscribePresence", ThreadParams(threadID: threadID))
     }
 
     /// Files downloaded this session, by "messageID|attachmentID" (message events may predate the download).
@@ -392,7 +422,6 @@ final class ChatStore {
         case "state":
             guard let event = core.decodeEvent(StateEvent.self, from: payload) else { return }
             connectionState = event.state
-            connectionError = event.error
             if let account = event.account { self.account = account }
             notify(.connection)
 

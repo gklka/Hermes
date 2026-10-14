@@ -5,15 +5,15 @@ import UniformTypeIdentifiers
 
 /// Puts the chats (names and pictures) in Spotlight: type the app's name, Tab, then a chat's
 /// name. Choosing one opens the app on that chat (AppDelegate's
-/// `application(_:continue:restorationHandler:)`). On macOS 27 the messages go in too, as Siri
-/// entities.
+/// `application(_:continue:restorationHandler:)`). On macOS 27 the messages go in too, as App
+/// Intents entities (MessageEntity).
 final class SpotlightIndex {
     static let shared = SpotlightIndex()
 
     private static let domain = "chats"
     private let store = ChatStore.shared
     private var cancellable: AnyCancellable?
-    private var pending: Task<Void, Never>?
+    private let updates = Debouncer(delay: .seconds(2))
     /// What's indexed per chat (name, and whether it has a picture), to only re-index changes.
     private var indexed: [String: String] = [:]
     private var didClearOldItems = false
@@ -28,7 +28,7 @@ final class SpotlightIndex {
 
     /// After logging out, nothing of the account stays searchable.
     func clear() {
-        pending?.cancel()
+        updates.cancel()
         indexed = [:]
         indexedUpTo = [:]
         CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: [Self.domain]) { error in
@@ -39,14 +39,8 @@ final class SpotlightIndex {
         }
     }
 
-    /// Chat updates come in bursts while syncing; index once they settle.
     private func scheduleUpdate() {
-        pending?.cancel()
-        pending = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2))
-            guard !Task.isCancelled else { return }
-            await self?.update()
-        }
+        updates.schedule { [weak self] in await self?.update() }
     }
 
     private func update() async {
@@ -104,8 +98,8 @@ final class SpotlightIndex {
     /// Per chat, the newest message time already indexed.
     private var indexedUpTo: [String: Int64] = [:]
 
-    /// Messages as Siri entities (MessageEntity), like Messages does: the stored ones, then new
-    /// ones as chats update.
+    /// Messages as App Intents entities (MessageEntity), like Messages does: the stored ones,
+    /// then new ones as chats update.
     @available(macOS 27.0, *)
     private func indexMessages() async throws {
         let index = CSSearchableIndex.default()
@@ -132,7 +126,7 @@ final class SpotlightIndex {
         let attributes = CSSearchableItemAttributeSet(contentType: .content)
         attributes.title = conversation.name
         attributes.displayName = conversation.name
-        attributes.thumbnailData = picture.flatMap(thumbnail)
+        attributes.thumbnailData = picture.flatMap { thumbnail($0) }
         return CSSearchableItem(uniqueIdentifier: conversation.id, domainIdentifier: domain, attributeSet: attributes)
     }
 

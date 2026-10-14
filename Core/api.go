@@ -70,11 +70,10 @@ type apiAttachment struct {
 	Title      string `json:"title,omitempty"`
 }
 
-// Message statuses.
+// Message statuses. ("failed" is set by the app, when a send request fails.)
 const (
 	statusPending = "pending"
 	statusSent    = "sent"
-	statusFailed  = "failed"
 )
 
 type apiMessage struct {
@@ -91,9 +90,9 @@ type apiMessage struct {
 	Status      string          `json:"status"`
 	IsUnsent    bool            `json:"isUnsent"`
 	IsEdited    bool            `json:"isEdited"`
+	PendingID   string          `json:"pendingID,omitempty"`
 	// Earlier versions of an edited message (oldest first), as far as this app saw them.
 	PreviousTexts []string `json:"previousTexts,omitempty"`
-	PendingID   string          `json:"pendingID,omitempty"`
 }
 
 // apiReactionEvent is someone else reacting to one of your messages (the "reaction" event),
@@ -114,6 +113,53 @@ type apiThreadReadEvent struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
+// apiThreadRemovedEvent is a chat leaving the list (deleted, or moved to requests/spam).
+type apiThreadRemovedEvent struct {
+	ThreadID string `json:"threadID"`
+}
+
+// apiMessageRemovedEvent is a message deleted for everyone (not unsent: that's an update).
+type apiMessageRemovedEvent struct {
+	ThreadID  string `json:"threadID"`
+	MessageID string `json:"messageID"`
+}
+
+// apiPendingResolvedEvent is the outcome of a send: the local echo PendingID became the
+// message MessageID, or failed with Error.
+type apiPendingResolvedEvent struct {
+	ThreadID  string `json:"threadID"`
+	PendingID string `json:"pendingID"`
+	MessageID string `json:"messageID,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+type apiTypingEvent struct {
+	ThreadID string `json:"threadID"`
+	SenderID string `json:"senderID"`
+	IsTyping bool   `json:"isTyping"`
+}
+
+// apiPresenceEvent is a 1:1 contact's online status; LastSeen is 0 if they hide it.
+type apiPresenceEvent struct {
+	UserID   string `json:"userID"`
+	IsOnline bool   `json:"isOnline"`
+	LastSeen int64  `json:"lastSeen"`
+}
+
+// apiReadReceiptEvent is someone else reading the chat up to Timestamp.
+type apiReadReceiptEvent struct {
+	ThreadID  string `json:"threadID"`
+	ReaderID  string `json:"readerID"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+// apiMessagesPage is a page of a chat's messages (messages.list, .stored and .search), oldest
+// first; HasMore: there's more before it (in the database or on Messenger).
+type apiMessagesPage struct {
+	Messages []apiMessage `json:"messages"`
+	HasMore  bool         `json:"hasMore"`
+}
+
 // apiFetchOlderResult is messages.fetchOlder's result: how many messages one page of history
 // added, and whether Messenger has more.
 type apiFetchOlderResult struct {
@@ -125,6 +171,20 @@ type apiState struct {
 	State   string      `json:"state"`
 	Account *apiAccount `json:"account,omitempty"`
 	Error   string      `json:"error,omitempty"`
+}
+
+// apiThreadImportResult is web.importThreads' result: how many chats were stored, and the web
+// IDs of those whose user couldn't be determined (the app opens them to find out).
+type apiThreadImportResult struct {
+	Imported   int      `json:"imported"`
+	Unresolved []string `json:"unresolved"`
+}
+
+// apiMessageImportResult is web.importMessages' result: how many messages were stored, and
+// how many the web app couldn't decrypt yet (the history isn't restored with the PIN).
+type apiMessageImportResult struct {
+	Imported   int `json:"imported"`
+	Unrestored int `json:"unrestored"`
 }
 
 // Connection states.

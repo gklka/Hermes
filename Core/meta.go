@@ -8,66 +8,46 @@ import (
 	"go.mau.fi/mautrix-meta/pkg/messagix/table"
 )
 
-// changeSet collects what a table touched, so each thread/message is emitted once.
-type changeSet struct {
-	threads  map[string]bool
-	messages map[string]string // messageID → pendingID (may be empty)
-}
+// Messenger's sync groups: 1 holds regular chats, 95 end-to-end encrypted (and request) chats.
+const (
+	syncGroupMain      = 1
+	syncGroupEncrypted = 95
+)
 
-func newChangeSet() *changeSet {
-	return &changeSet{threads: map[string]bool{}, messages: map[string]string{}}
-}
-
-func (cs *changeSet) thread(id string)  { cs.threads[id] = true }
-func (cs *changeSet) message(id string) { cs.messages[id] = cs.messages[id] }
-
-func (c *Core) flush(cs *changeSet) {
-	self := c.selfID()
-	for id := range cs.threads {
-		if t := c.store.GetThread(id); t != nil {
-			if t.Visible() {
-				conv := c.store.Conversation(t, self)
-				emitEvent("thread", conv)
-				c.lookUpNames(t, conv)
-			} else {
-				// Also drops it from the list if it was just moved to requests/spam.
-				emitEvent("threadRemoved", map[string]string{"threadID": id})
-			}
-		}
-	}
-	for id, pendingID := range cs.messages {
-		m := c.store.GetMessage(id)
-		if m == nil {
-			continue
-		}
-		api := c.store.APIMessages([]*messageRow{m}, self)[0]
-		api.PendingID = pendingID
-		emitEvent("message", api)
-	}
-}
+func id64(v int64) string { return strconv.FormatInt(v, 10) }
 
 // MARK: - Hybrid (E2EE) thread mapping
 
 // Some threads exist under a Facebook thread key and a WhatsApp-style JID. Everything is
 // stored under the JID once a mapping is known.
-var threadMapLock sync.Mutex
-var threadMap = map[int64]string{}
+var (
+	threadMapLock sync.Mutex
+	threadMap     = map[int64]string{}
+)
 
 func (c *Core) setThreadMapping(fbKey int64, jidUser int64) {
 	threadMapLock.Lock()
-	threadMap[fbKey] = strconv.FormatInt(jidUser, 10)
+	threadMap[fbKey] = id64(jidUser)
 	threadMapLock.Unlock()
-	c.store.Set("map:"+strconv.FormatInt(fbKey, 10), strconv.FormatInt(jidUser, 10))
+	c.store.Set(kvThreadMap+id64(fbKey), id64(jidUser))
 }
 
+// forgetThreadMappings drops the cached mappings (at logout: they belong to the account).
+func forgetThreadMappings() {
+	threadMapLock.Lock()
+	threadMap = map[int64]string{}
+	threadMapLock.Unlock()
+}
+
+// threadID is the ID a Facebook thread key is stored under.
 func (c *Core) threadID(fbKey int64) string {
 	threadMapLock.Lock()
 	defer threadMapLock.Unlock()
 	if id, ok := threadMap[fbKey]; ok {
 		return id
 	}
-	key := strconv.FormatInt(fbKey, 10)
-	if id := c.store.Get("map:" + key); id != "" {
+	key := id64(fbKey)
+	if id := c.store.Get(kvThreadMap + key); id != "" {
 		threadMap[fbKey] = id
 		return id
 	}
@@ -87,9 +67,7 @@ func (c *Core) fbThreadKey(threadID string) int64 {
 
 // MARK: - Table handling
 
-func id64(v int64) string { return strconv.FormatInt(v, 10) }
-
-// logTableSummary logs which LightSpeed tables arrived and the thread rows in them (debugging aid).
+// logTableSummary logs which LightSpeed tables arrived and how many rows each has.
 func (c *Core) logTableSummary(tbl *table.LSTable) {
 	counts := map[string]int{}
 	v := reflect.ValueOf(tbl).Elem()
@@ -99,28 +77,39 @@ func (c *Core) logTableSummary(tbl *table.LSTable) {
 		}
 	}
 	c.log.Debug().Any("tables", counts).Msg("LS table")
-	for _, t := range tbl.LSDeleteThenInsertThread {
-		c.log.Debug().Int64("key", t.ThreadKey).Int64("type", int64(t.ThreadType)).Str("folder", t.FolderName).
-			Int64("activity", t.LastActivityTimestampMs).Bool("has_snippet", t.Snippet != "").Msg("LS thread (full)")
-	}
-	for _, t := range tbl.LSUpdateOrInsertThread {
-		c.log.Debug().Int64("key", t.ThreadKey).Int64("type", int64(t.ThreadType)).Str("folder", t.FolderName).
-			Int64("activity", t.LastActivityTimestampMs).Bool("has_snippet", t.Snippet != "").Msg("LS thread (partial)")
-	}
-	for _, t := range tbl.LSVerifyThreadExists {
-		c.log.Debug().Int64("key", t.ThreadKey).Int64("type", int64(t.ThreadType)).Str("folder", t.FolderName).Msg("LS thread (verify)")
-	}
-	for _, h := range tbl.LSVerifyHybridThreadExists {
-		c.log.Debug().Int64("key", h.ThreadKey).Int64("jid", h.ThreadJID).Int64("type", int64(h.ThreadType)).
-			Int64("activity", h.LastActivityTimestampMS).Msg("LS hybrid thread")
-	}
 }
 
+// handleTable stores a LightSpeed table (a sync update or a task's response) and sends what
+// changed to the app.
 func (c *Core) handleTable(tbl *table.LSTable) {
 	c.logTableSummary(tbl)
 	cs := newChangeSet()
-	self := c.selfID()
+	c.handleThreadTables(tbl, cs)
+	c.handleMessageTables(tbl, cs)
+	c.handleReadTables(tbl, cs)
 
+	for _, t := range tbl.LSUpdateTypingIndicator {
+		emitEvent("typing", apiTypingEvent{ThreadID: c.threadID(t.ThreadKey), SenderID: id64(t.SenderId), IsTyping: t.IsTyping})
+	}
+
+	// Results of our own sends
+	for _, r := range tbl.LSReplaceOptimsiticMessage {
+		c.resolvePending(r.OfflineThreadingId, r.MessageId, "")
+	}
+	for _, f := range tbl.LSMarkOptimisticMessageFailed {
+		c.resolvePending(f.OTID, "", f.Message)
+	}
+	for _, f := range tbl.LSHandleFailedTask {
+		if f.OTID != "" {
+			c.resolvePending(f.OTID, "", f.Message)
+		}
+	}
+
+	c.flushWithPending(cs)
+}
+
+// handleThreadTables stores contacts, chats and their participants.
+func (c *Core) handleThreadTables(tbl *table.LSTable, cs *changeSet) {
 	for _, m := range tbl.LSUpdateThreadAuthorityAndMappingWithOTIDFromJID {
 		c.mapThread(m.ThreadKey, m.ThreadJID, 0, cs)
 	}
@@ -136,12 +125,11 @@ func (c *Core) handleTable(tbl *table.LSTable) {
 		c.store.UpsertContact(id64(ct.ContactId), ct.Name, ct.ProfilePictureUrl)
 	}
 
-	// Threads
 	for _, t := range tbl.LSDeleteThenInsertThread {
 		c.putThread(t.ThreadKey, t.ThreadType, t.ThreadName, t.ThreadPictureUrl, t.Snippet, t.SnippetSenderContactId,
 			t.LastActivityTimestampMs, t.LastReadWatermarkTimestampMs, t.FolderName, t.MuteExpireTimeMs, cs)
 		// The unencrypted chat an encrypted one replaced keeps its old theme.
-		if t.FolderName != "e2ee_cutover" {
+		if t.FolderName != folderE2EECutover {
 			c.noteTheme(c.threadID(t.ThreadKey), t.ThemeFbid, t.CustomEmoji)
 		}
 	}
@@ -149,31 +137,29 @@ func (c *Core) handleTable(tbl *table.LSTable) {
 		c.putThread(t.ThreadKey, t.ThreadType, t.ThreadName, t.ThreadPictureUrl, t.Snippet, t.SnippetSenderContactId,
 			t.LastActivityTimestampMs, t.LastReadWatermarkTimestampMs, t.FolderName, t.MuteExpireTimeMs, cs)
 		// Partial rows may leave the theme out.
-		if t.ThemeFbid != 0 && t.FolderName != "e2ee_cutover" {
+		if t.ThemeFbid != 0 && t.FolderName != folderE2EECutover {
 			c.noteTheme(c.threadID(t.ThreadKey), t.ThemeFbid, t.CustomEmoji)
 		}
 	}
 	for _, t := range tbl.LSVerifyThreadExists {
-		id := c.threadID(t.ThreadKey)
-		c.store.EnsureThread(id, t.ThreadType, t.FolderName)
+		c.store.EnsureThread(c.threadID(t.ThreadKey), t.ThreadType, t.FolderName)
 	}
 	// Someone changed the chat's theme (Unknown1 is the new theme's ID). Encrypted chats are
 	// named by their web ID here.
 	for _, t := range tbl.LSUpdateThreadTheme {
 		id := c.threadID(t.ThreadKey)
-		if userID := c.store.Get("webmap:" + id); userID != "" {
+		if userID := c.store.Get(kvWebMap + id); userID != "" {
 			id = userID
 		}
-		c.log.Debug().Str("thread_id", id).Any("update", t).Msg("Theme changed")
+		c.log.Debug().Str("thread_id", id).Int64("theme", t.Unknown1).Msg("Theme changed")
 		if t.Unknown1 != 0 {
-			c.noteTheme(id, t.Unknown1, c.store.Get("emoji:"+id))
+			c.noteTheme(id, t.Unknown1, c.store.Get(kvEmoji+id))
 		}
 	}
 	for _, t := range tbl.LSDeleteThread {
 		id := c.threadID(t.ThreadKey)
-		c.store.DeleteThread(id)
 		delete(cs.threads, id)
-		emitEvent("threadRemoved", map[string]string{"threadID": id})
+		c.removeThread(id)
 	}
 	for _, t := range tbl.LSMoveThreadToE2EECutoverFolder {
 		id := c.threadID(t.ThreadKey)
@@ -201,7 +187,6 @@ func (c *Core) handleTable(tbl *table.LSTable) {
 		cs.thread(id)
 	}
 
-	// Participants
 	for _, p := range tbl.LSAddParticipantIdToGroupThread {
 		id := c.threadID(p.ThreadKey)
 		c.store.AddParticipant(id, id64(p.ContactId), p.Nickname, p.ReadWatermarkTimestampMs)
@@ -212,43 +197,40 @@ func (c *Core) handleTable(tbl *table.LSTable) {
 		c.store.RemoveParticipant(id, id64(p.ParticipantId))
 		cs.thread(id)
 	}
+}
 
-	// Messages
+// handleMessageTables stores messages, their edits, deletions and reactions.
+func (c *Core) handleMessageTables(tbl *table.LSTable, cs *changeSet) {
 	upserts, inserts := tbl.WrapMessages()
 	for _, um := range upserts {
 		for _, m := range um.Messages {
 			c.storeFBMessage(m, cs)
 		}
 		if um.Range != nil {
-			id := c.threadID(um.Range.ThreadKey)
-			c.store.SetThreadHasMoreBefore(id, um.Range.HasMoreBefore)
+			c.store.SetThreadHasMoreBefore(c.threadID(um.Range.ThreadKey), um.Range.HasMoreBefore)
 		}
 	}
 	for _, m := range inserts {
 		c.storeFBMessage(m, cs)
 		id := c.threadID(m.ThreadKey)
-		c.store.BumpThread(id, m.TimestampMs, snippetFor(m.Text, len(m.BlobAttachments)+len(m.Attachments)+len(m.Stickers) > 0), id64(m.SenderId))
+		hasAttachment := len(m.BlobAttachments)+len(m.Attachments)+len(m.Stickers) > 0
+		c.store.BumpThread(id, m.TimestampMs, snippetFor(m.Text, hasAttachment), id64(m.SenderId))
 		cs.thread(id)
 	}
 	for _, m := range tbl.LSDeleteThenInsertMessage {
 		if m.IsUnsent {
-			c.store.UnsendMessage(m.MessageId)
-			cs.message(m.MessageId)
+			c.applyUnsend(cs, m.MessageId)
 		}
 	}
 	for _, e := range tbl.LSEditMessage {
-		if threadID := c.store.EditMessage(e.MessageID, e.Text); threadID != "" {
-			cs.thread(threadID)
-		}
-		cs.message(e.MessageID)
+		c.applyEdit(cs, e.MessageID, e.Text)
 	}
 	for _, d := range tbl.LSDeleteMessage {
 		c.store.DeleteMessage(d.MessageId)
 		delete(cs.messages, d.MessageId)
-		emitEvent("messageRemoved", map[string]string{"threadID": c.threadID(d.ThreadKey), "messageID": d.MessageId})
+		emitEvent("messageRemoved", apiMessageRemovedEvent{ThreadID: c.threadID(d.ThreadKey), MessageID: d.MessageId})
 	}
 
-	// Reactions
 	for _, r := range tbl.LSUpsertReaction {
 		c.setReaction(r.MessageId, id64(r.ActorId), r.Reaction, r.TimestampMs)
 		cs.message(r.MessageId)
@@ -257,69 +239,46 @@ func (c *Core) handleTable(tbl *table.LSTable) {
 		c.store.SetReaction(r.MessageId, id64(r.ActorId), "")
 		cs.message(r.MessageId)
 	}
+}
 
-	// Read receipts
+// handleReadTables stores read receipts: others', and ours from this or another device.
+func (c *Core) handleReadTables(tbl *table.LSTable, cs *changeSet) {
+	self := c.selfID()
 	for _, r := range tbl.LSUpdateReadReceipt {
 		id := c.threadID(r.ThreadKey)
 		reader := id64(r.ContactId)
 		c.store.SetReadWatermark(id, reader, r.ReadWatermarkTimestampMs)
 		if reader != self {
-			emitEvent("readReceipt", map[string]any{"threadID": id, "readerID": reader, "timestamp": r.ReadWatermarkTimestampMs})
+			emitEvent("readReceipt", apiReadReceiptEvent{ThreadID: id, ReaderID: reader, Timestamp: r.ReadWatermarkTimestampMs})
 		} else {
 			// Our own receipt: the chat was read on another device (Messenger sends this, not
 			// LSMarkThreadRead, for reads elsewhere).
-			c.log.Info().Str("thread", id).Int64("ts", r.ReadWatermarkTimestampMs).Msg("Read on another device (LSUpdateReadReceipt)")
+			c.log.Debug().Str("thread", id).Int64("ts", r.ReadWatermarkTimestampMs).Msg("Read on another device (LSUpdateReadReceipt)")
 			c.applyRead(cs, id, r.ReadWatermarkTimestampMs)
 		}
 	}
-	// Read here or on another device.
 	for _, r := range tbl.LSMarkThreadRead {
-		id := c.threadID(r.ThreadKey)
-		c.log.Info().Str("thread", id).Int64("ts", r.LastReadWatermarkTimestampMs).Msg("Read (LSMarkThreadRead)")
-		c.applyRead(cs, id, r.LastReadWatermarkTimestampMs)
+		c.applyRead(cs, c.threadID(r.ThreadKey), r.LastReadWatermarkTimestampMs)
 	}
 	for _, r := range tbl.LSMarkThreadReadV2 {
-		id := c.threadID(r.ThreadKey)
-		c.log.Info().Str("thread", id).Int64("ts", r.LastReadWatermarkTimestampMs).Msg("Read (LSMarkThreadReadV2)")
-		c.applyRead(cs, id, r.LastReadWatermarkTimestampMs)
+		c.applyRead(cs, c.threadID(r.ThreadKey), r.LastReadWatermarkTimestampMs)
 	}
-
-	// Typing
-	for _, t := range tbl.LSUpdateTypingIndicator {
-		emitEvent("typing", map[string]any{"threadID": c.threadID(t.ThreadKey), "senderID": id64(t.SenderId), "isTyping": t.IsTyping})
-	}
-
-	// Results of our own sends
-	for _, r := range tbl.LSReplaceOptimsiticMessage {
-		c.resolvePending(r.OfflineThreadingId, r.MessageId, "")
-	}
-	for _, f := range tbl.LSMarkOptimisticMessageFailed {
-		c.resolvePending(f.OTID, "", f.Message)
-	}
-	for _, f := range tbl.LSHandleFailedTask {
-		if f.OTID != "" {
-			c.resolvePending(f.OTID, "", f.Message)
-		}
-	}
-
-	c.flushWithPending(cs)
 }
 
+// mapThread records that a Facebook thread is the encrypted chat jid, moving the chat under
+// the JID.
 func (c *Core) mapThread(fbKey, jid int64, threadType table.ThreadType, cs *changeSet) {
 	jidID := id64(jid)
 	c.setThreadMapping(fbKey, jid)
 	if threadType == 0 {
-		c.store.EnsureThread(jidID, table.ENCRYPTED_OVER_WA_ONE_TO_ONE, "inbox")
+		c.store.EnsureThread(jidID, table.ENCRYPTED_OVER_WA_ONE_TO_ONE, folderInbox)
 	} else {
-		c.store.EnsureThread(jidID, threadType, "inbox")
+		c.store.EnsureThread(jidID, threadType, folderInbox)
 		c.store.SetThreadType(jidID, threadType)
 	}
 	c.store.SetThreadFBKey(jidID, id64(fbKey))
-	if fbID := id64(fbKey); fbID != jidID {
-		if c.store.GetThread(fbID) != nil {
-			c.store.DeleteThread(fbID)
-			emitEvent("threadRemoved", map[string]string{"threadID": fbID})
-		}
+	if fbID := id64(fbKey); fbID != jidID && c.store.GetThread(fbID) != nil {
+		c.removeThread(fbID)
 	}
 	cs.thread(jidID)
 }
@@ -332,11 +291,11 @@ func (c *Core) putThread(key int64, threadType table.ThreadType, name, picture, 
 	if existing != nil && existing.Type.IsWhatsApp() && !threadType.IsWhatsApp() {
 		threadType = existing.Type
 	}
-	if folder == "e2ee_cutover" && threadType == table.ONE_TO_ONE {
+	if folder == folderE2EECutover && threadType == table.ONE_TO_ONE {
 		threadType = table.ENCRYPTED_OVER_WA_ONE_TO_ONE
 	}
 	if folder == "" {
-		folder = "inbox"
+		folder = folderInbox
 	}
 	fbKey := ""
 	if existing != nil {
@@ -356,14 +315,16 @@ func (c *Core) putThread(key int64, threadType table.ThreadType, name, picture, 
 	cs.thread(id)
 }
 
+// The big like, sent as one of these stickers; stored as a 👍 text instead.
 var thumbsUpStickers = map[int64]bool{369239263222822: true, 369239343222814: true, 369239383222810: true}
 
 func (c *Core) storeFBMessage(m *table.WrappedMessage, cs *changeSet) {
 	if m == nil || m.LSInsertMessage == nil || m.MessageId == "" {
 		return
 	}
+	isThumbsUp := thumbsUpStickers[m.StickerId]
 	text := m.Text
-	if thumbsUpStickers[m.StickerId] {
+	if isThumbsUp {
 		text = "👍"
 	}
 	row := &messageRow{
@@ -377,56 +338,49 @@ func (c *Core) storeFBMessage(m *table.WrappedMessage, cs *changeSet) {
 		OTID:      m.OfflineThreadingId,
 	}
 	if m.ReplySourceId != "" {
-		replyText := m.ReplyMessageText
-		if replyText == "" {
-			replyText = m.ReplySnippet
-		}
-		row.ReplyTo = &apiReply{MessageID: m.ReplySourceId, Text: replyText}
+		row.ReplyTo = &apiReply{MessageID: m.ReplySourceId, Text: firstNonEmpty(m.ReplyMessageText, m.ReplySnippet)}
 		if m.ReplyToUserId != 0 {
 			row.ReplyTo.SenderID = id64(m.ReplyToUserId)
 		}
 	}
 
 	seen := map[string]bool{}
-	add := func(a storedAttachment) {
+	add := func(a apiAttachment) {
 		if a.ID == "" || seen[a.ID] {
 			return
 		}
 		seen[a.ID] = true
-		row.Attachments = append(row.Attachments, a)
+		row.Attachments = append(row.Attachments, storedAttachment{apiAttachment: a})
 	}
 	for _, b := range m.BlobAttachments {
-		add(storedAttachment{apiAttachment: mediaAttachment(b.AttachmentFbid, b.AttachmentType, b.PlayableUrl, b.PreviewUrl,
-			int(b.PreviewWidth), int(b.PreviewHeight), b.Filename, firstNonEmpty(b.PlayableUrlMimeType, b.AttachmentMimeType, b.PreviewUrlMimeType))})
+		add(mediaAttachment(b.AttachmentFbid, b.AttachmentType, b.PlayableUrl, b.PreviewUrl,
+			int(b.PreviewWidth), int(b.PreviewHeight), b.Filename, firstNonEmpty(b.PlayableUrlMimeType, b.AttachmentMimeType, b.PreviewUrlMimeType)))
 	}
 	for _, b := range m.Attachments {
-		add(storedAttachment{apiAttachment: mediaAttachment(b.AttachmentFbid, b.AttachmentType, b.PlayableUrl, b.PreviewUrl,
-			int(b.PreviewWidth), int(b.PreviewHeight), b.Filename, firstNonEmpty(b.PlayableUrlMimeType, b.AttachmentMimeType, b.PreviewUrlMimeType))})
+		add(mediaAttachment(b.AttachmentFbid, b.AttachmentType, b.PlayableUrl, b.PreviewUrl,
+			int(b.PreviewWidth), int(b.PreviewHeight), b.Filename, firstNonEmpty(b.PlayableUrlMimeType, b.AttachmentMimeType, b.PreviewUrlMimeType)))
 	}
-	for _, s := range m.Stickers {
-		if thumbsUpStickers[m.StickerId] {
-			continue
+	if !isThumbsUp {
+		for _, s := range m.Stickers {
+			add(apiAttachment{
+				ID: s.AttachmentFbid, Kind: kindSticker, URL: firstNonEmpty(s.PreviewUrl, s.ImageUrl),
+				Width: int(s.PreviewWidth), Height: int(s.PreviewHeight), MimeType: s.PreviewUrlMimeType,
+			})
 		}
-		add(storedAttachment{apiAttachment: apiAttachment{
-			ID: s.AttachmentFbid, Kind: kindSticker, URL: firstNonEmpty(s.PreviewUrl, s.ImageUrl),
-			Width: int(s.PreviewWidth), Height: int(s.PreviewHeight), MimeType: s.PreviewUrlMimeType,
-		}})
 	}
 	for _, x := range m.XMAAttachments {
-		add(storedAttachment{apiAttachment: apiAttachment{
+		add(apiAttachment{
 			ID: x.AttachmentFbid, Kind: kindLink, URL: x.ActionUrl, PreviewURL: x.PreviewUrl,
 			Width: int(x.PreviewWidth), Height: int(x.PreviewHeight), Title: firstNonEmpty(x.TitleText, x.SubtitleText),
-		}})
+		})
 	}
 
 	if existing := c.store.GetMessage(row.ID); existing != nil {
 		// Keep downloaded files and the edited flag.
 		row.IsEdited = existing.IsEdited
 		for i := range row.Attachments {
-			for _, old := range existing.Attachments {
-				if old.ID == row.Attachments[i].ID {
-					row.Attachments[i].LocalPath = old.LocalPath
-				}
+			if old := existing.attachment(row.Attachments[i].ID); old != nil {
+				row.Attachments[i].LocalPath = old.LocalPath
 			}
 		}
 	}
@@ -456,6 +410,7 @@ func mediaAttachment(id string, attachmentType table.AttachmentType, playable, p
 	return a
 }
 
+// snippetFor is the chat list's preview of a message.
 func snippetFor(text string, hasAttachment bool) string {
 	if text == "" && hasAttachment {
 		return "Attachment"
@@ -470,47 +425,4 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-// MARK: - Pending (optimistic) sends
-
-func (c *Core) addPending(otid, threadID, pendingID string) {
-	c.pendingLock.Lock()
-	c.pending[otid] = pendingSend{threadID: threadID, pendingID: pendingID}
-	c.pendingLock.Unlock()
-}
-
-func (c *Core) resolvePending(otid, messageID, errMsg string) {
-	c.pendingLock.Lock()
-	p, ok := c.pending[otid]
-	if ok && errMsg != "" {
-		delete(c.pending, otid)
-	}
-	c.pendingLock.Unlock()
-	if !ok {
-		return
-	}
-	evt := map[string]any{"threadID": p.threadID, "pendingID": p.pendingID}
-	if messageID != "" {
-		evt["messageID"] = messageID
-	}
-	if errMsg != "" {
-		evt["error"] = errMsg
-	}
-	emitEvent("pendingResolved", evt)
-}
-
-// flushWithPending emits changes, tagging confirmed outgoing messages with their local echo ID.
-func (c *Core) flushWithPending(cs *changeSet) {
-	c.pendingLock.Lock()
-	for id := range cs.messages {
-		if m := c.store.GetMessage(id); m != nil && m.OTID != "" {
-			if p, ok := c.pending[m.OTID]; ok {
-				cs.messages[id] = p.pendingID
-				delete(c.pending, m.OTID)
-			}
-		}
-	}
-	c.pendingLock.Unlock()
-	c.flush(cs)
 }

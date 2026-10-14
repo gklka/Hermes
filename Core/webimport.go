@@ -93,7 +93,7 @@ func parseAge(label string) (age, unit time.Duration, ok bool) {
 // importWebThreads merges encrypted chats from the web app's chat list (in list order, newest
 // first). Rows whose user can't be determined are returned so the app can resolve them by
 // opening the chat.
-func (c *Core) importWebThreads(rows []webThreadRow) map[string]any {
+func (c *Core) importWebThreads(rows []webThreadRow) apiThreadImportResult {
 	self := c.selfID()
 	now := time.Now().UnixMilli()
 
@@ -124,7 +124,7 @@ func (c *Core) importWebThreads(rows []webThreadRow) map[string]any {
 	for i, r := range rows {
 		userID := r.UserID
 		if userID == "" {
-			userID = c.store.Get("webmap:" + r.WebID)
+			userID = c.store.Get(kvWebMap + r.WebID)
 		}
 		if userID == "" {
 			userID = c.store.ContactByAvatarKey(avatarKey(r.AvatarURL))
@@ -133,8 +133,8 @@ func (c *Core) importWebThreads(rows []webThreadRow) map[string]any {
 			unresolved = append(unresolved, r.WebID)
 			continue
 		}
-		c.store.Set("webmap:"+r.WebID, userID)
-		c.store.Set("webid:"+userID, r.WebID)
+		c.store.Set(kvWebMap+r.WebID, userID)
+		c.store.Set(kvWebID+userID, r.WebID)
 
 		ts := prevTs - 1
 		if age, _, ok := parseAge(r.Age); ok {
@@ -151,11 +151,10 @@ func (c *Core) importWebThreads(rows []webThreadRow) map[string]any {
 		if c.store.ContactName(userID) == "" {
 			c.store.UpsertContact(userID, r.Name, "")
 		}
-		c.store.EnsureThread(userID, table.ENCRYPTED_OVER_WA_ONE_TO_ONE, "inbox")
+		c.store.EnsureEncryptedDirectThread(userID, self)
+		// An existing row may be the old unencrypted chat, or in another folder.
 		c.store.SetThreadType(userID, table.ENCRYPTED_OVER_WA_ONE_TO_ONE)
-		c.store.SetThreadFolder(userID, "inbox")
-		c.store.AddParticipant(userID, self, "", 0)
-		c.store.AddParticipant(userID, userID, "", 0)
+		c.store.SetThreadFolder(userID, folderInbox)
 		if latest := c.store.ListMessages(userID, 0, 1); len(latest) == 1 && latest[0].Timestamp >= earliest[i] {
 			// Our newest message is the one shown: use its exact time and text (this also undoes
 			// an earlier guess that put the chat later than it is).
@@ -170,7 +169,7 @@ func (c *Core) importWebThreads(rows []webThreadRow) map[string]any {
 	}
 	c.flush(cs)
 	c.log.Info().Int("rows", len(rows)).Int("imported", imported).Int("unresolved", len(unresolved)).Msg("Imported web chat list")
-	return map[string]any{"imported": imported, "unresolved": unresolved}
+	return apiThreadImportResult{Imported: imported, Unresolved: unresolved}
 }
 
 // MARK: - Message history
@@ -184,9 +183,9 @@ type webImage struct {
 
 type webMessage struct {
 	// The web app's data-message-id: "<chat user>@msgr.<message ID>".
-	DOMID  string     `json:"domID"`
-	FromMe bool       `json:"fromMe"`
-	Text   string     `json:"text"`
+	DOMID     string        `json:"domID"`
+	FromMe    bool          `json:"fromMe"`
+	Text      string        `json:"text"`
 	Images    []webImage    `json:"images"`
 	Links     []webLink     `json:"links"`
 	Reactions []webReaction `json:"reactions"`
@@ -317,7 +316,7 @@ func repeatedTexts(messages []webMessage) map[string]bool {
 // importWebMessages stores decrypted history read from the web app for a 1:1 encrypted chat.
 // Messages the live connection already delivered are left alone, except placeholders stored
 // before the history was restored, which are replaced with the real message.
-func (c *Core) importWebMessages(threadID string, messages []webMessage) map[string]any {
+func (c *Core) importWebMessages(threadID string, messages []webMessage) apiMessageImportResult {
 	self := c.selfID()
 	cs := newChangeSet()
 	imported := 0
@@ -406,7 +405,7 @@ func (c *Core) importWebMessages(threadID string, messages []webMessage) map[str
 	}
 	c.flush(cs)
 	c.log.Info().Str("thread_id", threadID).Int("received", len(messages)).Int("imported", imported).Int("unrestored", unrestored).Msg("Imported web message history")
-	return map[string]any{"imported": imported, "unrestored": unrestored}
+	return apiMessageImportResult{Imported: imported, Unrestored: unrestored}
 }
 
 func (c *Core) saveWebImage(messageID string, index int, img webImage) (string, error) {
@@ -414,14 +413,14 @@ func (c *Core) saveWebImage(messageID string, index int, img webImage) (string, 
 	if err != nil {
 		return "", err
 	}
-	path := filepath.Join(c.dataDir, "media", fmt.Sprintf("%s-web%d%s", messageID, index, extensionFor(img.MimeType)))
+	path := filepath.Join(c.mediaDir(), fmt.Sprintf("%s-web%d%s", messageID, index, extensionFor(img.MimeType)))
 	return path, os.WriteFile(path, data, 0o600)
 }
 
 // webThreadPath is where the web app shows a chat, or "" if the encrypted chat's web ID isn't known yet.
 func (c *Core) webThreadPath(threadID string) string {
 	if t := c.store.GetThread(threadID); t != nil && t.Type.IsWhatsApp() {
-		if webID := c.store.Get("webid:" + threadID); webID != "" {
+		if webID := c.store.Get(kvWebID + threadID); webID != "" {
 			return "/messages/e2ee/t/" + webID + "/"
 		}
 		return ""

@@ -3,10 +3,12 @@ package main
 import (
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
+
+	waTypes "go.mau.fi/whatsmeow/types"
 
 	"go.mau.fi/mautrix-meta/pkg/messagix/table"
 	_ "modernc.org/sqlite"
@@ -98,6 +100,25 @@ func (s *Store) Wipe() error {
 
 // MARK: - Key/value
 
+// Keys in the kv table.
+const (
+	kvCookies    = "cookies"
+	kvAccount    = "account"
+	kvWADeviceID = "wa_device_id"
+)
+
+// Key prefixes in the kv table, each followed by an ID.
+const (
+	kvThreadMap   = "map:"         // Facebook thread key → the encrypted chat's ID
+	kvWebMap      = "webmap:"      // web app chat ID → user ID (encrypted 1:1 chats)
+	kvWebID       = "webid:"       // user ID → web app chat ID
+	kvColors      = "colors:"      // chat → custom bubble colors, comma separated
+	kvEmoji       = "emoji:"       // chat → custom quick reaction
+	kvUnread      = "unread:"      // chat → when it was marked unread here (ms)
+	kvEdits       = "edits:"       // message → its texts before edits (JSON, oldest first)
+	kvThemeColors = "themecolors:" // theme ID → its colors, or "default"
+)
+
 func (s *Store) Get(key string) string {
 	var value string
 	_ = s.db.QueryRow(`SELECT value FROM kv WHERE key=?`, key).Scan(&value)
@@ -152,6 +173,13 @@ func (s *Store) ContactName(id string) string {
 
 // MARK: - Threads
 
+// Thread folders, as Messenger names them.
+const (
+	folderInbox       = "inbox"
+	folderE2EECutover = "e2ee_cutover" // the unencrypted chat an encrypted one replaced
+	folderRequests    = "pending"      // message requests
+)
+
 type threadRow struct {
 	ID              string
 	FBKey           string
@@ -192,7 +220,7 @@ func (s *Store) PutThread(t *threadRow) {
 // EnsureThread creates a placeholder thread if it doesn't exist yet.
 func (s *Store) EnsureThread(id string, threadType table.ThreadType, folder string) {
 	if folder == "" {
-		folder = "inbox"
+		folder = folderInbox
 	}
 	_, _ = s.db.Exec(`INSERT INTO threads (id, thread_type, folder) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING`, id, threadType, folder)
 }
@@ -213,10 +241,19 @@ func (t *threadRow) Visible() bool {
 		return false
 	}
 	switch t.Folder {
-	case "inbox", "e2ee_cutover", "":
+	case folderInbox, folderE2EECutover, "":
 		return true
 	}
 	return false
+}
+
+// chatJID is the chat's address on the encrypted connection.
+func (t *threadRow) chatJID() waTypes.JID {
+	server := waTypes.MessengerServer
+	if t.Type == table.ENCRYPTED_OVER_WA_GROUP {
+		server = waTypes.GroupServer
+	}
+	return waTypes.JID{User: t.ID, Server: server}
 }
 
 func (s *Store) ListThreads() []*threadRow {
@@ -237,9 +274,19 @@ func (s *Store) ListThreads() []*threadRow {
 	return out
 }
 
+// DeleteThread forgets the chat (its messages and settings stay: the server also deletes and
+// re-sends chats, e.g. when one moves).
 func (s *Store) DeleteThread(id string) {
 	_, _ = s.db.Exec(`DELETE FROM threads WHERE id=?`, id)
 	_, _ = s.db.Exec(`DELETE FROM participants WHERE thread_id=?`, id)
+}
+
+// ForgetThreadSettings drops the chat's theme, quick reaction and "marked unread" (when you
+// delete the chat).
+func (s *Store) ForgetThreadSettings(id string) {
+	for _, prefix := range []string{kvColors, kvEmoji, kvUnread} {
+		s.Delete(prefix + id)
+	}
 }
 
 func (s *Store) SetThreadType(id string, threadType table.ThreadType) {
@@ -300,12 +347,28 @@ type participantRow struct {
 	ReadWatermark int64
 }
 
+// AddParticipant adds the person to the chat, or updates them, as the sync describes them (its
+// nickname is authoritative, also when cleared); the read watermark only moves on.
 func (s *Store) AddParticipant(threadID, userID, nickname string, readWatermark int64) {
 	_, _ = s.db.Exec(`
 		INSERT INTO participants (thread_id, user_id, nickname, read_watermark) VALUES (?, ?, ?, ?)
 		ON CONFLICT (thread_id, user_id) DO UPDATE SET
 			nickname=excluded.nickname, read_watermark=MAX(participants.read_watermark, excluded.read_watermark)
 	`, threadID, userID, nickname, readWatermark)
+}
+
+// EnsureParticipant adds the person to the chat if they aren't in it, leaving a known
+// participant (and their nickname) as is.
+func (s *Store) EnsureParticipant(threadID, userID string) {
+	_, _ = s.db.Exec(`INSERT OR IGNORE INTO participants (thread_id, user_id) VALUES (?, ?)`, threadID, userID)
+}
+
+// EnsureEncryptedDirectThread makes sure the encrypted 1:1 chat with the user exists (keyed by
+// their ID, like every 1:1 chat), with both of you in it.
+func (s *Store) EnsureEncryptedDirectThread(userID, selfID string) {
+	s.EnsureThread(userID, table.ENCRYPTED_OVER_WA_ONE_TO_ONE, folderInbox)
+	s.EnsureParticipant(userID, selfID)
+	s.EnsureParticipant(userID, userID)
 }
 
 // ThreadsWithParticipant lists the chats the person is in.
@@ -329,8 +392,14 @@ func (s *Store) RemoveParticipant(threadID, userID string) {
 	_, _ = s.db.Exec(`DELETE FROM participants WHERE thread_id=? AND user_id=?`, threadID, userID)
 }
 
+// SetReadWatermark moves the person's read position on (a read receipt), adding them to the
+// chat if needed; their nickname is kept.
 func (s *Store) SetReadWatermark(threadID, userID string, ts int64) {
-	s.AddParticipant(threadID, userID, "", ts)
+	_, _ = s.db.Exec(`
+		INSERT INTO participants (thread_id, user_id, read_watermark) VALUES (?, ?, ?)
+		ON CONFLICT (thread_id, user_id) DO UPDATE SET
+			read_watermark=MAX(participants.read_watermark, excluded.read_watermark)
+	`, threadID, userID, ts)
 }
 
 func (s *Store) Participants(threadID string) []participantRow {
@@ -433,10 +502,9 @@ func (s *Store) GetMessage(id string) *messageRow {
 	return m
 }
 
-// ListMessages returns up to `limit` messages older than `before` (ms; 0 = newest), oldest first.
-// AllMessages is every stored message of the chat, oldest first (for search).
-func (s *Store) AllMessages(threadID string) []*messageRow {
-	rows, err := s.db.Query(`SELECT `+messageColumns+` FROM messages WHERE thread_id=? ORDER BY timestamp`, threadID)
+// queryMessages runs a query selecting messageColumns.
+func (s *Store) queryMessages(query string, args ...any) []*messageRow {
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil
 	}
@@ -448,6 +516,11 @@ func (s *Store) AllMessages(threadID string) []*messageRow {
 		}
 	}
 	return out
+}
+
+// AllMessages is every stored message of the chat, oldest first (for search).
+func (s *Store) AllMessages(threadID string) []*messageRow {
+	return s.queryMessages(`SELECT `+messageColumns+` FROM messages WHERE thread_id=? ORDER BY timestamp`, threadID)
 }
 
 func (s *Store) MessageCount(threadID string) int {
@@ -464,54 +537,31 @@ func (s *Store) OldestMessage(threadID string) (int64, string) {
 	return ts, id
 }
 
+// ListMessages returns up to `limit` messages older than `before` (ms; 0 = newest), oldest first.
 func (s *Store) ListMessages(threadID string, before int64, limit int) []*messageRow {
 	if before <= 0 {
 		before = 1 << 62
 	}
-	rows, err := s.db.Query(`
+	out := s.queryMessages(`
 		SELECT `+messageColumns+` FROM messages
 		WHERE thread_id=? AND timestamp<?
 		ORDER BY timestamp DESC LIMIT ?`, threadID, before, limit)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	var out []*messageRow
-	for rows.Next() {
-		if m, err := scanMessage(rows); err == nil {
-			out = append(out, m)
-		}
-	}
-	// Reverse into chronological order.
-	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
-		out[i], out[j] = out[j], out[i]
-	}
+	slices.Reverse(out)
 	return out
 }
 
 // UnreadFromOthers returns messages from other people newer than the thread's read marker.
 func (s *Store) UnreadFromOthers(threadID, selfID string, since int64) []*messageRow {
-	rows, err := s.db.Query(`
+	return s.queryMessages(`
 		SELECT `+messageColumns+` FROM messages
 		WHERE thread_id=? AND sender_id<>? AND timestamp>? AND is_system=0
 		ORDER BY timestamp`, threadID, selfID, since)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	var out []*messageRow
-	for rows.Next() {
-		if m, err := scanMessage(rows); err == nil {
-			out = append(out, m)
-		}
-	}
-	return out
 }
 
 // PreviousTexts are a message's texts before its edits seen by this app, oldest first.
 func (s *Store) PreviousTexts(id string) []string {
 	var versions []string
-	if data := s.Get("edits:" + id); data != "" {
+	if data := s.Get(kvEdits + id); data != "" {
 		_ = json.Unmarshal([]byte(data), &versions)
 	}
 	return versions
@@ -526,7 +576,7 @@ func (s *Store) EditMessage(id, text string) string {
 		versions := s.PreviousTexts(id)
 		versions = append(versions, old)
 		data, _ := json.Marshal(versions)
-		s.Set("edits:"+id, string(data))
+		s.Set(kvEdits+id, string(data))
 	}
 	_, _ = s.db.Exec(`UPDATE messages SET text=?, is_edited=1 WHERE id=?`, text, id)
 	var threadID string
@@ -547,6 +597,17 @@ func (s *Store) UnsendMessage(id string) {
 func (s *Store) DeleteMessage(id string) {
 	_, _ = s.db.Exec(`DELETE FROM messages WHERE id=?`, id)
 	_, _ = s.db.Exec(`DELETE FROM reactions WHERE message_id=?`, id)
+	s.Delete(kvEdits + id)
+}
+
+// attachment is the message's attachment with the ID, or nil.
+func (m *messageRow) attachment(id string) *storedAttachment {
+	for i := range m.Attachments {
+		if m.Attachments[i].ID == id {
+			return &m.Attachments[i]
+		}
+	}
+	return nil
 }
 
 func (s *Store) SetAttachmentLocalPath(messageID, attachmentID, path string) {
@@ -554,10 +615,8 @@ func (s *Store) SetAttachmentLocalPath(messageID, attachmentID, path string) {
 	if m == nil {
 		return
 	}
-	for i := range m.Attachments {
-		if m.Attachments[i].ID == attachmentID {
-			m.Attachments[i].LocalPath = path
-		}
+	if a := m.attachment(attachmentID); a != nil {
+		a.LocalPath = path
 	}
 	data, _ := json.Marshal(m.Attachments)
 	_, _ = s.db.Exec(`UPDATE messages SET attachments=? WHERE id=?`, string(data), messageID)
@@ -651,10 +710,10 @@ func (s *Store) Conversation(t *threadRow, selfID string) apiConversation {
 			conv.Snippet = "Sticker"
 		}
 	}
-	if colors := s.Get("colors:" + t.ID); colors != "" {
+	if colors := s.Get(kvColors + t.ID); colors != "" {
 		conv.BubbleColors = strings.Split(colors, ",")
 	}
-	conv.QuickEmoji = s.Get("emoji:" + t.ID)
+	conv.QuickEmoji = s.Get(kvEmoji + t.ID)
 	var others []participantRow
 	for _, p := range participants {
 		conv.Participants = append(conv.Participants, apiParticipant{
@@ -703,7 +762,7 @@ func (s *Store) Conversation(t *threadRow, selfID string) apiConversation {
 		}
 	}
 	// Marked unread from the context menu (the value is when).
-	if s.Get("unread:"+t.ID) != "" {
+	if s.Get(kvUnread+t.ID) != "" {
 		conv.UnreadCount = 1
 	}
 	return conv
@@ -733,7 +792,7 @@ func (m *messageRow) toAPI(selfID string, reactions []apiReaction) apiMessage {
 	if reactions == nil {
 		reactions = []apiReaction{}
 	}
-	msg := apiMessage{
+	return apiMessage{
 		ID:          m.ID,
 		ThreadID:    m.ThreadID,
 		SenderID:    m.SenderID,
@@ -748,7 +807,4 @@ func (m *messageRow) toAPI(selfID string, reactions []apiReaction) apiMessage {
 		IsUnsent:    m.IsUnsent,
 		IsEdited:    m.IsEdited,
 	}
-	return msg
 }
-
-var errNotFound = errors.New("not found")

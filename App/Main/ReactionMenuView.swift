@@ -159,7 +159,7 @@ final class ReactionsViewController: NSViewController {
 
     override func loadView() {
         let rows = stride(from: 0, to: entries.count, by: Self.perRow).map { start in
-            let views = entries[start..<min(start + Self.perRow, entries.count)].map(ReactionPersonView.init)
+            let views = entries[start..<min(start + Self.perRow, entries.count)].map { ReactionPersonView($0) }
             let row = NSStackView(views: views)
             row.orientation = .horizontal
             // Each item already has room for its shadow around it.

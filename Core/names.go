@@ -24,6 +24,13 @@ var (
 
 const nameLookupRetry = 10 * time.Minute
 
+// forgetNameLookups drops who was looked up (at logout).
+func forgetNameLookups() {
+	nameLookupLock.Lock()
+	nameLookups = map[string]time.Time{}
+	nameLookupLock.Unlock()
+}
+
 // lookUpNames asks for the names of the chat's unnamed people, if the chat itself has no name
 // (1:1 chats, unnamed groups). The chats they're in are sent again once named.
 func (c *Core) lookUpNames(t *threadRow, conv apiConversation) {
@@ -63,7 +70,8 @@ func (c *Core) lookUpAllNames() {
 	}
 }
 
-func (c *Core) forgetNameLookup(userID string) {
+// forgetNameLookup lets the person be looked up again right away (the lookup couldn't run).
+func forgetNameLookup(userID string) {
 	nameLookupLock.Lock()
 	delete(nameLookups, userID)
 	nameLookupLock.Unlock()
@@ -76,7 +84,7 @@ func (c *Core) lookUpName(userID string) {
 	}
 	cli := c.client()
 	if cli == nil {
-		c.forgetNameLookup(userID)
+		forgetNameLookup(userID)
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -85,7 +93,7 @@ func (c *Core) lookUpName(userID string) {
 	if err != nil || resp == nil {
 		c.log.Warn().Err(err).Str("user_id", userID).Msg("Couldn't look up a name")
 		// E.g. not connected yet: the chat's next update tries again.
-		c.forgetNameLookup(userID)
+		forgetNameLookup(userID)
 		return
 	}
 	// Saves the contact like any sync.

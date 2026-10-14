@@ -144,19 +144,8 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
 
     /// Page Up/Down, Home and End scroll the messages even while the message field has the focus.
     private func handleScrollKey(_ event: NSEvent) -> Bool {
-        guard let window, event.window === window, window.attachedSheet == nil,
-              event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty,
-              let character = event.charactersIgnoringModifiers?.unicodeScalars.first else { return false }
-        let key: ChatViewController.ScrollKey? = switch Int(character.value) {
-        case NSPageUpFunctionKey: .pageUp
-        case NSPageDownFunctionKey: .pageDown
-        case NSHomeFunctionKey: .home
-        case NSEndFunctionKey: .end
-        default: nil
-        }
-        guard let key else { return false }
-        chat.scroll(key)
-        return true
+        guard let window, event.window === window, window.attachedSheet == nil else { return false }
+        return chat.handleScrollKey(event)
     }
 
     // MARK: - NSWindowDelegate
@@ -199,11 +188,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
 
     @objc func toggleUnread(_ sender: Any?) {
         guard let conversation else { return }
-        if conversation.unreadCount > 0 {
-            ChatStore.shared.markRead(threadID)
-        } else {
-            ChatStore.shared.setUnread(true, threadID: threadID)
-        }
+        ChatStore.shared.toggleRead(conversation)
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {

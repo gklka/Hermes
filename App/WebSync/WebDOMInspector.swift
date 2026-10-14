@@ -64,10 +64,7 @@ enum WebDOMInspector {
         })();
         """, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: .page)
 
-    private static var supportDir: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MessengerMac")
-    }
+    private static var supportDir: URL { AppData.folder }
 
     /// Dev console: if webeval.js appears in the data folder, run it in the page (as an async
     /// function body) and write the returned value to webeval.out.
@@ -210,8 +207,7 @@ enum WebDOMInspector {
         """
         do {
             let result = try await controller.webView.callAsyncJavaScript(script, contentWorld: .defaultClient)
-            let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            let url = support.appendingPathComponent("MessengerMac/webdump.json")
+            let url = AppData.folder.appendingPathComponent("webdump.json")
             try (result as? String ?? "null").write(to: url, atomically: true, encoding: .utf8)
             NSLog("WebDOMInspector: wrote \(url.path)")
         } catch {

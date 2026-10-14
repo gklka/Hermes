@@ -1,4 +1,6 @@
 Core/build/
+# A plain `go build` in Core/
+Core/core
 build/
 xcuserdata/
 *.xcuserstate

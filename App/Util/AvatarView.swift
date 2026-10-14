@@ -47,7 +47,7 @@ final class AvatarView: NSView {
     }
 
     func configure(name: String, url: String?) {
-        initialsLabel.stringValue = Self.initials(of: name)
+        initialsLabel.stringValue = RoundAvatar.initials(of: name)
         guard url != currentURL else { return }
         currentURL = url
         imageLayer.contents = nil
@@ -67,12 +67,6 @@ final class AvatarView: NSView {
     private func show(_ image: NSImage) {
         imageLayer.contents = image.layerContents(forContentsScale: window?.backingScaleFactor ?? 2)
         initialsLabel.isHidden = true
-    }
-
-    static func initials(of name: String) -> String {
-        let words = name.split(separator: " ").filter { $0.first?.isLetter == true }
-        let letters = words.prefix(2).compactMap(\.first)
-        return letters.isEmpty ? "?" : String(letters).uppercased()
     }
 }
 

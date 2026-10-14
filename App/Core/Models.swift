@@ -61,9 +61,28 @@ struct Attachment: Codable, Hashable {
     var title: String?
 }
 
+extension Attachment.Kind {
+    /// What an attachment of this kind is called, where it has no name of its own.
+    var label: String {
+        switch self {
+        case .image: "Photo"
+        case .gif: "GIF"
+        case .sticker: "Sticker"
+        case .video: "Video"
+        case .audio: "Voice Message"
+        case .file: "File"
+        case .link: "Link"
+        }
+    }
+}
+
 struct ChatMessage: Codable, Identifiable, Hashable {
     enum Status: String, Codable {
-        case pending, sent, delivered, read, failed
+        /// Sent here, not confirmed by the server yet (a local echo).
+        case pending
+        case sent
+        /// Set by the app when the send request fails.
+        case failed
     }
 
     let id: String

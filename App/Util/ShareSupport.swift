@@ -12,7 +12,7 @@ final class ShareSupport {
 
     private let store = ChatStore.shared
     private var cancellable: AnyCancellable?
-    private var pending: Task<Void, Never>?
+    private let updates = Debouncer(delay: .seconds(3))
     /// The chats as last written ("<id>|<name>|<has picture>"), to only write changes.
     private var written: [String] = []
 
@@ -28,7 +28,7 @@ final class ShareSupport {
 
     /// After logging out: none of the account's chats stay in the app group.
     func clear() {
-        pending?.cancel()
+        updates.cancel()
         written = []
         if let file = ShareHandoff.recentChatsFile {
             try? FileManager.default.removeItem(at: file)
@@ -38,14 +38,8 @@ final class ShareSupport {
         }
     }
 
-    /// Chat updates come in bursts while syncing; update once they settle.
     private func scheduleUpdate() {
-        pending?.cancel()
-        pending = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(3))
-            guard !Task.isCancelled else { return }
-            self?.update()
-        }
+        updates.schedule { [weak self] in self?.update() }
     }
 
     /// Pictures already requested for the share sheet's most recent chats.
@@ -76,7 +70,7 @@ final class ShareSupport {
             let saved = picture.map {
                 (try? $0.write(to: avatars.appendingPathComponent("\(conversation.id).png"))) != nil
             } ?? false
-            chats.append(ShareHandoff.Chat(id: conversation.id, name: conversation.name, isGroup: conversation.isGroup, hasAvatar: saved))
+            chats.append(ShareHandoff.Chat(id: conversation.id, name: conversation.name, hasAvatar: saved))
         }
         if let data = try? JSONEncoder().encode(chats) {
             try? data.write(to: file, options: .atomic)
@@ -86,16 +80,15 @@ final class ShareSupport {
     /// The chat's picture as already loaded for the chat list, as a small PNG.
     private func picture(of conversation: Conversation) -> Data? {
         conversation.avatarURL.flatMap(URL.init(string:)).flatMap { ImageCache.shared.cached($0) }
-            .flatMap(SpotlightIndex.thumbnail)
+            .flatMap { SpotlightIndex.thumbnail($0) }
     }
 
     // MARK: - Sending
 
     /// `messengermac://share?id=<folder>`, from the share extension.
-    func handle(_ url: URL) -> Bool {
-        guard url.scheme == ShareHandoff.urlScheme, url.host() == ShareHandoff.shareHost else { return false }
+    func handle(_ url: URL) {
+        guard url.scheme == ShareHandoff.urlScheme, url.host() == ShareHandoff.shareHost else { return }
         Task { await sendOutbox() }
-        return true
     }
 
     private var isSending = false
@@ -105,10 +98,7 @@ final class ShareSupport {
         guard !isSending, let outbox = ShareHandoff.outbox else { return }
         isSending = true
         defer { isSending = false }
-        for _ in 0..<120 where store.account == nil || store.conversations.isEmpty {
-            try? await Task.sleep(for: .milliseconds(500))
-        }
-        guard store.account != nil else { return }
+        guard await store.waitUntilReady() else { return }
         let folders = (try? FileManager.default.contentsOfDirectory(at: outbox, includingPropertiesForKeys: nil)) ?? []
         for folder in folders {
             send(folder)

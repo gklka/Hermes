@@ -22,8 +22,7 @@ final class LinkPreviews {
     private var web: [URL: Preview] = [:]
     private var inFlight: [URL: Task<Preview?, Never>] = [:]
 
-    private let directory: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("MessengerMac/linkpreviews", isDirectory: true)
+    private let directory = AppData.folder.appendingPathComponent("linkpreviews", isDirectory: true)
 
     /// What to show now: the loaded preview, or what's known before loading (for cards all but
     /// a not yet loaded picture; for web links the site's name).
@@ -36,7 +35,7 @@ final class LinkPreviews {
             loading.imageSize = Self.webImageSize
             return loading
         case .card(let card):
-            let site = card.url.flatMap(Self.site)
+            let site = card.url.flatMap { Self.site($0) }
             return Preview(
                 url: card.url,
                 title: card.title ?? site ?? "Link",
@@ -186,7 +185,7 @@ final class LinkPreviews {
             return .web(textURL)
         }
         guard let attachment = attachments.first(where: { $0.kind == .link }) else { return nil }
-        let cardURL = attachment.url.flatMap(URL.init(string:)).map(unwrapRedirect).flatMap { isWeb($0) ? $0 : nil } ?? textURL
+        let cardURL = attachment.url.flatMap(URL.init(string:)).map { unwrapRedirect($0) }.flatMap { isWeb($0) ? $0 : nil } ?? textURL
         if let cardURL, !isFacebook(cardURL) {
             return .web(cardURL)
         }
@@ -215,7 +214,7 @@ final class LinkPreviews {
         guard !trimmed.isEmpty else { return true }
         let range = NSRange(trimmed.startIndex..., in: trimmed)
         guard let match = detector?.firstMatch(in: trimmed, range: range) else { return false }
-        return match.range == range && match.url.map(isWeb) == true
+        return match.range == range && match.url.map { isWeb($0) } == true
     }
 
     private static func isWeb(_ url: URL) -> Bool {

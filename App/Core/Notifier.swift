@@ -333,23 +333,15 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// Sends the reply; answering reads the chat.
     private func reply(_ text: String, in threadID: String) async {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, await waitUntilReady() else { return }
+        guard !text.isEmpty, await store.waitUntilReady() else { return }
         store.send(text: text, in: threadID)
         await markRead(threadID)
     }
 
     private func markRead(_ threadID: String) async {
-        guard await waitUntilReady() else { return }
+        guard await store.waitUntilReady() else { return }
         store.markRead(threadID)
         store.clearUnseenReactions(threadID)
         clear(threadID: threadID)
-    }
-
-    /// An action can launch the app: wait for the login and the chats.
-    private func waitUntilReady() async -> Bool {
-        for _ in 0..<120 where store.account == nil || store.conversations.isEmpty {
-            try? await Task.sleep(for: .milliseconds(500))
-        }
-        return store.account != nil
     }
 }

@@ -141,22 +141,7 @@ final class ShareViewController: NSViewController {
         let picture = chat.hasAvatar
             ? ShareHandoff.avatarsFolder.flatMap { NSImage(contentsOf: $0.appendingPathComponent("\(chat.id).png")) }
             : nil
-        return NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
-            NSBezierPath(ovalIn: rect).addClip()
-            if let picture {
-                picture.draw(in: rect)
-            } else {
-                NSColor(calibratedWhite: 0.6, alpha: 1).setFill()
-                rect.fill()
-                let initials = chat.name.split(separator: " ").prefix(2).compactMap(\.first).map(String.init).joined().uppercased()
-                let attributes: [NSAttributedString.Key: Any] = [
-                    .font: NSFont.systemFont(ofSize: size * 0.4, weight: .medium), .foregroundColor: NSColor.white,
-                ]
-                let textSize = initials.size(withAttributes: attributes)
-                initials.draw(at: NSPoint(x: rect.midX - textSize.width / 2, y: rect.midY - textSize.height / 2), withAttributes: attributes)
-            }
-            return true
-        }
+        return RoundAvatar.image(picture, name: chat.name, size: size)
     }
 
     // MARK: - Shared items
@@ -214,10 +199,11 @@ final class ShareViewController: NSViewController {
 
     /// The provider's file (e.g. a photo from Photos, which has no file URL), copied out.
     private static func loadFile(_ provider: NSItemProvider, type: UTType) async -> URL? {
-        await withCheckedContinuation { continuation in
+        let name = provider.suggestedName
+        return await withCheckedContinuation { continuation in
             _ = provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
                 // The file only exists until this returns.
-                continuation.resume(returning: url.flatMap { Self.copyToTemporary($0, name: provider.suggestedName) })
+                continuation.resume(returning: url.flatMap { Self.copyToTemporary($0, name: name) })
             }
         }
     }

@@ -363,10 +363,7 @@ enum IntentSupport {
     /// Waits for the app to be logged in with its chats loaded (it may just have been launched
     /// to run the intent).
     static func ready() async throws {
-        for _ in 0..<60 where store.account == nil || store.conversations.isEmpty {
-            try await Task.sleep(for: .milliseconds(500))
-        }
-        guard store.account != nil else { throw MessagingIntentError.notReady }
+        guard await store.waitUntilReady(seconds: 30) else { throw MessagingIntentError.notReady }
     }
 
     /// Everyone in the loaded chats, by ID.

@@ -27,17 +27,10 @@ import (
 	"go.mau.fi/mautrix-meta/pkg/messagix/types"
 )
 
-const (
-	kvCookies    = "cookies"
-	kvAccount    = "account"
-	kvWADeviceID = "wa_device_id"
-)
+var errNotConnected = errors.New("not connected")
 
-type pendingSend struct {
-	threadID  string
-	pendingID string
-}
-
+// Core is the app's connection to Messenger: the Facebook (LightSpeed) socket, the end-to-end
+// encrypted (WhatsApp-protocol) connection, and the store both write to.
 type Core struct {
 	dataDir string
 	log     zerolog.Logger
@@ -45,24 +38,21 @@ type Core struct {
 	wa      *sqlstore.Container
 
 	mu           sync.Mutex
-	ctx          context.Context
 	cancel       context.CancelFunc
 	cli          *messagix.Client
 	e2ee         *whatsmeow.Client
 	cookies      *cookies.Cookies
 	account      *apiAccount
 	initialTable *table.LSTable
-	state        string
 
 	pendingLock sync.Mutex
 	pending     map[string]pendingSend // otid → local echo
 
-	// Requests that change chat state are processed one at a time, in order.
+	// Requests that send or change messages run one at a time, in the order they came.
 	sendQueue chan func()
 }
 
 func NewCore(dataDir string) *Core {
-	_ = os.MkdirAll(filepath.Join(dataDir, "media"), 0o700)
 	logFile, err := os.OpenFile(filepath.Join(dataDir, "core.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	var log zerolog.Logger
 	if err == nil {
@@ -76,12 +66,18 @@ func NewCore(dataDir string) *Core {
 		pending:   make(map[string]pendingSend),
 		sendQueue: make(chan func(), 128),
 	}
+	_ = os.MkdirAll(c.mediaDir(), 0o700)
 	go func() {
 		for fn := range c.sendQueue {
 			fn()
 		}
 	}()
 	return c
+}
+
+// mediaDir holds downloaded attachments and pictures imported from the web app.
+func (c *Core) mediaDir() string {
+	return filepath.Join(c.dataDir, "media")
 }
 
 // Start opens the databases, closes `ready` (so requests start being served) and connects
@@ -123,7 +119,6 @@ func (c *Core) Start(ready chan struct{}) {
 
 func (c *Core) setState(state, errMsg string) {
 	c.mu.Lock()
-	c.state = state
 	account := c.account
 	c.mu.Unlock()
 	emitEvent("state", apiState{State: state, Account: account, Error: errMsg})
@@ -136,9 +131,16 @@ func (c *Core) selfID() string {
 		return c.account.ID
 	}
 	if c.cookies != nil {
-		return strconv.FormatInt(c.cookies.GetUserID(), 10)
+		return id64(c.cookies.GetUserID())
 	}
 	return ""
+}
+
+// currentCookies is the session's cookies, or nil when logged out.
+func (c *Core) currentCookies() *cookies.Cookies {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cookies
 }
 
 func (c *Core) client() *messagix.Client {
@@ -151,6 +153,22 @@ func (c *Core) e2eeClient() *whatsmeow.Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.e2ee
+}
+
+// requireClient is the Facebook connection, or errNotConnected.
+func (c *Core) requireClient() (*messagix.Client, error) {
+	if cli := c.client(); cli != nil {
+		return cli, nil
+	}
+	return nil, errNotConnected
+}
+
+// requireE2EE is the end-to-end encrypted connection (with its device), or errNotConnected.
+func (c *Core) requireE2EE() (*whatsmeow.Client, error) {
+	if e2ee := c.e2eeClient(); e2ee != nil && e2ee.Store != nil && e2ee.Store.ID != nil {
+		return e2ee, nil
+	}
+	return nil, errNotConnected
 }
 
 // MARK: - Cookies
@@ -170,9 +188,7 @@ func (c *Core) loadCookies() *cookies.Cookies {
 }
 
 func (c *Core) saveCookies() {
-	c.mu.Lock()
-	ck := c.cookies
-	c.mu.Unlock()
+	ck := c.currentCookies()
 	if ck == nil {
 		return
 	}
@@ -233,7 +249,7 @@ func humanizeLoginError(err error) error {
 
 func accountFromUser(user types.UserInfo) *apiAccount {
 	return &apiAccount{
-		ID:        strconv.FormatInt(user.GetFBID(), 10),
+		ID:        id64(user.GetFBID()),
 		Name:      user.GetName(),
 		AvatarURL: user.GetAvatarURL(),
 	}
@@ -257,8 +273,10 @@ func (c *Core) Logout(ctx context.Context) {
 		}
 	}
 	_ = c.store.Wipe()
-	_ = os.RemoveAll(filepath.Join(c.dataDir, "media"))
-	_ = os.MkdirAll(filepath.Join(c.dataDir, "media"), 0o700)
+	forgetThreadMappings()
+	forgetNameLookups()
+	_ = os.RemoveAll(c.mediaDir())
+	_ = os.MkdirAll(c.mediaDir(), 0o700)
 	c.mu.Lock()
 	c.cookies = nil
 	c.account = nil
@@ -277,9 +295,7 @@ func (c *Core) newClient(ck *cookies.Cookies) *messagix.Client {
 func (c *Core) connectWithRetry() {
 	delay := time.Second
 	for attempt := 1; ; attempt++ {
-		c.mu.Lock()
-		ck := c.cookies
-		c.mu.Unlock()
+		ck := c.currentCookies()
 		if ck == nil {
 			return
 		}
@@ -316,7 +332,6 @@ func (c *Core) connectWithRetry() {
 func (c *Core) attach(cli *messagix.Client, initialTable *table.LSTable) {
 	ctx, cancel := context.WithCancel(context.Background())
 	c.mu.Lock()
-	c.ctx = ctx
 	c.cancel = cancel
 	c.cli = cli
 	c.initialTable = initialTable
@@ -409,8 +424,13 @@ func (c *Core) connectE2EE() {
 	if cli == nil {
 		return
 	}
+	ck := c.currentCookies()
+	if ck == nil {
+		// Logged out meanwhile.
+		return
+	}
 	ctx := context.Background()
-	fbid := c.cookies.GetUserID()
+	fbid := ck.GetUserID()
 
 	dev := c.loadDevice(ctx, fbid)
 	isNew := dev == nil
@@ -436,7 +456,7 @@ func (c *Core) connectE2EE() {
 		return
 	}
 	e2ee.SynchronousAck = true
-	e2ee.AddEventHandlerWithSuccessStatus(c.handleWAEvent)
+	e2ee.AddEventHandler(c.handleWAEvent)
 	c.mu.Lock()
 	if c.cli != cli {
 		// Disconnected while we were setting up.
@@ -460,7 +480,7 @@ func (c *Core) loadDevice(ctx context.Context, fbid int64) *waStore.Device {
 		return nil
 	}
 	dev, err := c.wa.GetDevice(ctx, waTypes.JID{
-		User:   strconv.FormatInt(fbid, 10),
+		User:   id64(fbid),
 		Device: uint16(deviceID),
 		Server: waTypes.MessengerServer,
 	})

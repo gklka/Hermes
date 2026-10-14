@@ -49,7 +49,7 @@ func (c *Core) refreshTheme(ctx context.Context, threadID string) error {
 		return err
 	}
 	key := c.fbThreadKey(threadID)
-	resp, err := cli.ExecuteTasks(ctx, &socket.CreateThreadTask{ThreadFBID: key, SyncGroup: 1})
+	resp, err := cli.ExecuteTasks(ctx, &socket.CreateThreadTask{ThreadFBID: key, SyncGroup: syncGroupMain})
 	if err != nil {
 		return err
 	}
@@ -82,16 +82,16 @@ func (c *Core) themeColors(ctx context.Context, themeID int64) ([]string, error)
 	if themeID == 0 {
 		return nil, nil
 	}
-	cacheKey := "themecolors:" + id64(themeID)
+	cacheKey := kvThemeColors + id64(themeID)
 	if cached := c.store.Get(cacheKey); cached != "" {
 		if cached == "default" {
 			return nil, nil
 		}
 		return strings.Split(cached, ","), nil
 	}
-	cli := c.client()
-	if cli == nil {
-		return nil, errNotConnected
+	cli, err := c.requireClient()
+	if err != nil {
+		return nil, err
 	}
 	_, body, err := cli.GetHTTP().MakeGraphQLRequest(ctx, themeQueryName, map[string]string{"id": id64(themeID)})
 	if err != nil {
@@ -178,12 +178,10 @@ func (c *Core) setThreadTheme(threadID string, colors []string, emoji string) {
 		c.log.Warn().Str("thread_id", threadID).Int("length", len(emoji)).Msg("Ignoring invalid quick reaction emoji")
 		emoji = ""
 	}
-	changed := c.setOrDelete("colors:"+threadID, strings.Join(colors, ","))
-	changed = c.setOrDelete("emoji:"+threadID, emoji) || changed
+	changed := c.setOrDelete(kvColors+threadID, strings.Join(colors, ","))
+	changed = c.setOrDelete(kvEmoji+threadID, emoji) || changed
 	if changed {
-		cs := newChangeSet()
-		cs.thread(threadID)
-		c.flush(cs)
+		c.emitThread(threadID)
 	}
 }
 

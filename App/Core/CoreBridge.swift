@@ -1,5 +1,12 @@
 import Foundation
 
+/// The app's data folder, Application Support/MessengerMac: the core's databases, media and
+/// log, and the app's own caches.
+enum AppData {
+    nonisolated static let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("MessengerMac", isDirectory: true)
+}
+
 /// Thin JSON-RPC bridge to the Go core.
 ///
 /// Swift → Go: `MMRequest({"id":…, "method":…, "params":…})`.
@@ -14,7 +21,7 @@ final class CoreBridge {
         var errorDescription: String? { message }
     }
 
-    struct Empty: Codable {}
+    nonisolated struct Empty: Codable {}
 
     /// Called on the main thread for every event the core emits.
     var onEvent: ((_ name: String, _ payload: Data) -> Void)?

@@ -1,6 +1,6 @@
 # MessengerMac — handoff notes for Claude
 
-This file lets a new Claude Code session pick up this project on another machine. Read it fully before making changes.
+This file lets a new Claude Code session pick up this project, also on another machine. Read it fully before making changes.
 
 ## What this is
 
@@ -12,35 +12,34 @@ A personal, learning-purpose native macOS client for **Facebook Messenger**. Own
 
 ## How the user wants you to work
 
-These come from the user's global `~/.claude/CLAUDE.md` plus feedback given during the project. Recreate them in memory on the new machine.
+These come from the user's global `~/.claude/CLAUDE.md` plus feedback given during the project. Recreate them in memory on a new machine.
 
 - Keep answers **short and easy to understand**.
-- **Don't commit or push** unless explicitly asked.
+- **Don't commit or push** unless explicitly asked. When asked, commit and push to `main` directly (no branches).
 - **Always edit files with Edit/Write**, never sed/perl/heredocs in Bash. The user wants inline diffs.
 - Be careful with debug logs: no force-unwraps, and only log values that are actually accessible.
-- **For this project: always build and relaunch the app after every change**, without asking. This overrides the global "don't build automatically" rule. But don't relaunch while the user is actively using the app for something long-running, such as an import. Once a relaunch interrupted an import.
+- **Always build, install and relaunch after every change** (`Support/install.sh`), without asking. But not while an import is running (the web history import can take minutes; check `core.log` first). A relaunch once interrupted an import.
+- Don't drive the screen (osascript clicks, screencapture) to test; ask the user to try things instead.
 - **Off-limits:** don't help reverse-engineer Meta's PIN-protected encrypted backup ("Labyrinth"). That was declined. The hidden-WebView approach below is what the user chose instead.
 
-## Setting up on a new machine
+## Building, installing, testing
 
 1. Install Xcode 26+ and Go (`brew install go`). `Support/build-core.sh` adds `/opt/homebrew/bin` and `/usr/local/go/bin` to `PATH`.
-2. Build:
+2. **Day to day: `Support/install.sh`.** It builds Release, installs it to `/Applications`, unregisters the build-folder copies, relaunches the app, and restarts `intelligenceflowd` (Siri/Shortcuts keep an app's old actions until it restarts). Siri and Shortcuts need a team-signed app with only one registered copy.
+   - `DEVELOPER_DIR` defaults to `/Applications/Xcode 27.1.app` in the script; override it on another machine.
+   - Before installing, wait for a running import to finish:
+     ```sh
+     L() { grep -o '"message":"WebHistoryImporter[^"]*' ~/Library/Application\ Support/MessengerMac/core.log | tail -1; }
+     until L | grep -qE "imported|skipped|collected|empty"; do sleep 5; done; Support/install.sh
+     ```
+3. Go checks:
    ```sh
-   cd MessengerMac
-   # Only needed if Xcode isn't the selected developer dir (old machine: "/Applications/Xcode 27.1.app")
-   export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
-   xcodebuild -project MessengerMac.xcodeproj -scheme MessengerMac -configuration Debug -derivedDataPath build/DerivedData build
+   cd Core && CC="xcrun --sdk macosx clang" go vet . && go test -run 'TestSearchFold|TestParseAge|TestAvatarKey|TestWebMessageID|TestUnrestoredPlaceholder|TestWithoutEmoji' .
    ```
-3. Run: `open build/DerivedData/Build/Products/Debug/MessengerMac.app`. Quit with `pkill -x MessengerMac`.
-   - Day to day, use `Support/install.sh` instead: it builds Release, installs it to `/Applications` and relaunches it. Siri and Shortcuts only work with a team-signed app (the project signs with the personal team `ZWNU8P9B33`) and get confused by several registered copies, so the script unregisters the build-folder ones.
-4. Run Go tests:
-   ```sh
-   cd Core && CC="xcrun --sdk macosx clang" go test -run 'TestParseAge|TestAvatarKey|TestWebMessageID' .
-   ```
-5. The first launch shows facebook.com login in a web view. The app then registers itself as a new E2EE device, and the user must restore encrypted chats with their PIN once ("Restore Encrypted Chats…", see below).
-   - Optional: copy `~/Library/Application Support/MessengerMac/` from the old machine to keep the local database. A fresh login is simpler and safer, though.
+4. Shortcuts end-to-end tests: `shortcuts run "MM Test Send"` (also `Edit`, `Unsend`, `Unread`, `Read`). They act on the self-chat `767652903`; check the result in `app.db` (`messages`, and the kv key `unread:767652903`). A run can hang on a one-time "Allow" prompt, so wrap it in a timeout.
+5. The first launch shows facebook.com's login in a web view. The app then registers itself as a new E2EE device; restore encrypted chats with the PIN once ("Restore Encrypted Chats…").
 
-Signing is ad-hoc (`CODE_SIGN_IDENTITY = "-"`), so no team is needed. The bundle ID is `com.kristofgruber.MessengerMac`.
+Signing: the personal team `ZWNU8P9B33` (manual, "Apple Development"). Bundle ID `com.kristofgruber.MessengerMac`; App Group `ZWNU8P9B33.com.kristofgruber.MessengerMac` (shared with the share extension).
 
 ## Architecture
 
@@ -48,122 +47,78 @@ Signing is ad-hoc (`CODE_SIGN_IDENTITY = "-"`), so no team is needed. The bundle
 AppKit UI (App/)  ──JSON-RPC over C calls──▶  Go core (Core/ → Core/build/libmmcore.a)
                                               ├─ messagix  → facebook.com (threads, messages, contacts)
                                               └─ whatsmeow → E2EE chats (Signal protocol)
-Hidden WKWebView (App/WebSync/) → facebook.com/messages, to read E2EE history the web app has restored
+Hidden WKWebView (App/WebSync/) → facebook.com/messages, to read E2EE history and themes the web app has
+Share extension (ShareExtension/) ──App Group files + messengermac:// URL──▶ the app
 ```
 
 ### Xcode and build plumbing
-- `MessengerMac.xcodeproj`: objectVersion 77 with **synchronized folder groups**, so new files in `App/` are picked up automatically.
-- The "Build Go Core" build phase runs `Support/build-core.sh`. It builds the c-archive per arch and lipos the result into `Core/build/libmmcore.a` and `.h`.
-  - It uses `CC="xcrun --sdk macosx clang"` because the old Xcode path contained a space.
+- `MessengerMac.xcodeproj`: **synchronized folder groups**, so new files in `App/`, `Shared/` and `ShareExtension/` are picked up automatically. `Shared/` is in both targets.
+- The "Build Go Core" phase runs `Support/build-core.sh`: builds the c-archive per arch and lipos it into `Core/build/libmmcore.a` and `.h` (`CC="xcrun --sdk macosx clang"`).
 - Bridging header: `Support/MessengerMac-Bridging-Header.h`.
-- `SWIFT_VERSION` is 5, and **default actor isolation is MainActor**. Off-main helpers must be marked `nonisolated`; see `OutgoingMedia.prepare`.
+- `SWIFT_VERSION` 5 with **default actor isolation MainActor**. Off-main code must be `nonisolated` (e.g. `OutgoingMedia.prepare`, `ImageSize.probe`, decoded web types). Pass closures, not function references, to `map` and friends, or the compiler warns about isolation.
+- The build has **no warnings**; keep it that way.
 - SourceKit "Cannot find type … in scope" diagnostics are cross-file indexing noise. Trust `xcodebuild`.
 
 ### Go core (`Core/`)
 - `go.mod` has a replace directive: `github.com/imroc/req/v3 => github.com/beeper/req/v3 …`.
-- `main.go`:
-  - cgo exports `MMStart` and `MMRequest`.
-  - Responses and events go back through one callback (`emitEvent` / `emitResponse`).
-- `api.go`: JSON types. **These must stay in sync with `App/Core/Models.swift`.**
-- `store.go`:
-  - SQLite (modernc). Tables: kv, contacts, threads, participants, messages, reactions.
-  - `threadRow.Visible()` decides what shows in the chat list. It hides requests, filtered ("other") and spam threads, plus folder pseudo-threads.
-  - `SearchContacts` lives here too.
-- `core.go`:
-  - Login, connect and logout (platform `types.Facebook`).
-  - E2EE device registration.
-  - `handleMetaEvent`, which calls `backfillThreads` after the connection is up.
-- `meta.go`:
-  - `handleTable` processes the LightSpeed sync tables.
-  - Hybrid FB-key↔JID thread mapping.
-  - `flush` emits `thread`/`message` events. It emits `threadRemoved` for threads that aren't visible.
-  - Pending sends.
-- `e2ee.go`: whatsmeow events (FBMessage, receipts, typing).
-- `actions.go`:
-  - The RPC dispatch.
-  - Thread paging over sync groups 1 and 95.
-  - Send, sendMedia, react, unsend, markRead, typing and media download.
-  - `threads.open` and `contacts.search`.
-  - `web.*` import RPCs.
-  - Sends go through a serial `sendQueue`, so order is preserved.
-- `webimport.go`:
-  - Turns chats and messages scraped from the web view into DB rows.
-  - Keys `webmap:<webID>` / `webid:<userID>` map web chats to user IDs.
-  - A message timestamp is `messageID >> 22`.
-- `webimport_test.go`: tests for the import helpers.
+- `main.go`: the cgo exports `MMStart`/`MMRequest`; responses and events go back through one callback (`emitResponse`/`emitEvent`).
+- `api.go`: **the JSON shapes, mirrored in `App/Core/Models.swift`. Keep them in sync.** Every event and result has a typed struct.
+- `rpc.go`: `HandleRequest` and `dispatch`, the list of every request. Requests that send or change messages run on a serial `sendQueue`, in order.
+- `core.go`: the `Core`, login/connect/logout, the E2EE device, `requireClient`/`requireE2EE`.
+- `changes.go`: `changeSet` and `flush` (emit `thread`/`message` events once per update), `emitThread`/`emitMessage`/`removeThread`, `applyRead`/`applyEdit`/`applyUnsend` (shared by both connections), pending (optimistic) sends.
+- `meta.go`: `handleTable` for LightSpeed sync tables (threads, messages, reads), the FB-key↔JID thread mapping, sync group constants (1 regular, 95 encrypted).
+- `e2ee.go`: whatsmeow events (messages, receipts, typing, presence).
+- `threads.go`: chat list paging, chat actions (mark read/unread, mute, delete, leave, block), typing and presence.
+- `history.go`: message pages and backfill from Messenger. `search.go`: Find in Chat.
+- `send.go`: sending text and files over either connection. `message_actions.go`: react, unsend, edit. `media.go`: downloads.
+- `reactions.go`: incoming reactions (and the "reaction" event for notifications). `names.go`: looking up names the sync didn't give. `themes.go`: chat themes and quick reactions.
+- `store.go`: SQLite (modernc), tables kv, contacts, threads, participants, messages, reactions. The kv key prefixes (`map:`, `webmap:`, `webid:`, `colors:`, `emoji:`, `unread:`, `edits:`, `themecolors:`) and folder names are constants at the top. `threadRow.Visible()` decides what's in the chat list.
+- `webimport.go`: turns chats and messages read from the web app into rows. A message's timestamp is `messageID >> 22`.
 
 ### Swift app (`App/`)
-- `main.swift` and `AppDelegate.swift`: start the core, show login or the main window, and start `WebChatImporter` once connected. The menu item "Restore Encrypted Chats…" shows the web view.
-- `MainMenu.swift`: menus. File → New Message is ⌘N.
+- `main.swift`, `AppDelegate.swift`: start the core, show login or the main window, start the importers, Spotlight and share support once connected; the Dock menu; `openChat(_:revealing:)` brings a chat forward.
+- `MainMenu.swift`: menus (⌘N New Message, ⌘F finds a chat, ⌥⌘F Find in Chat, ⌘E Edit Message, ⌘L Like, ⌘1–⌘9 pick a chat, …).
 - **`Core/`**
-  - `CoreBridge.swift`: calls into Go. Its `log(...)` writes to `core.log` with `source=app`.
-  - `Models.swift`
-  - `ChatStore.swift`: the app state, with coalesced change notifications. `send(text:attachments:…)` sends each attachment first, then the text.
-  - `OutgoingMedia.swift`:
-    - Staging folder `outgoing/`.
-    - Converts HEIC/TIFF/etc. to JPEG.
-    - Compose thumbnails.
-    - The `ComposeAttachment` text attachment.
+  - `CoreBridge.swift`: calls into Go; `log(...)` writes to `core.log` with `source=app`. `AppData.folder` is the data folder.
+  - `Models.swift`: mirrors `Core/api.go`. `Attachment.Kind.label` names attachments ("Photo", "Voice Message").
+  - `ChatStore.swift`: the app state, with coalesced change notifications; `waitUntilReady` for things that can launch the app.
+  - `Notifier.swift`: notifications (messages, reactions), with Reply and Mark as Read.
+  - `OutgoingMedia.swift`: the `outgoing/` staging folder, HEIC/TIFF → JPEG, compose thumbnails.
 - **`Main/`**
-  - `MainWindowController.swift`:
-    - Toolbar with the filter menu (All / Messages / Marketplace) and New Message.
-    - `MainSplitViewController` persists the sidebar width (UserDefaults `SidebarWidth`).
-  - `ConversationListViewController.swift`: sidebar list, search, and `ConversationFilter` (UserDefaults `ConversationFilter`).
-  - `ChatViewController.swift`:
-    - The message table.
-    - Per-chat drafts as `NSAttributedString`.
-    - Drop target.
-    - Reply, tapback and unsend.
-    - Triggers the web history import for E2EE chats.
-  - `MessageCells.swift`: bubbles. Message text is a `MessageTextView` (`NSTextView`) so link colours can be set per bubble.
-  - `ComposeView.swift`:
-    - iMessage-style input. Images and files are staged inline as thumbnails, via paste, drag (Finder, Photos, Safari file promises) or the + button.
-    - Return sends.
-  - `NewMessageViewController.swift`: contact picker.
-- `Login/LoginWindowController.swift`: facebook.com login in a WKWebView. It captures the cookies.
-- `Util/`: `ImageCache`, `AvatarView`, `Formatters`.
-- **`WebSync/`**: E2EE history via a hidden web view.
-  - `WebSyncController.swift`:
-    - A hidden `WKWebView` with a persistent data store, UUID `6F1C2B7E-4E1A-4C55-9B7A-2D0E7F9A1C31`.
-    - It **must use a Safari user agent**. A fake Chrome UA broke the PIN restore.
-    - Web data is reset once via the `WebDataVersion` default (currently 2).
-    - It's embedded invisibly (alpha 0) in the chat pane so WebKit doesn't throttle it.
-    - `withExclusiveAccess`, `navigate(toPath:)` and `evaluate` (`.page` world).
-  - `WebChatImporter.swift`: every 10 minutes, reads the E2EE rows from the web chat list. It resolves unmatched rows by clicking them.
-  - `WebHistoryImporter.swift`: when an E2EE 1:1 chat is opened, scrolls the web chat back (up to 400 messages). It collects `data-message-id` (`<user>@msgr.<msgID>`), direction, text and images of 60px or more as base64.
-  - `WebDOMInspector.swift` (dev hooks, enabled with `defaults write com.kristofgruber.MessengerMac WebDumpEnabled -bool YES`):
-    - `webeval.js` in the data dir runs in the page and writes `webeval.out`.
-    - `importthread.txt` triggers a history import.
-    - `webdump.json`.
+  - `MainWindowController.swift` (window, toolbar, split view), `ChatWindowController.swift` (a chat in its own window), `ConversationListViewController.swift` (sidebar, filter, context menu), `NewMessageViewController.swift`.
+  - `ChatViewController.swift`: a chat, by topic: the main file (state, rows, reload, table), `+Search`, `+Animations` (arriving, sliding rows, statuses, read pictures, typing → message), `+Scrolling`, `+MessageActions` (menus, tapbacks, selection, Quick Look), `+Compose`. `ChatSupportViews.swift`: the table, drop target, tapback picker.
+  - Cells: `MessageCellView.swift` (a message, and the typing bubble), `Bubble.swift` (colors, `BubbleMetrics`, `BubbleView`), `MessageTextView.swift`, `MessageParts.swift` (reply quote and line, tapback badge), `AttachmentViews.swift` (attachments, link cards, dragging out), `ChatCaptionCells.swift` (times, statuses, restore prompt, read pictures).
+  - `ComposeView.swift`, `ChatSearchBar.swift`, `ReactionMenuView.swift`, `MediaViewer.swift` (Quick Look).
+- `Intents/`: App Intents entities (`MessagingIntents.swift`) and the Shortcuts actions (`ChatIntents.swift`).
+- `Login/LoginWindowController.swift`: facebook.com login in a WKWebView; captures the cookies.
+- `Util/`: `ImageCache`, `AvatarView`, `Formatters`, `LinkPreviews`, `ChatExport` (Markdown transcript), `SpotlightIndex`, `ShareSupport`, `DockBadge`, `ImageSize`, `Debouncer`, `ViewHelpers` (snapshots, fades, popovers, confirm alerts, `Facebook` URLs).
+- **`WebSync/`**: the hidden web view.
+  - `WebSyncController.swift`: a hidden `WKWebView` with a persistent data store (UUID `6F1C2B7E-4E1A-4C55-9B7A-2D0E7F9A1C31`). It **must use a Safari user agent** (a fake Chrome one broke the PIN restore). Embedded invisibly in the chat pane so WebKit doesn't throttle it. `withExclusiveAccess`, `navigate(toPath:)`, `evaluate`.
+  - `WebChatImporter.swift`: every 10 minutes, reads the encrypted chats from the web chat list.
+  - `WebHistoryImporter.swift`: when an encrypted 1:1 chat opens, scrolls its web chat back and collects messages, pictures, links and reactions.
+  - `WebThemeReader.swift`: an encrypted chat's theme, from the web app.
+  - `WebDOMInspector.swift`: dev hooks (`defaults write com.kristofgruber.MessengerMac WebDumpEnabled -bool YES`; `webeval.js` in the data folder runs in the page).
+- `Shared/`: `ShareHandoff` (how the extension and the app talk), `RoundAvatar`. `ShareExtension/`: the Share menu's chat picker.
 
 ### Data on disk
-`~/Library/Application Support/MessengerMac/`:
-- `app.db`
-- `e2ee.db`: the whatsmeow device and keys. Never commit it.
-- `core.log`: zerolog JSON.
-- `media/`
-- `outgoing/`
+`~/Library/Application Support/MessengerMac/`: `app.db`, `e2ee.db` (the whatsmeow device and keys; never commit it), `core.log` (zerolog JSON), `media/`, `outgoing/`, `linkpreviews/`.
 
 ## Feature status
 
 Working:
-- Login, live sync, all thread pages backfilled.
-- Group and 1:1 chats, E2EE chats.
-- Sending text, replies, reactions/tapbacks, unsend, read receipts, typing.
-- Links coloured correctly in both bubble colours.
-- New Message (contact search), ⌘N.
-- Spam, filtered and request chats hidden.
-- Sidebar filter: All / Messages / Marketplace.
-- Sidebar width remembered.
-- E2EE history via the web view, once the PIN has been entered there (done on the old machine; it must be redone on the new one).
-- iMessage-style image and file sending. Built, but **not yet confirmed by the user** at handoff time.
+- Login, live sync, all thread pages backfilled; group, 1:1 and encrypted chats.
+- Text, replies, files and pictures, tapbacks, unsend, edit (with earlier versions), read receipts (pictures under the last seen message), typing, presence.
+- Chat themes and quick reactions; link previews; dragging links and attachments out; Quick Look.
+- Find in Chat (also fetching older history), Export Chat as Markdown.
+- Chats in their own windows; Open on Web; mark read/unread, mute, delete, leave, block.
+- Notifications with Reply and Mark as Read; read state from other devices; Dock badge and Dock menu.
+- Shortcuts actions; messages in Spotlight; the share extension.
+- Animations: arriving messages, the typing bubble turning into the message, rows sliding, read pictures moving.
+- Encrypted history and themes via the web view, once the PIN has been entered there.
 
-Known limitations and ideas the user hasn't decided on yet:
-- The web chat list renders only about 14 rows and can't be scrolled programmatically, so only recent E2EE chats are matched.
-- History import:
-  - Capped at 400 messages per chat.
-  - Only text and preview-quality photos; no stickers, voice or video yet.
-  - Only 1:1 chats, not E2EE groups.
+Known limitations:
+- Siri can't send: Apple's messages-schema intents never received a recipient (macOS 27.1), so they were removed.
+- The web chat list renders only about 14 rows, so only recent encrypted chats are matched.
+- History import: about 400 messages per chat; preview-quality photos; no stickers, voice or video; 1:1 chats only.
 - Opening a chat in the web view may mark it read on Messenger.
-- The dev hooks are still enabled. I offered to disable them.
-- Image sending sends each image as a separate message. Messenger's multi-image albums aren't used yet.
+- Each picture is sent as its own message (no albums).

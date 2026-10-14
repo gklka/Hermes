@@ -13,12 +13,13 @@ final class WebHistoryImporter {
     private(set) var needsRestore: Set<String> = []
     private var importedThisSession: Set<String> = []
 
-    private struct Result: Decodable {
+    // What the collect script returns (decoded off the main actor).
+    nonisolated private struct Result: Decodable {
         let messages: [Message]
         let error: String?
     }
 
-    struct Message: Codable {
+    nonisolated struct Message: Codable {
         let domID: String
         let fromMe: Bool
         let text: String
@@ -29,19 +30,19 @@ final class WebHistoryImporter {
     }
 
     /// A reaction pill: its emoji and how many people reacted (the page doesn't say who).
-    struct Reaction: Codable {
+    nonisolated struct Reaction: Codable {
         let emojis: [String]
         let count: Int
     }
 
-    struct Link: Codable {
+    nonisolated struct Link: Codable {
         let url: String
         let title: String
         let description: String
         let image: Image?
     }
 
-    struct Image: Codable {
+    nonisolated struct Image: Codable {
         let data: String
         let mimeType: String
         let width: Int

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waArmadilloApplication"
@@ -16,29 +15,24 @@ import (
 )
 
 // handleWAEvent handles events from the end-to-end encrypted (WhatsApp-protocol) connection.
-func (c *Core) handleWAEvent(rawEvt any) bool {
+func (c *Core) handleWAEvent(rawEvt any) {
 	switch evt := rawEvt.(type) {
 	case *events.FBMessage:
 		c.handleFBMessage(evt)
 	case *events.Receipt:
 		c.handleReceipt(evt)
 	case *events.ChatPresence:
-		emitEvent("typing", map[string]any{
-			"threadID": evt.Chat.User,
-			"senderID": evt.Sender.User,
-			"isTyping": evt.State == waTypes.ChatPresenceComposing,
+		emitEvent("typing", apiTypingEvent{
+			ThreadID: evt.Chat.User,
+			SenderID: evt.Sender.User,
+			IsTyping: evt.State == waTypes.ChatPresenceComposing,
 		})
 	case *events.Presence:
-		c.log.Debug().Str("user", evt.From.User).Bool("unavailable", evt.Unavailable).Time("last_seen", evt.LastSeen).Msg("Presence")
 		var lastSeen int64
 		if !evt.LastSeen.IsZero() {
 			lastSeen = evt.LastSeen.UnixMilli()
 		}
-		emitEvent("presence", map[string]any{
-			"userID":   evt.From.User,
-			"isOnline": !evt.Unavailable,
-			"lastSeen": lastSeen,
-		})
+		emitEvent("presence", apiPresenceEvent{UserID: evt.From.User, IsOnline: !evt.Unavailable, LastSeen: lastSeen})
 	case *events.Connected:
 		c.log.Info().Msg("E2EE connected")
 		if cli := c.e2eeClient(); cli != nil {
@@ -58,9 +52,13 @@ func (c *Core) handleWAEvent(rawEvt any) bool {
 	default:
 		c.log.Debug().Str("type", fmt.Sprintf("%T", rawEvt)).Msg("Unhandled E2EE event")
 	}
-	return true
 }
 
+// unsupportedText stands in for an encrypted message this app can't show.
+const unsupportedText = "Unsupported message, view it in the Messenger app"
+
+// handleFBMessage stores a message from an encrypted chat, or applies the change it carries
+// (an unsend, a reaction or an edit).
 func (c *Core) handleFBMessage(evt *events.FBMessage) {
 	chat := evt.Info.Chat
 	threadID := chat.User
@@ -68,7 +66,7 @@ func (c *Core) handleFBMessage(evt *events.FBMessage) {
 	if chat.Server == waTypes.GroupServer {
 		threadType = table.ENCRYPTED_OVER_WA_GROUP
 	}
-	c.store.EnsureThread(threadID, threadType, "inbox")
+	c.store.EnsureThread(threadID, threadType, folderInbox)
 	if t := c.store.GetThread(threadID); t != nil && !t.Type.IsWhatsApp() {
 		c.store.SetThreadType(threadID, threadType)
 	}
@@ -89,33 +87,27 @@ func (c *Core) handleFBMessage(evt *events.FBMessage) {
 	switch msg := evt.Message.(type) {
 	case *waConsumerApplication.ConsumerApplication:
 		payload := msg.GetPayload()
-		if revoke := payload.GetApplicationData().GetRevoke(); revoke != nil {
-			target := revoke.GetKey().GetID()
-			c.store.UnsendMessage(target)
-			cs.message(target)
+		content := payload.GetContent()
+		switch {
+		case payload.GetApplicationData().GetRevoke() != nil:
+			c.applyUnsend(cs, payload.GetApplicationData().GetRevoke().GetKey().GetID())
 			c.flush(cs)
 			return
-		}
-		content := payload.GetContent()
-		if reaction := content.GetReactionMessage(); reaction != nil {
+		case content.GetReactionMessage() != nil:
+			reaction := content.GetReactionMessage()
 			target := reaction.GetKey().GetID()
 			c.setReaction(target, senderID, reaction.GetText(), ts)
-			cs.message(target)
-			c.flush(cs)
+			c.emitMessage(target)
 			return
-		}
-		if edit := content.GetEditMessage(); edit != nil {
-			target := edit.GetKey().GetID()
-			if threadID := c.store.EditMessage(target, edit.GetMessage().GetText()); threadID != "" {
-				cs.thread(threadID)
-			}
-			cs.message(target)
+		case content.GetEditMessage() != nil:
+			edit := content.GetEditMessage()
+			c.applyEdit(cs, edit.GetKey().GetID(), edit.GetMessage().GetText())
 			c.flush(cs)
 			return
 		}
 		if !fillConsumerContent(row, content) {
 			c.log.Debug().Str("message_id", row.ID).Msg("Unsupported E2EE consumer message")
-			row.Text = "Unsupported message, view it in the Messenger app"
+			row.Text = unsupportedText
 			row.IsSystem = true
 		}
 	case *waArmadilloApplication.Armadillo:
@@ -130,7 +122,7 @@ func (c *Core) handleFBMessage(evt *events.FBMessage) {
 				row.Attachments = append(row.Attachments, link)
 			}
 		} else {
-			row.Text = "Unsupported message, view it in the Messenger app"
+			row.Text = unsupportedText
 			row.IsSystem = true
 		}
 	default:
@@ -138,14 +130,10 @@ func (c *Core) handleFBMessage(evt *events.FBMessage) {
 	}
 
 	if quoted := evt.FBApplication.GetMetadata().GetQuotedMessage(); quoted != nil && quoted.GetStanzaID() != "" {
-		reply := &apiReply{MessageID: quoted.GetStanzaID()}
-		if target := c.store.GetMessage(reply.MessageID); target != nil {
-			reply.Text = target.Text
-			reply.SenderID = target.SenderID
-		} else if jid, err := waTypes.ParseJID(quoted.GetParticipant()); err == nil {
-			reply.SenderID = jid.User
+		row.ReplyTo = c.replyPreview(quoted.GetStanzaID())
+		if jid, err := waTypes.ParseJID(quoted.GetParticipant()); err == nil && row.ReplyTo.SenderID == "" {
+			row.ReplyTo.SenderID = jid.User
 		}
-		row.ReplyTo = reply
 	}
 
 	c.store.PutMessage(row)
@@ -241,41 +229,18 @@ func waAttachment(id, kind string, t *waMediaTransport.WAMediaTransport, mediaTy
 	}
 }
 
+// handleReceipt stores a read receipt from an encrypted chat: someone else's, or ours from
+// another device.
 func (c *Core) handleReceipt(evt *events.Receipt) {
 	threadID := evt.Chat.User
 	ts := evt.Timestamp.UnixMilli()
-	switch evt.Type {
-	case waTypes.ReceiptTypeRead:
-		if evt.IsFromMe {
-			c.log.Info().Str("thread", threadID).Int64("ts", ts).Msg("Read on another device (E2EE receipt)")
-			c.markThreadReadLocally(threadID, ts)
-			return
-		}
+	switch {
+	case evt.Type == waTypes.ReceiptTypeRead && !evt.IsFromMe:
 		reader := evt.Sender.User
 		c.store.SetReadWatermark(threadID, reader, ts)
-		emitEvent("readReceipt", map[string]any{"threadID": threadID, "readerID": reader, "timestamp": ts})
-	case waTypes.ReceiptTypeReadSelf:
-		c.log.Info().Str("thread", threadID).Int64("ts", ts).Msg("Read on another device (E2EE read-self)")
+		emitEvent("readReceipt", apiReadReceiptEvent{ThreadID: threadID, ReaderID: reader, Timestamp: ts})
+	case evt.Type == waTypes.ReceiptTypeRead, evt.Type == waTypes.ReceiptTypeReadSelf:
+		c.log.Debug().Str("thread", threadID).Int64("ts", ts).Msg("Read on another device (E2EE receipt)")
 		c.markThreadReadLocally(threadID, ts)
 	}
-}
-
-func (c *Core) markThreadReadLocally(threadID string, ts int64) {
-	cs := newChangeSet()
-	c.applyRead(cs, threadID, ts)
-	c.flush(cs)
-}
-
-// applyRead records that the chat was read up to ts (here or on another device). It also
-// clears "marked unread" if that was set before the read.
-func (c *Core) applyRead(cs *changeSet, threadID string, ts int64) {
-	c.store.SetThreadLastRead(threadID, ts)
-	if marked := c.store.Get("unread:" + threadID); marked != "" {
-		// Older markers are "1" (no time): any read clears them.
-		if at, err := strconv.ParseInt(marked, 10, 64); err != nil || at <= ts {
-			c.store.Delete("unread:" + threadID)
-		}
-	}
-	cs.thread(threadID)
-	emitEvent("threadRead", apiThreadReadEvent{ThreadID: threadID, Timestamp: ts})
 }

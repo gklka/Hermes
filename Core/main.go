@@ -22,13 +22,15 @@ import "C"
 import (
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
 var (
 	callback C.mm_callback
 	emitLock sync.Mutex
-	core     *Core
+	// The core, once created (emitJSON may run on any goroutine before that).
+	currentCore atomic.Pointer[Core]
 	// Requests are queued in arrival order; the dispatcher starts once the core is ready.
 	requests = make(chan []byte, 4096)
 )
@@ -38,7 +40,8 @@ func MMStart(dataDir *C.char, cb C.mm_callback) {
 	callback = cb
 	dir := C.GoString(dataDir)
 	go func() {
-		core = NewCore(dir)
+		core := NewCore(dir)
+		currentCore.Store(core)
 		ready := make(chan struct{})
 		go func() {
 			<-ready
@@ -87,7 +90,7 @@ func emitEvent(name string, data any) {
 func emitJSON(v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
-		if core != nil {
+		if core := currentCore.Load(); core != nil {
 			core.log.Err(err).Msg("Failed to marshal outgoing message")
 		}
 		return

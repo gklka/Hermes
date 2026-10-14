@@ -22,9 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Notifier.shared.onOpenThread = { [weak self] threadID, messageID in
             guard let self, self.mainWindowController != nil else { return }
-            self.showMain()
-            self.mainWindowController?.select(threadID: threadID, revealing: messageID)
-            NSApp.activate()
+            self.openChat(threadID, revealing: messageID)
         }
         Notifier.shared.start()
         DockBadge.shared.start()
@@ -45,10 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let parts = identifier.split(separator: "|", maxSplits: 1).map(String.init)
         let target = (threadID: parts[0], messageID: parts.count > 1 ? parts[1] : nil)
-        if didLoadConversations, let mainWindowController {
-            showMain()
-            mainWindowController.select(threadID: target.threadID, revealing: target.messageID)
-            NSApp.activate()
+        if didLoadConversations, mainWindowController != nil {
+            openChat(target.threadID, revealing: target.messageID)
         } else {
             spotlightTarget = target
         }
@@ -58,7 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `messengermac://share?id=…` from the share extension (ShareSupport).
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
-            _ = ShareSupport.shared.handle(url)
+            ShareSupport.shared.handle(url)
         }
     }
 
@@ -72,7 +68,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let item = NSMenuItem(title: conversation.name, action: #selector(openDockChat(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = conversation.id
-            item.image = Self.dockAvatar(conversation)
+            // The picture as loaded for the chat list.
+            let picture = conversation.avatarURL.flatMap(URL.init(string:)).flatMap { ImageCache.shared.cached($0) }
+            item.image = RoundAvatar.image(picture, name: conversation.name, size: 18)
             if conversation.unreadCount > 0 || store.unseenReactions[conversation.id] != nil {
                 item.attributedTitle = NSAttributedString(
                     string: conversation.name,
@@ -92,37 +90,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openDockChat(_ sender: NSMenuItem) {
         guard let threadID = sender.representedObject as? String else { return }
-        showMain()
-        mainWindowController?.select(threadID: threadID)
-        NSApp.activate()
+        openChat(threadID)
     }
 
     @objc private func dockNewMessage(_ sender: Any?) {
         showMain()
         NSApp.activate()
         mainWindowController?.newMessage(sender)
-    }
-
-    /// The chat's picture as loaded for the chat list, round, or initials on gray.
-    private static func dockAvatar(_ conversation: Conversation) -> NSImage {
-        let picture = conversation.avatarURL.flatMap(URL.init(string:)).flatMap { ImageCache.shared.cached($0) }
-        let size = NSSize(width: 18, height: 18)
-        return NSImage(size: size, flipped: false) { rect in
-            NSBezierPath(ovalIn: rect).addClip()
-            if let picture {
-                picture.draw(in: rect)
-            } else {
-                NSColor(calibratedWhite: 0.6, alpha: 1).setFill()
-                rect.fill()
-                let initials = AvatarView.initials(of: conversation.name)
-                let attributes: [NSAttributedString.Key: Any] = [
-                    .font: NSFont.systemFont(ofSize: 7, weight: .medium), .foregroundColor: NSColor.white,
-                ]
-                let textSize = initials.size(withAttributes: attributes)
-                initials.draw(at: NSPoint(x: rect.midX - textSize.width / 2, y: rect.midY - textSize.height / 2), withAttributes: attributes)
-            }
-            return true
-        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -184,6 +158,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mainWindowController = MainWindowController()
         }
         mainWindowController?.showWindow(nil)
+    }
+
+    /// Brings the main window forward with the chat (scrolled to the message) open.
+    func openChat(_ threadID: String, revealing messageID: String? = nil) {
+        showMain()
+        mainWindowController?.select(threadID: threadID, revealing: messageID)
+        NSApp.activate()
     }
 
     @objc func showWebSync(_ sender: Any?) {

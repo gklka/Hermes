@@ -1,8 +1,8 @@
 import AppIntents
 import AppKit
 
-// Shortcuts actions that take a chat. The schema intents (MessagingIntents.swift) pick a
-// message, which is awkward to choose by hand; these act on the chat or your last message in it.
+// The Shortcuts actions. Each takes a chat (a ConversationEntity, MessagingIntents.swift) and
+// acts on it or on your last message in it: picking a message by hand would be awkward.
 
 @available(macOS 27.0, *)
 struct SendToChatIntent: AppIntent {

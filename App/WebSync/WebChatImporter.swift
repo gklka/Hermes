@@ -30,7 +30,7 @@ final class WebChatImporter {
         guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                Task { await self?.runOnce() }
+                _ = Task { await self?.runOnce() }
             }
         }
     }
@@ -73,7 +73,7 @@ final class WebChatImporter {
                         resolved[index].userID = userID
                     }
                 }
-                try? await web.evaluate(Self.backToListScript, as: String.self)
+                _ = try? await web.evaluate(Self.backToListScript, as: String.self)
                 result = try await CoreBridge.shared.call("web.importThreads", Params(rows: resolved), as: ImportResult.self)
             }
             CoreBridge.shared.log("WebChatImporter:imported \(result.imported), unresolved \(result.unresolved.count)")

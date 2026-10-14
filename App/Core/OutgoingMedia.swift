@@ -12,8 +12,7 @@ enum OutgoingMedia {
     /// Pasted/dropped images and copies of every sent file live here, so sent messages keep
     /// showing their local copy even if the original is moved or deleted.
     nonisolated static let directory: URL = {
-        let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("MessengerMac/outgoing", isDirectory: true)
+        let url = AppData.folder.appendingPathComponent("outgoing", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()

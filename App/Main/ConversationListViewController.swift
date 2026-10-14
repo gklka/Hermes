@@ -244,11 +244,7 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
 
     @objc private func toggleUnread(_ sender: NSMenuItem) {
         guard let conversation = sender.representedObject as? Conversation else { return }
-        if conversation.unreadCount > 0 {
-            store.markRead(conversation.id)
-        } else {
-            store.setUnread(true, threadID: conversation.id)
-        }
+        store.toggleRead(conversation)
     }
 
     @objc private func toggleMute(_ sender: NSMenuItem) {
@@ -258,7 +254,7 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
 
     @objc private func viewProfile(_ sender: NSMenuItem) {
         guard let conversation = sender.representedObject as? Conversation,
-              let url = URL(string: "https://www.facebook.com/\(conversation.id)") else { return }
+              let url = Facebook.profileURL(of: conversation.id) else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -286,27 +282,9 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         }
     }
 
-    /// Asks before a destructive action, then runs it and reports a failure.
     private func confirm(_ message: String, info: String, button: String, action: @escaping () async throws -> Void) {
         guard let window = view.window else { return }
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.informativeText = info
-        alert.addButton(withTitle: button).hasDestructiveAction = true
-        alert.addButton(withTitle: "Cancel")
-        alert.beginSheetModal(for: window) { response in
-            guard response == .alertFirstButtonReturn else { return }
-            Task {
-                do {
-                    try await action()
-                } catch {
-                    let failure = NSAlert()
-                    failure.messageText = "\(button) failed"
-                    failure.informativeText = error.localizedDescription
-                    failure.beginSheetModal(for: window, completionHandler: nil)
-                }
-            }
-        }
+        NSAlert.confirm(message, detail: info, button: button, in: window, perform: action)
     }
 
     // MARK: - Search

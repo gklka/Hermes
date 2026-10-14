@@ -97,7 +97,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
             if conversation.isGroup {
                 return "\(conversation.participants.count) people"
             }
-            return ChatStore.shared.presence[conversation.id].map(presenceText) ?? ""
+            return ChatStore.shared.presence[conversation.id].map { presenceText($0) } ?? ""
         }
     }
 
@@ -308,27 +308,13 @@ final class MainSplitViewController: NSSplitViewController {
             list.selectConversation(at: digit - 1)
             return true
         }
-        guard modifiers.isEmpty else { return false }
-        let key: ChatViewController.ScrollKey? = switch Int(character.value) {
-        case NSPageUpFunctionKey: .pageUp
-        case NSPageDownFunctionKey: .pageDown
-        case NSHomeFunctionKey: .home
-        case NSEndFunctionKey: .end
-        default: nil
-        }
-        guard let key, chat.threadID != nil else { return false }
-        chat.scroll(key)
-        return true
+        return chat.handleScrollKey(event)
     }
 
     /// Conversation → Mark as Unread/Read for the open chat.
     func toggleUnread() {
         guard let conversation = selectedConversation else { return }
-        if conversation.unreadCount > 0 {
-            ChatStore.shared.markRead(conversation.id)
-        } else {
-            ChatStore.shared.setUnread(true, threadID: conversation.id)
-        }
+        ChatStore.shared.toggleRead(conversation)
     }
 
     func sendLike() {

@@ -60,7 +60,7 @@ enum MainMenu {
         let unread = conversationMenu.addItem(withTitle: "Mark as Unread", action: #selector(MainWindowController.toggleUnread(_:)), keyEquivalent: "u")
         unread.keyEquivalentModifierMask = [.command, .shift]
         conversationMenu.addItem(withTitle: "Like", action: #selector(MainWindowController.sendLike(_:)), keyEquivalent: "l")
-        conversationMenu.addItem(withTitle: "Edit Last Message", action: #selector(MainWindowController.editMessage(_:)), keyEquivalent: "e")
+        conversationMenu.addItem(withTitle: "Edit Message", action: #selector(MainWindowController.editMessage(_:)), keyEquivalent: "e")
         main.addItem(withTitle: "Conversation", action: nil, keyEquivalent: "").submenu = conversationMenu
 
         let windowMenu = NSMenu(title: "Window")

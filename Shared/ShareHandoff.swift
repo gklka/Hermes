@@ -33,7 +33,6 @@ enum ShareHandoff {
     struct Chat: Codable, Sendable {
         let id: String
         let name: String
-        let isGroup: Bool
         /// Whether Avatars has its picture.
         let hasAvatar: Bool
     }

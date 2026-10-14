@@ -80,7 +80,7 @@ enum ChatExport {
         lines += [summary, ""]
         if conversation.isGroup {
             let members = conversation.participants.map(\.name).filter { !$0.isEmpty }
-            lines += ["Members: \(members.map(escapeInline).joined(separator: ", "))", ""]
+            lines += ["Members: \(members.map { escapeInline($0) }.joined(separator: ", "))", ""]
         }
 
         var day: String?
@@ -107,9 +107,9 @@ enum ChatExport {
                     body.append("> **\(escapeInline(name(reply.senderID))):** \(escapeInline(firstLine))")
                 }
                 if !message.text.isEmpty {
-                    body += message.text.components(separatedBy: "\n").map(escapeLine)
+                    body += message.text.components(separatedBy: "\n").map { escapeLine($0) }
                 }
-                body += message.attachments.map(attachmentLine)
+                body += message.attachments.map { attachmentLine($0) }
                 if !message.reactions.isEmpty {
                     let reactions = message.reactions.map { "\($0.emoji) \(escapeInline(name($0.senderID)))" }
                     body.append("Reactions: \(reactions.joined(separator: ", "))")
@@ -128,14 +128,7 @@ enum ChatExport {
             let title = attachment.title ?? url
             return url.isEmpty ? "🔗 \(escapeInline(title))" : "🔗 [\(escapeInline(title))](<\(url)>)"
         }
-        let label = switch attachment.kind {
-        case .image: "Photo"
-        case .gif: "GIF"
-        case .video: "Video"
-        case .audio: "Voice message"
-        case .sticker: "Sticker"
-        default: "File"
-        }
+        let label = attachment.kind.label
         let name = attachment.filename ?? attachment.localPath.map { URL(fileURLWithPath: $0).lastPathComponent }
         let text = name.map { "\(label): \(escapeInline($0))" } ?? label
         // The downloaded copy, if there is one.
@@ -152,7 +145,7 @@ enum ChatExport {
         if let first = trimmed.first, "#>-+*=|".contains(first) {
             return "\\" + escaped
         }
-        if trimmed.prefix { $0.isNumber }.count > 0, trimmed.drop(while: { $0.isNumber }).hasPrefix(". ") {
+        if trimmed.first?.isNumber == true, trimmed.drop(while: { $0.isNumber }).hasPrefix(". ") {
             return "\\" + escaped
         }
         return escaped
