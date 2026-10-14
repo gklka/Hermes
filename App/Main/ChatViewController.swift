@@ -13,6 +13,8 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         case notDelivered(ChatMessage)
         case restore
         case message(ChatMessage, MessageCellView.Layout)
+        /// Under a message: the people whose read position it is (their last seen message).
+        case readers([Participant])
         case typing
     }
 
@@ -78,7 +80,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         emptyLabel.textColor = .tertiaryLabelColor
 
         // The compose bar is a split view accessory (see composeAccessory); messages scroll under it.
-        for view in [scrollView, emptyLabel] as [NSView] {
+        for view in [scrollView, animationOverlay, emptyLabel] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
@@ -87,6 +89,10 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            animationOverlay.topAnchor.constraint(equalTo: scrollView.topAnchor),
+            animationOverlay.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
+            animationOverlay.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
+            animationOverlay.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor),
             emptyLabel.centerXAnchor.constraint(equalTo: root.centerXAnchor),
             emptyLabel.centerYAnchor.constraint(equalTo: root.centerYAnchor),
         ])
@@ -397,6 +403,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         let groupGap: Int64 = 5 * 60 * 1000
         let outgoingColors = BubbleColors.theme(conversation.bubbleColors)
         var previous: ChatMessage?
+        let seenAt = isSearching ? [:] : Self.readPositions(in: messages, of: conversation, selfID: selfID)
 
         if isSearching {
             // The result count is in the search bar.
@@ -443,6 +450,9 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
                 layout.showAvatar = !continuesToNext
             }
             result.append(.message(message, layout))
+            if let readers = seenAt[message.id] {
+                result.append(.readers(readers))
+            }
             previous = message
         }
 
@@ -455,14 +465,9 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             case .failed:
                 result.append(.notDelivered(last))
             default:
-                let readers = conversation.participants.filter { $0.id != selfID && ($0.readWatermark ?? 0) >= last.timestamp }
-                if readers.isEmpty {
+                // Once someone has seen it, their picture under it says so (the readers row).
+                if seenAt[last.id] == nil {
                     result.append(.caption("Sent", .trailing, .secondaryLabelColor))
-                } else if conversation.isGroup {
-                    let names = readers.map { $0.name.split(separator: " ").first.map(String.init) ?? $0.name }
-                    result.append(.caption("Seen by \(names.joined(separator: ", "))", .trailing, .secondaryLabelColor))
-                } else {
-                    result.append(.caption("Read", .trailing, .secondaryLabelColor))
                 }
             }
         }
@@ -471,6 +476,29 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             result.append(.typing)
         }
         return result
+    }
+
+    /// Each other person's read position: the last loaded message they've seen (by their read
+    /// watermark), by message ID. Not one they sent themselves: that they've seen their own
+    /// message says nothing (and someone who wrote last has read everything before).
+    private static func readPositions(in messages: [ChatMessage], of conversation: Conversation, selfID: String?) -> [String: [Participant]] {
+        let candidates = messages.filter { !$0.isSystem && $0.status != .pending && $0.status != .failed }
+        guard !candidates.isEmpty else { return [:] }
+        var positions: [String: [Participant]] = [:]
+        for participant in conversation.participants where participant.id != selfID {
+            guard let watermark = participant.readWatermark, watermark > 0 else { continue }
+            // The last message at or before the watermark (the messages are in time order).
+            var low = 0, high = candidates.count
+            while low < high {
+                let mid = (low + high) / 2
+                if candidates[mid].timestamp <= watermark { low = mid + 1 } else { high = mid }
+            }
+            guard low > 0 else { continue }
+            let seen = candidates[low - 1]
+            guard seen.senderID != participant.id else { continue }
+            positions[seen.id, default: []].append(participant)
+        }
+        return positions
     }
 
     private var isScrolledToBottom: Bool {
@@ -512,7 +540,7 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     }
 
     private func reload(scrollToBottom forceBottom: Bool = false) {
-        let wasAtBottom = isScrolledToBottom || Date() < pinnedToBottomUntil
+        let wasAtBottom = isScrolledToBottom
         let anchor = forceBottom || wasAtBottom ? nil : scrollAnchor()
 
         // Heights depend on the bubble width; old messages' heights are kept (also across chats).
@@ -520,6 +548,10 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             rowHeights.removeAll()
             rowHeightsWidth = bubbleMaxWidth
         }
+        // Where the read pictures and the messages are now, to slide the ones that move.
+        let readerFramesBefore = readerFramesOnScreen()
+        let rowsBefore = rowPositionsOnScreen()
+        let statusesBefore = statusSnapshots()
         var newRows = buildRows()
         let sameChat = shownThreadID == threadID
         // New messages (or the typing indicator) at the bottom of the chat being read animate in.
@@ -555,16 +587,253 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         if let arrived = arrivedFromTyping {
             finishTypingTransition(at: arrived.index, into: arrived.row)
         }
+        let positions = Self.readerPositions(in: rows)
+        // Moved to another message, or newly shown (e.g. replacing "Sent").
+        let moved = Set(positions.compactMap { reader, messageID in
+            readerPositionsShown[reader] != messageID ? reader : nil
+        })
+        readerPositionsShown = positions
+        let statuses = Set(Self.statusKeys(in: rows).values)
 
         if let anchor {
             // Keep the same messages on screen (e.g. when older ones are added above).
             restore(anchor)
         } else if forceBottom || wasAtBottom {
-            scrollToBottom(animated: !fresh.isEmpty || !appearing.isEmpty || arrivedFromTyping != nil
-                || Date() < pinnedToBottomUntil)
+            // At once: the rows glide from where they were instead (below).
+            scrollToBottom()
         }
+        // On screen positions are final now: rows glide, a gone status fades where it was.
+        if sameChat {
+            slideMovedRows(from: rowsBefore)
+            fadeStatuses(appeared: statuses.subtracting(statusesShown), gone: statusesBefore.filter { !statuses.contains($0.key) })
+        }
+        statusesShown = statuses
         revealPendingMessage()
         alignGradients()
+        if sameChat, !moved.isEmpty {
+            slideReaders(moved, from: readerFramesBefore)
+        }
+    }
+
+    // MARK: - Status under your last message
+
+    /// "Sending…", "Sent" and "Not Delivered" as last shown.
+    private var statusesShown: Set<String> = []
+
+    /// The status rows by index, keyed by status and message ("Sent" under a newer message is a
+    /// new status).
+    private static func statusKeys(in rows: [Row]) -> [Int: String] {
+        var keys: [Int: String] = [:]
+        var messageID = ""
+        for (index, row) in rows.enumerated() {
+            switch row {
+            case .message(let message, _): messageID = message.pendingID ?? message.id
+            // Trailing captions are only the status under your last message.
+            case .caption(let text, .trailing, _): keys[index] = "status:\(text):\(messageID)"
+            case .notDelivered: keys[index] = "status:notDelivered:\(messageID)"
+            default: break
+            }
+        }
+        return keys
+    }
+
+    /// The statuses on screen, with a picture of each (to fade out once their row is gone), in
+    /// the overlay's coordinates (which don't scroll).
+    private func statusSnapshots() -> [String: (frame: CGRect, image: NSImage)] {
+        var snapshots: [String: (frame: CGRect, image: NSImage)] = [:]
+        let keys = Self.statusKeys(in: rows)
+        let visible = tableView.rows(in: tableView.visibleRect)
+        for row in visible.lowerBound..<min(visible.upperBound, rows.count) {
+            guard let key = keys[row],
+                  let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false),
+                  cell.bounds.width > 0, let rep = cell.bitmapImageRepForCachingDisplay(in: cell.bounds) else { continue }
+            cell.cacheDisplay(in: cell.bounds, to: rep)
+            let image = NSImage(size: cell.bounds.size)
+            image.addRepresentation(rep)
+            snapshots[key] = (cell.convert(cell.bounds, to: animationOverlay), image)
+        }
+        return snapshots
+    }
+
+    /// New statuses fade in; ones that went fade out where they were (so "Sending…" → "Sent"
+    /// crossfades).
+    private func fadeStatuses(appeared: Set<String>, gone: [String: (frame: CGRect, image: NSImage)]) {
+        let duration: TimeInterval = 0.35
+        let keys = Self.statusKeys(in: rows)
+        let visible = tableView.rows(in: tableView.visibleRect)
+        for row in visible.lowerBound..<min(visible.upperBound, rows.count) {
+            guard let key = keys[row], appeared.contains(key),
+                  let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) else { continue }
+            cell.wantsLayer = true
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = 0
+            fade.toValue = 1
+            fade.duration = duration
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            cell.layer?.add(fade, forKey: "status.fade")
+        }
+        for (_, snapshot) in gone {
+            let ghost = NSImageView(frame: snapshot.frame)
+            ghost.image = snapshot.image
+            ghost.imageScaling = .scaleNone
+            animationOverlay.addSubview(ghost)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = duration
+                context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                ghost.animator().alphaValue = 0
+            } completionHandler: {
+                ghost.removeFromSuperview()
+            }
+        }
+    }
+
+    /// Above the messages (under the compose bar, which isn't in this view): what fades out
+    /// after its row is gone, and the read pictures flying to a new message. Rows rebuilt
+    /// meanwhile can't cover them here.
+    private let animationOverlay = PassthroughView()
+
+    // MARK: - Moving rows
+
+    /// What identifies a row across reloads, for sliding it: messages and the typing bubble by
+    /// their key, statuses by status and message, date separators by their text. (Read pictures
+    /// fly on their own.)
+    private static func slideKeys(in rows: [Row]) -> [Int: String] {
+        var keys = statusKeys(in: rows)
+        for (index, row) in rows.enumerated() {
+            if let key = appearanceKey(row) {
+                keys[index] = key
+            } else if case .separator(let text) = row {
+                keys[index] = "separator:\(text)"
+            }
+        }
+        return keys
+    }
+
+    /// Where the visible rows are on screen (their top in the clip view), by slide key.
+    private func rowPositionsOnScreen() -> [String: CGFloat] {
+        var positions: [String: CGFloat] = [:]
+        let keys = Self.slideKeys(in: rows)
+        let top = scrollView.contentView.bounds.minY
+        let visible = tableView.rows(in: tableView.visibleRect)
+        for row in visible.lowerBound..<min(visible.upperBound, rows.count) {
+            if let key = keys[row] {
+                positions[key] = tableView.rect(ofRow: row).minY - top
+            }
+        }
+        return positions
+    }
+
+    /// After a reload (and the jump to the new bottom), each visible row that's somewhere else on
+    /// screen glides there from where it was, so rows added or removed (a message, the typing
+    /// bubble, "Sent", a read picture) move the others smoothly instead of making them jump.
+    private func slideMovedRows(from before: [String: CGFloat]) {
+        guard !before.isEmpty else { return }
+        let keys = Self.slideKeys(in: rows)
+        let top = scrollView.contentView.bounds.minY
+        let visible = tableView.rows(in: tableView.visibleRect)
+        for row in visible.lowerBound..<min(visible.upperBound, rows.count) {
+            guard let key = keys[row], appearing[key] == nil, let old = before[key],
+                  let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) else { continue }
+            let frame = rowView.frame
+            let offset = old - (frame.minY - top)
+            guard abs(offset) > 0.5 else { continue }
+            rowView.wantsLayer = true
+            // A layer-backed view's layer position is its frame's origin.
+            let slide = CABasicAnimation(keyPath: "position")
+            slide.fromValue = NSValue(point: NSPoint(x: frame.minX, y: frame.minY + offset))
+            slide.toValue = NSValue(point: frame.origin)
+            slide.duration = 0.3
+            slide.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            rowView.layer?.add(slide, forKey: "row.slide")
+        }
+    }
+
+    // MARK: - Read pictures
+
+    /// People whose picture is flying to its new place (with the flight, so an older flight
+    /// landing doesn't show a newer one's picture early). Their picture there stays hidden.
+    private var flyingReaders: [String: UUID] = [:]
+
+    private func landed(_ readerID: String, flight: UUID) {
+        guard flyingReaders[readerID] == flight else { return }
+        flyingReaders[readerID] = nil
+        let visible = tableView.rows(in: tableView.visibleRect)
+        for row in visible.lowerBound..<min(visible.upperBound, rows.count) {
+            guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? ReadersCellView else { continue }
+            for (reader, view) in cell.avatars where reader.id == readerID {
+                view.alphaValue = 1
+            }
+        }
+    }
+
+    /// Which message each person's read picture is under (by person ID), as last shown.
+    private var readerPositionsShown: [String: String] = [:]
+
+    private static func readerPositions(in rows: [Row]) -> [String: String] {
+        var positions: [String: String] = [:]
+        var messageID: String?
+        for row in rows {
+            switch row {
+            case .message(let message, _): messageID = message.id
+            case .readers(let readers): for reader in readers { positions[reader.id] = messageID }
+            default: break
+            }
+        }
+        return positions
+    }
+
+    /// The read pictures on screen, by person ID, in the overlay's coordinates (which don't
+    /// scroll, so they're still right after the jump to the new bottom).
+    private func readerFramesOnScreen() -> [String: CGRect] {
+        var frames: [String: CGRect] = [:]
+        let visible = tableView.rows(in: tableView.visibleRect)
+        for row in visible.lowerBound..<visible.upperBound {
+            guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? ReadersCellView else { continue }
+            for (reader, view) in cell.avatars {
+                frames[reader.id] = view.convert(view.bounds, to: animationOverlay)
+            }
+        }
+        return frames
+    }
+
+    /// A person read further: their picture slides from the message it was under to the new
+    /// one (a copy flies over the chat while the real one waits), or fades in if the old place
+    /// wasn't on screen.
+    private func slideReaders(_ moved: Set<String>, from before: [String: CGRect]) {
+        let duration: TimeInterval = 0.4
+        let visible = tableView.rows(in: tableView.visibleRect)
+        for row in visible.lowerBound..<visible.upperBound {
+            guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? ReadersCellView else { continue }
+            for (reader, view) in cell.avatars where moved.contains(reader.id) {
+                view.wantsLayer = true
+                guard let start = before[reader.id] else {
+                    let fade = CABasicAnimation(keyPath: "opacity")
+                    fade.fromValue = 0
+                    fade.toValue = 1
+                    fade.duration = 0.25
+                    view.layer?.add(fade, forKey: "readers.fade")
+                    continue
+                }
+                let end = view.convert(view.bounds, to: animationOverlay)
+                let from = start
+                guard from != end else { continue }
+                let flying = AvatarView(frame: from)
+                flying.configure(name: reader.name, url: reader.avatarURL)
+                animationOverlay.addSubview(flying)
+                // The real one shows up as the copy lands, also if reloads rebuild its row meanwhile.
+                let flight = UUID()
+                flyingReaders[reader.id] = flight
+                view.alphaValue = 0
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = duration
+                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    flying.animator().frame = end
+                } completionHandler: { [weak self] in
+                    flying.removeFromSuperview()
+                    self?.landed(reader.id, flight: flight)
+                }
+            }
+        }
     }
 
     // MARK: - Appearance animations
@@ -581,9 +850,6 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     /// Rows to animate when their cells appear.
     private var appearing: [String: Appearance] = [:]
 
-    /// While an animated scroll to the bottom runs, reloads keep following the bottom (mid-way
-    /// the view isn't at the bottom yet).
-    private var pinnedToBottomUntil = Date.distantPast
 
     private static func isIncoming(_ row: Row, in keys: Set<String>) -> Bool {
         guard case .message(let message, _) = row, !message.isFromMe, !message.isSystem,
@@ -769,27 +1035,17 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
         }
     }
 
-    private func scrollToBottom(animated: Bool = false) {
+    /// At once; changes at the bottom look smooth because the rows glide (slideMovedRows). Set
+    /// exactly (not scrollRowToVisible): when the chat got shorter, the clip view would only
+    /// catch up a moment later, a jump in the middle of the animations.
+    private func scrollToBottom() {
         guard !rows.isEmpty else { return }
-        guard animated else {
-            tableView.scrollRowToVisible(rows.count - 1)
-            return
-        }
         let clip = scrollView.contentView
         // The last row just above the compose bar, which overlaps the bottom (content inset).
         let insets = scrollView.contentInsets
         let bottom = tableView.bounds.height + insets.bottom - clip.bounds.height
-        let origin = NSPoint(x: clip.bounds.origin.x, y: max(-insets.top, bottom))
-        guard abs(origin.y - clip.bounds.origin.y) > 0.5 else { return }
-        pinnedToBottomUntil = Date().addingTimeInterval(0.35)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.25
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            clip.animator().setBoundsOrigin(origin)
-        } completionHandler: { [weak self] in
-            guard let self else { return }
-            self.scrollView.reflectScrolledClipView(clip)
-        }
+        clip.setBoundsOrigin(NSPoint(x: clip.bounds.origin.x, y: max(-insets.top, bottom)))
+        scrollView.reflectScrolledClipView(clip)
     }
 
     enum ScrollKey {
@@ -885,6 +1141,10 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
             cell.delegate = self
             cell.configure(message, layout: layout, store: store)
             cell.isMessageSelected = !sizing && message.id == selectedMessageID
+            return cell
+        case .readers(let readers):
+            let cell = reuse("Readers", sizing: sizing, ReadersCellView.init)
+            cell.configure(readers, hiding: sizing ? [] : Set(flyingReaders.keys))
             return cell
         case .typing:
             // A message cell in its typing state, under its own identifier: there's one typing
@@ -1558,6 +1818,11 @@ final class ChatTableView: NSTableView {
         }
         return super.validateProposedFirstResponder(responder, for: event)
     }
+}
+
+/// Shows things (animations) without taking any clicks, scrolls or drags from what's under it.
+final class PassthroughView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// Accepts files and images dragged anywhere onto the conversation; they're staged in the

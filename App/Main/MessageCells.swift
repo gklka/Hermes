@@ -237,6 +237,58 @@ extension NSView {
     }
 }
 
+/// Under the last message someone has seen: their small pictures on the right, like Messenger's
+/// read heads ("Seen by …" on hover).
+final class ReadersCellView: NSTableCellView {
+    private let stack = NSStackView()
+    private static let maxShown = 8
+    /// The pictures shown, with whose they are (for animating a move to another message).
+    private(set) var avatars: [(reader: Participant, view: AvatarView)] = []
+
+    init() {
+        super.init(frame: .zero)
+        stack.orientation = .horizontal
+        stack.spacing = 2
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
+            stack.topAnchor.constraint(equalTo: topAnchor, constant: 2),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            stack.heightAnchor.constraint(equalToConstant: 14),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// `hiding`: people whose picture is still flying here (shown once it lands).
+    func configure(_ readers: [Participant], hiding: Set<String> = []) {
+        for view in stack.arrangedSubviews { view.removeFromSuperview() }
+        avatars = []
+        for reader in readers.prefix(Self.maxShown) {
+            let avatar = AvatarView()
+            avatar.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                avatar.widthAnchor.constraint(equalToConstant: 14),
+                avatar.heightAnchor.constraint(equalToConstant: 14),
+            ])
+            avatar.configure(name: reader.name, url: reader.avatarURL)
+            avatar.toolTip = reader.name
+            avatar.alphaValue = hiding.contains(reader.id) ? 0 : 1
+            stack.addArrangedSubview(avatar)
+            avatars.append((reader, avatar))
+        }
+        if readers.count > Self.maxShown {
+            let more = NSTextField(labelWithString: "+\(readers.count - Self.maxShown)")
+            more.font = .systemFont(ofSize: 10)
+            more.textColor = .secondaryLabelColor
+            stack.addArrangedSubview(more)
+        }
+        toolTip = "Seen by " + readers.map(\.name).filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+}
+
 /// Cells whose content animates in when it first appears (ChatViewController).
 protocol AppearingCell: NSView {
     /// The part that zooms in: the bubble and what belongs to it.
