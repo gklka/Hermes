@@ -148,6 +148,14 @@ final class ChatStore {
         return true
     }
 
+    /// The chat on facebook.com; Messenger's inbox for an encrypted chat whose web ID isn't known yet.
+    func webURL(for threadID: String) async -> URL? {
+        struct Params: Encodable { let threadID: String }
+        struct Result: Decodable { let path: String }
+        let path = (try? await core.call("web.threadPath", Params(threadID: threadID), as: Result.self).path) ?? ""
+        return URL(string: "https://www.facebook.com" + (path.isEmpty ? "/messages/" : path))
+    }
+
     /// The chat's newest stored messages, without fetching history or touching what the UI shows.
     func storedMessages(in threadID: String, limit: Int) async -> [ChatMessage] {
         struct Params: Encodable { let threadID: String; let limit: Int }

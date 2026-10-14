@@ -196,6 +196,7 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         let conversation = rows[row]
         let unread = conversation.unreadCount > 0
         menu.addItem(item("Open in New Window", symbol: "macwindow.badge.plus", action: #selector(openInWindow(_:)), conversation))
+        menu.addItem(item("Open on Web", symbol: "safari", action: #selector(openOnWeb(_:)), conversation))
         menu.addItem(.separator())
         menu.addItem(item(unread ? "Mark as Read" : "Mark as Unread",
                           symbol: unread ? "envelope.open" : "envelope.badge", action: #selector(toggleUnread), conversation))
@@ -225,6 +226,13 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
     @objc private func openInWindow(_ sender: NSMenuItem) {
         guard let conversation = sender.representedObject as? Conversation else { return }
         ChatWindowController.show(threadID: conversation.id)
+    }
+
+    @objc private func openOnWeb(_ sender: NSMenuItem) {
+        guard let conversation = sender.representedObject as? Conversation else { return }
+        Task { [store] in
+            if let url = await store.webURL(for: conversation.id) { NSWorkspace.shared.open(url) }
+        }
     }
 
     /// Double-clicking a chat opens it in its own window.
