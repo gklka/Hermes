@@ -118,7 +118,9 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		rows := c.store.ListThreads()
 		out := make([]apiConversation, 0, len(rows))
 		for _, t := range rows {
-			out = append(out, c.store.Conversation(t, self))
+			conv := c.store.Conversation(t, self)
+			out = append(out, conv)
+			c.lookUpNames(t, conv)
 		}
 		return out, nil
 	case "session.cookies":
@@ -398,7 +400,8 @@ func (c *Core) setUnread(ctx context.Context, threadID string, unread bool) erro
 	if !unread {
 		return c.markRead(ctx, threadID)
 	}
-	c.store.Set("unread:"+threadID, "1")
+	// When it was marked: a read on another device after this clears it (applyRead).
+	c.store.Set("unread:"+threadID, strconv.FormatInt(time.Now().UnixMilli(), 10))
 	cs := newChangeSet()
 	cs.thread(threadID)
 	c.flush(cs)

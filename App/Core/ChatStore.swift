@@ -17,6 +17,10 @@ final class ChatStore {
     let changes = PassthroughSubject<Change, Never>()
     /// Every message event from the core (new, edited or backfilled), for all threads.
     let messageEvents = PassthroughSubject<ChatMessage, Never>()
+    /// Others' reactions to your messages (for notifications).
+    let reactionEvents = PassthroughSubject<ReactionEvent, Never>()
+    /// Chats read here or on another device (for notifications).
+    let threadReadEvents = PassthroughSubject<ThreadReadEvent, Never>()
 
     private(set) var connectionState: ConnectionState = .disconnected
     private(set) var connectionError: String?
@@ -80,6 +84,7 @@ final class ChatStore {
         conversations = []
         conversationsByID = [:]
         messagesByThread = [:]
+        unseenReactions = [:]
         notify(.conversations)
     }
 
@@ -239,6 +244,35 @@ final class ChatStore {
         }
     }
 
+    // MARK: - Unseen reactions
+
+    private static let unseenReactionsKey = "UnseenReactions"
+
+    /// Chats with reactions to your messages you haven't seen, with the newest one's time (ms).
+    /// Messenger doesn't count reactions as unread and doesn't sync seeing them; the Dock badge
+    /// counts them (DockBadge). Kept across launches.
+    private(set) var unseenReactions: [String: Int64] =
+        (UserDefaults.standard.dictionary(forKey: unseenReactionsKey) as? [String: Int64]) ?? [:] {
+        didSet { UserDefaults.standard.set(unseenReactions, forKey: Self.unseenReactionsKey) }
+    }
+
+    /// Reactions older than this aren't new (e.g. they came with backfilled messages).
+    private static let unseenReactionMaxAge: Int64 = 24 * 60 * 60 * 1000
+
+    private func noteUnseenReaction(_ event: ReactionEvent) {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        guard now - event.timestamp < Self.unseenReactionMaxAge else { return }
+        unseenReactions[event.threadID] = max(unseenReactions[event.threadID] ?? 0, event.timestamp)
+        notify(.conversations)
+    }
+
+    /// Seen: the chat was viewed here (no `upTo`), or read anywhere at or after the reactions.
+    func clearUnseenReactions(_ threadID: String, upTo timestamp: Int64 = .max) {
+        guard let newest = unseenReactions[threadID], newest <= timestamp else { return }
+        unseenReactions[threadID] = nil
+        notify(.conversations)
+    }
+
     func markRead(_ threadID: String) {
         struct Params: Encodable { let threadID: String }
         markedUnread.remove(threadID)
@@ -355,6 +389,18 @@ final class ChatStore {
             guard let message = core.decodeEvent(ChatMessage.self, from: payload) else { return }
             upsert(message)
             messageEvents.send(message)
+
+        case "reaction":
+            guard let event = core.decodeEvent(ReactionEvent.self, from: payload) else { return }
+            if Notifier.shared.isThreadVisible?(event.threadID) != true {
+                noteUnseenReaction(event)
+            }
+            reactionEvents.send(event)
+
+        case "threadRead":
+            guard let event = core.decodeEvent(ThreadReadEvent.self, from: payload) else { return }
+            clearUnseenReactions(event.threadID, upTo: event.timestamp)
+            threadReadEvents.send(event)
 
         case "messageRemoved":
             guard let event = core.decodeEvent(MessageRemovedEvent.self, from: payload) else { return }

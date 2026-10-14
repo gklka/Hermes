@@ -26,7 +26,9 @@ func (c *Core) flush(cs *changeSet) {
 	for id := range cs.threads {
 		if t := c.store.GetThread(id); t != nil {
 			if t.Visible() {
-				emitEvent("thread", c.store.Conversation(t, self))
+				conv := c.store.Conversation(t, self)
+				emitEvent("thread", conv)
+				c.lookUpNames(t, conv)
 			} else {
 				// Also drops it from the list if it was just moved to requests/spam.
 				emitEvent("threadRemoved", map[string]string{"threadID": id})
@@ -248,7 +250,7 @@ func (c *Core) handleTable(tbl *table.LSTable) {
 
 	// Reactions
 	for _, r := range tbl.LSUpsertReaction {
-		c.store.SetReaction(r.MessageId, id64(r.ActorId), r.Reaction)
+		c.setReaction(r.MessageId, id64(r.ActorId), r.Reaction, r.TimestampMs)
 		cs.message(r.MessageId)
 	}
 	for _, r := range tbl.LSDeleteReaction {
@@ -263,17 +265,23 @@ func (c *Core) handleTable(tbl *table.LSTable) {
 		c.store.SetReadWatermark(id, reader, r.ReadWatermarkTimestampMs)
 		if reader != self {
 			emitEvent("readReceipt", map[string]any{"threadID": id, "readerID": reader, "timestamp": r.ReadWatermarkTimestampMs})
+		} else {
+			// Our own receipt: the chat was read on another device (Messenger sends this, not
+			// LSMarkThreadRead, for reads elsewhere).
+			c.log.Info().Str("thread", id).Int64("ts", r.ReadWatermarkTimestampMs).Msg("Read on another device (LSUpdateReadReceipt)")
+			c.applyRead(cs, id, r.ReadWatermarkTimestampMs)
 		}
 	}
+	// Read here or on another device.
 	for _, r := range tbl.LSMarkThreadRead {
 		id := c.threadID(r.ThreadKey)
-		c.store.SetThreadLastRead(id, r.LastReadWatermarkTimestampMs)
-		cs.thread(id)
+		c.log.Info().Str("thread", id).Int64("ts", r.LastReadWatermarkTimestampMs).Msg("Read (LSMarkThreadRead)")
+		c.applyRead(cs, id, r.LastReadWatermarkTimestampMs)
 	}
 	for _, r := range tbl.LSMarkThreadReadV2 {
 		id := c.threadID(r.ThreadKey)
-		c.store.SetThreadLastRead(id, r.LastReadWatermarkTimestampMs)
-		cs.thread(id)
+		c.log.Info().Str("thread", id).Int64("ts", r.LastReadWatermarkTimestampMs).Msg("Read (LSMarkThreadReadV2)")
+		c.applyRead(cs, id, r.LastReadWatermarkTimestampMs)
 	}
 
 	// Typing

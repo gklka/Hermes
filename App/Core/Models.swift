@@ -112,6 +112,24 @@ struct MessageRemovedEvent: Decodable {
     let messageID: String
 }
 
+/// The chat was read up to `timestamp`, here or on another device (apiThreadReadEvent).
+struct ThreadReadEvent: Decodable {
+    let threadID: String
+    /// Milliseconds since epoch.
+    let timestamp: Int64
+}
+
+/// Someone else reacted to one of your messages (apiReactionEvent), for a notification.
+struct ReactionEvent: Decodable {
+    let threadID: String
+    let messageID: String
+    let senderID: String
+    let emoji: String
+    /// Milliseconds since epoch.
+    let timestamp: Int64
+    let messageText: String
+}
+
 struct ThreadRemovedEvent: Decodable {
     let threadID: String
 }

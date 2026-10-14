@@ -381,6 +381,7 @@ func (c *Core) handleMetaEvent(ctx context.Context, rawEvt any) {
 		}
 		go c.connectE2EE()
 		go c.backfillThreads(ctx)
+		go c.lookUpAllNames()
 	case *messagix.ReconnectedEvent:
 		c.setState(stateConnected, "")
 	case *messagix.TransientDisconnectEvent:

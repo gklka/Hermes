@@ -96,6 +96,24 @@ type apiMessage struct {
 	PendingID   string          `json:"pendingID,omitempty"`
 }
 
+// apiReactionEvent is someone else reacting to one of your messages (the "reaction" event),
+// for a notification.
+type apiReactionEvent struct {
+	ThreadID    string `json:"threadID"`
+	MessageID   string `json:"messageID"`
+	SenderID    string `json:"senderID"`
+	Emoji       string `json:"emoji"`
+	Timestamp   int64  `json:"timestamp"`
+	MessageText string `json:"messageText"`
+}
+
+// apiThreadReadEvent is the chat being read up to Timestamp, here or on another device (the
+// "threadRead" event), to remove notifications seen elsewhere.
+type apiThreadReadEvent struct {
+	ThreadID  string `json:"threadID"`
+	Timestamp int64  `json:"timestamp"`
+}
+
 type apiState struct {
 	State   string      `json:"state"`
 	Account *apiAccount `json:"account,omitempty"`

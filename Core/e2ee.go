@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waArmadilloApplication"
@@ -98,7 +99,7 @@ func (c *Core) handleFBMessage(evt *events.FBMessage) {
 		content := payload.GetContent()
 		if reaction := content.GetReactionMessage(); reaction != nil {
 			target := reaction.GetKey().GetID()
-			c.store.SetReaction(target, senderID, reaction.GetText())
+			c.setReaction(target, senderID, reaction.GetText(), ts)
 			cs.message(target)
 			c.flush(cs)
 			return
@@ -246,6 +247,7 @@ func (c *Core) handleReceipt(evt *events.Receipt) {
 	switch evt.Type {
 	case waTypes.ReceiptTypeRead:
 		if evt.IsFromMe {
+			c.log.Info().Str("thread", threadID).Int64("ts", ts).Msg("Read on another device (E2EE receipt)")
 			c.markThreadReadLocally(threadID, ts)
 			return
 		}
@@ -253,14 +255,27 @@ func (c *Core) handleReceipt(evt *events.Receipt) {
 		c.store.SetReadWatermark(threadID, reader, ts)
 		emitEvent("readReceipt", map[string]any{"threadID": threadID, "readerID": reader, "timestamp": ts})
 	case waTypes.ReceiptTypeReadSelf:
+		c.log.Info().Str("thread", threadID).Int64("ts", ts).Msg("Read on another device (E2EE read-self)")
 		c.markThreadReadLocally(threadID, ts)
 	}
 }
 
 func (c *Core) markThreadReadLocally(threadID string, ts int64) {
-	c.store.SetThreadLastRead(threadID, ts)
-	c.store.Delete("unread:" + threadID)
 	cs := newChangeSet()
-	cs.thread(threadID)
+	c.applyRead(cs, threadID, ts)
 	c.flush(cs)
+}
+
+// applyRead records that the chat was read up to ts (here or on another device). It also
+// clears "marked unread" if that was set before the read.
+func (c *Core) applyRead(cs *changeSet, threadID string, ts int64) {
+	c.store.SetThreadLastRead(threadID, ts)
+	if marked := c.store.Get("unread:" + threadID); marked != "" {
+		// Older markers are "1" (no time): any read clears them.
+		if at, err := strconv.ParseInt(marked, 10, 64); err != nil || at <= ts {
+			c.store.Delete("unread:" + threadID)
+		}
+	}
+	cs.thread(threadID)
+	emitEvent("threadRead", apiThreadReadEvent{ThreadID: threadID, Timestamp: ts})
 }

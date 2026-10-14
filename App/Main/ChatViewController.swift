@@ -259,7 +259,10 @@ final class ChatViewController: NSViewController, NSTableViewDataSource, NSTable
     }
 
     func markReadIfVisible() {
-        guard let threadID, !store.markedUnread.contains(threadID), let window = view.window, window.isKeyWindow, NSApp.isActive,
+        guard let threadID, let window = view.window, window.isKeyWindow, NSApp.isActive else { return }
+        // Its new reactions are seen too (they count in the Dock badge).
+        store.clearUnseenReactions(threadID)
+        guard !store.markedUnread.contains(threadID),
               let conversation = store.conversation(threadID), conversation.unreadCount > 0 else { return }
         store.markRead(threadID)
     }

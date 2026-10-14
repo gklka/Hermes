@@ -308,6 +308,23 @@ func (s *Store) AddParticipant(threadID, userID, nickname string, readWatermark 
 	`, threadID, userID, nickname, readWatermark)
 }
 
+// ThreadsWithParticipant lists the chats the person is in.
+func (s *Store) ThreadsWithParticipant(userID string) []string {
+	rows, err := s.db.Query(`SELECT thread_id FROM participants WHERE user_id=?`, userID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
 func (s *Store) RemoveParticipant(threadID, userID string) {
 	_, _ = s.db.Exec(`DELETE FROM participants WHERE thread_id=? AND user_id=?`, threadID, userID)
 }
@@ -518,6 +535,13 @@ func (s *Store) SetAttachmentLocalPath(messageID, attachmentID, path string) {
 
 // MARK: - Reactions
 
+// Reaction is the person's current reaction to the message, or "".
+func (s *Store) Reaction(messageID, senderID string) string {
+	var emoji string
+	_ = s.db.QueryRow(`SELECT emoji FROM reactions WHERE message_id=? AND sender_id=?`, messageID, senderID).Scan(&emoji)
+	return emoji
+}
+
 func (s *Store) SetReaction(messageID, senderID, emoji string) {
 	if emoji == "" {
 		_, _ = s.db.Exec(`DELETE FROM reactions WHERE message_id=? AND sender_id=?`, messageID, senderID)
@@ -641,12 +665,15 @@ func (s *Store) Conversation(t *threadRow, selfID string) apiConversation {
 		var newest sql.NullInt64
 		_ = s.db.QueryRow(`SELECT MAX(timestamp) FROM messages WHERE thread_id=? AND sender_id!=? AND is_system=0`,
 			t.ID, selfID).Scan(&newest)
-		if !newest.Valid || newest.Int64 > t.LastRead {
+		// Encrypted chats' messages all arrive here (live), so without one from someone else
+		// after the last read the bump was something else; read state from other devices
+		// doesn't always reach them either.
+		if newest.Valid && newest.Int64 > t.LastRead || !newest.Valid && !t.Type.IsWhatsApp() {
 			conv.UnreadCount = 1
 		}
 	}
-	// Marked unread from the context menu.
-	if s.Get("unread:"+t.ID) == "1" {
+	// Marked unread from the context menu (the value is when).
+	if s.Get("unread:"+t.ID) != "" {
 		conv.UnreadCount = 1
 	}
 	return conv

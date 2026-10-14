@@ -38,10 +38,36 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         store.messageEvents
             .sink { [weak self] message in self?.handle(message) }
             .store(in: &cancellables)
+        store.reactionEvents
+            .sink { [weak self] reaction in self?.handle(reaction) }
+            .store(in: &cancellables)
+        store.threadReadEvents
+            .sink { [weak self] event in self?.clearSeenReactions(event) }
+            .store(in: &cancellables)
+        store.changes
+            .sink { [weak self] change in
+                if case .conversations = change { self?.clearRead() }
+            }
+            .store(in: &cancellables)
+    }
+
+    /// Chats with notifications posted (and not cleared yet).
+    private var notifiedThreads: Set<String> = []
+
+    /// Removes the notifications of chats that were read, here or on any other device (and of
+    /// chats that are gone).
+    private func clearRead() {
+        for threadID in notifiedThreads {
+            let conversation = store.conversation(threadID)
+            guard conversation == nil || conversation?.unreadCount == 0 else { continue }
+            notifiedThreads.remove(threadID)
+            clear(threadID: threadID)
+        }
     }
 
     /// Removes the chat's notifications from Notification Center (e.g. once it's opened).
     func clear(threadID: String) {
+        reactionNotifications[threadID] = nil
         Task {
             let ids = await center.deliveredNotifications()
                 .filter { $0.request.content.threadIdentifier == threadID }
@@ -79,19 +105,63 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         Task { await post(message, in: conversation) }
     }
 
+    /// Someone else reacted to one of your messages (the core only sends those).
+    private func handle(_ reaction: ReactionEvent) {
+        let date = Date(timeIntervalSince1970: TimeInterval(reaction.timestamp) / 1000)
+        guard date > launchTime.addingTimeInterval(-30), Date().timeIntervalSince(date) < Self.maxAge,
+              notifiedIDs.insert("\(reaction.messageID)|\(reaction.senderID)|\(reaction.emoji)").inserted else { return }
+        let conversation = store.conversation(reaction.threadID)
+        if conversation?.isMuted == true || isThreadVisible?(reaction.threadID) == true { return }
+        let text = reaction.messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let quoted = text.count > 60 ? String(text.prefix(60)) + "…" : text
+        let body = quoted.isEmpty ? "Reacted \(reaction.emoji) to your message" : "Reacted \(reaction.emoji) to “\(quoted)”"
+        let identifier = "reaction-\(reaction.messageID)-\(reaction.senderID)"
+        Task {
+            await post(
+                threadID: reaction.threadID, senderID: reaction.senderID, body: body,
+                identifier: identifier, messageID: reaction.messageID,
+                in: conversation, clearsWhenRead: false
+            )
+            reactionNotifications[reaction.threadID, default: []].append((identifier, reaction.timestamp))
+        }
+    }
+
+    /// Posted reaction notifications per chat, with the reaction's time.
+    private var reactionNotifications: [String: [(identifier: String, timestamp: Int64)]] = [:]
+
+    /// The chat was read (here or on another device) at or after these reactions: they were seen.
+    private func clearSeenReactions(_ event: ThreadReadEvent) {
+        guard let posted = reactionNotifications[event.threadID] else { return }
+        let seen = posted.filter { $0.timestamp <= event.timestamp }
+        guard !seen.isEmpty else { return }
+        center.removeDeliveredNotifications(withIdentifiers: seen.map(\.identifier))
+        reactionNotifications[event.threadID] = posted.filter { $0.timestamp > event.timestamp }
+    }
+
     private func post(_ message: ChatMessage, in conversation: Conversation?) async {
+        await post(
+            threadID: message.threadID, senderID: message.senderID, body: Self.body(for: message),
+            identifier: message.id, messageID: message.id, in: conversation, clearsWhenRead: true
+        )
+    }
+
+    /// `clearsWhenRead`: removed once the chat is read anywhere (messages; a reaction doesn't
+    /// make the chat unread, so its notification goes when the chat is opened).
+    private func post(
+        threadID: String, senderID: String, body: String, identifier: String, messageID: String,
+        in conversation: Conversation?, clearsWhenRead: Bool
+    ) async {
         let isGroup = conversation?.isGroup ?? false
-        let sender = store.participant(message.senderID, in: message.threadID)
+        let sender = store.participant(senderID, in: threadID)
         let senderName = sender?.name ?? conversation?.name ?? "Messenger"
-        let body = Self.body(for: message)
 
         let content = UNMutableNotificationContent()
         content.title = isGroup ? (conversation?.name ?? senderName) : senderName
         content.subtitle = isGroup ? senderName : ""
         content.body = body
         content.sound = .default
-        content.threadIdentifier = message.threadID
-        content.userInfo = ["threadID": message.threadID, "messageID": message.id]
+        content.threadIdentifier = threadID
+        content.userInfo = ["threadID": threadID, "messageID": messageID]
 
         let avatarURL = sender?.avatarURL ?? (isGroup ? nil : conversation?.avatarURL)
         let avatar = await Self.pngData(from: avatarURL)
@@ -100,7 +170,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         do {
             guard Self.canUseCommunicationNotifications else { throw NotifierError.noCommunicationEntitlement }
             finalContent = try await communicationContent(
-                content, message: message, senderName: senderName, body: body,
+                content, threadID: threadID, senderID: senderID, senderName: senderName, body: body,
                 avatar: avatar, groupName: isGroup ? conversation?.name : nil
             )
         } catch {
@@ -112,9 +182,13 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             }
         }
 
-        let request = UNNotificationRequest(identifier: message.id, content: finalContent, trigger: nil)
+        let request = UNNotificationRequest(identifier: identifier, content: finalContent, trigger: nil)
         do {
             try await center.add(request)
+            guard clearsWhenRead else { return }
+            notifiedThreads.insert(threadID)
+            // Read meanwhile (e.g. on another device while the picture loaded).
+            clearRead()
         } catch {
             CoreBridge.shared.log("Notifier: posting failed: \(error)")
         }
@@ -135,21 +209,21 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     /// Turns the content into a communication notification: the system shows the sender's
     /// picture as the notification's icon (and the group's name and picture for groups).
     private func communicationContent(
-        _ content: UNMutableNotificationContent, message: ChatMessage, senderName: String, body: String,
+        _ content: UNMutableNotificationContent, threadID: String, senderID: String, senderName: String, body: String,
         avatar: Data?, groupName: String?
     ) async throws -> UNNotificationContent {
         let person = INPerson(
-            personHandle: INPersonHandle(value: message.senderID, type: .unknown),
+            personHandle: INPersonHandle(value: senderID, type: .unknown),
             nameComponents: nil,
             displayName: senderName,
             image: avatar.map { INImage(imageData: $0) },
             contactIdentifier: nil,
-            customIdentifier: message.senderID
+            customIdentifier: senderID
         )
         // A group needs its other members as recipients to be shown as a group.
         var recipients: [INPerson]?
-        if groupName != nil, let conversation = store.conversation(message.threadID) {
-            recipients = conversation.participants.filter { $0.id != message.senderID }.map {
+        if groupName != nil, let conversation = store.conversation(threadID) {
+            recipients = conversation.participants.filter { $0.id != senderID }.map {
                 INPerson(
                     personHandle: INPersonHandle(value: $0.id, type: .unknown), nameComponents: nil,
                     displayName: $0.name, image: nil, contactIdentifier: nil, customIdentifier: $0.id
@@ -161,7 +235,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             outgoingMessageType: .outgoingMessageText,
             content: body,
             speakableGroupName: groupName.map { INSpeakableString(spokenPhrase: $0) },
-            conversationIdentifier: message.threadID,
+            conversationIdentifier: threadID,
             serviceName: nil,
             sender: person,
             attachments: nil
