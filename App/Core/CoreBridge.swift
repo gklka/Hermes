@@ -1,10 +1,10 @@
 import Foundation
 
-/// The app's data folder, Application Support/MessengerMac: the core's databases, media and
+/// The app's data folder, Application Support/Hermes: the core's databases, media and
 /// log, and the app's own caches.
 enum AppData {
     nonisolated static let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("MessengerMac", isDirectory: true)
+        .appendingPathComponent("Hermes", isDirectory: true)
 }
 
 /// Thin JSON-RPC bridge to the Go core.
@@ -87,7 +87,7 @@ final class CoreBridge {
         }
     }
 
-    /// Writes a line to the core's log file (Application Support/MessengerMac/core.log).
+    /// Writes a line to the core's log file (Application Support/Hermes/core.log).
     func log(_ text: String) {
         struct Params: Encodable { let text: String }
         Task { try? await call("log", Params(text: text)) }

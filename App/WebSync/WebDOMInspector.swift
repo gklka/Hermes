@@ -2,7 +2,7 @@ import Foundation
 import WebKit
 
 /// Development aid: writes a structural summary of the Messenger web page (roles, aria labels,
-/// links, short text) to Application Support/MessengerMac/webdump.json, so the importer's
+/// links, short text) to Application Support/Hermes/webdump.json, so the importer's
 /// selectors can be written against the real page.
 ///
 /// Enable with: defaults write <bundle ID> WebDumpEnabled -bool YES

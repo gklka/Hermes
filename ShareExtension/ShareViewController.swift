@@ -1,7 +1,7 @@
 import AppKit
 import UniformTypeIdentifiers
 
-/// The Share menu's "MessengerMac": pick one of the most recent chats (a row of pictures, or
+/// The Share menu's "Hermes": pick one of the most recent chats (a row of pictures, or
 /// the menu for more), add a message, Send. What's shared goes to the app through ShareHandoff.
 final class ShareViewController: NSViewController {
     /// How many recent chats the row of pictures shows.
@@ -112,7 +112,7 @@ final class ShareViewController: NSViewController {
         }
         quickRow.isHidden = quickButtons.isEmpty
         if chats.isEmpty {
-            chatPopUp.addItem(withTitle: "Open MessengerMac first")
+            chatPopUp.addItem(withTitle: "Open Hermes first")
             chatPopUp.isEnabled = false
         }
         updateQuickSelection()

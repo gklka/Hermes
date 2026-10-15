@@ -1,4 +1,4 @@
-# MessengerMac
+# Hermes
 
 Read `HANDOFF.md` first: it has the project context, the user's working preferences, the build commands and the architecture.
 

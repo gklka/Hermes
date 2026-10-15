@@ -73,7 +73,7 @@ enum ChatExport {
         let byID = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
 
         var lines: [String] = ["# \(escapeInline(conversation.name))", ""]
-        var summary = "Exported from MessengerMac on \(Formatters.exact(Date())) · \(messages.count) messages"
+        var summary = "Exported from Hermes on \(Formatters.exact(Date())) · \(messages.count) messages"
         if let first = messages.first, let last = messages.last {
             summary += " · \(rangeFormatter.string(from: first.date)) – \(rangeFormatter.string(from: last.date))"
         }

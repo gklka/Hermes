@@ -349,7 +349,7 @@ enum MessagingIntentError: Error, CustomLocalizedStringResourceConvertible {
 
     var localizedStringResource: LocalizedStringResource {
         switch self {
-        case .notReady: "MessengerMac isn't logged in."
+        case .notReady: "Hermes isn't logged in."
         case .unsupported(let reason): "\(reason)"
         }
     }

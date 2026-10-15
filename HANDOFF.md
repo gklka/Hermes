@@ -1,4 +1,4 @@
-# MessengerMac — handoff notes for Claude
+# Hermes — handoff notes for Claude
 
 This file lets a new Claude Code session pick up this project, also on another machine. Read it fully before making changes.
 
@@ -29,7 +29,7 @@ These come from the user's global `~/.claude/CLAUDE.md` plus feedback given duri
    - `DEVELOPER_DIR` defaults to `/Applications/Xcode 27.1.app` in the script; override it on another machine.
    - Before installing, wait for a running import to finish:
      ```sh
-     L() { grep -o '"message":"WebHistoryImporter[^"]*' ~/Library/Application\ Support/MessengerMac/core.log | tail -1; }
+     L() { grep -o '"message":"WebHistoryImporter[^"]*' ~/Library/Application\ Support/Hermes/core.log | tail -1; }
      until L | grep -qE "imported|skipped|collected|empty"; do sleep 5; done; Support/install.sh
      ```
 3. Go checks:
@@ -39,7 +39,7 @@ These come from the user's global `~/.claude/CLAUDE.md` plus feedback given duri
 4. Shortcuts end-to-end tests: `shortcuts run "MM Test Send"` (also `Edit`, `Unsend`, `Unread`, `Read`). They act on your chat with yourself (its thread ID is your Facebook user ID); check the result in `app.db` (`messages`, and the kv key `unread:<thread ID>`). A run can hang on a one-time "Allow" prompt, so wrap it in a timeout.
 5. The first launch shows facebook.com's login in a web view. The app then registers itself as a new E2EE device; restore encrypted chats with the PIN once ("Restore Encrypted Chats…").
 
-Signing: `Support/Signing.xcconfig` holds placeholders; the real bundle ID prefix and team go in `Support/Signing.local.xcconfig`, which isn't committed (create it on a new machine). The App Group (`<team>.<prefix>.MessengerMac`, shared with the share extension) is derived from them, also in the entitlements and Info.plists.
+Signing: `Support/Signing.xcconfig` holds placeholders; the real bundle ID prefix and team go in `Support/Signing.local.xcconfig`, which isn't committed (create it on a new machine). The App Group (`<team>.<prefix>.Hermes`, shared with the share extension) is derived from them, also in the entitlements and Info.plists.
 
 ## Architecture
 
@@ -48,13 +48,13 @@ AppKit UI (App/)  ──JSON-RPC over C calls──▶  Go core (Core/ → Core/
                                               ├─ messagix  → facebook.com (threads, messages, contacts)
                                               └─ whatsmeow → E2EE chats (Signal protocol)
 Hidden WKWebView (App/WebSync/) → facebook.com/messages, to read E2EE history and themes the web app has
-Share extension (ShareExtension/) ──App Group files + messengermac:// URL──▶ the app
+Share extension (ShareExtension/) ──App Group files + hermes:// URL──▶ the app
 ```
 
 ### Xcode and build plumbing
-- `MessengerMac.xcodeproj`: **synchronized folder groups**, so new files in `App/`, `Shared/` and `ShareExtension/` are picked up automatically. `Shared/` is in both targets.
+- `Hermes.xcodeproj`: **synchronized folder groups**, so new files in `App/`, `Shared/` and `ShareExtension/` are picked up automatically. `Shared/` is in both targets.
 - The "Build Go Core" phase runs `Support/build-core.sh`: builds the c-archive per arch and lipos it into `Core/build/libmmcore.a` and `.h` (`CC="xcrun --sdk macosx clang"`).
-- Bridging header: `Support/MessengerMac-Bridging-Header.h`.
+- Bridging header: `Support/Hermes-Bridging-Header.h`.
 - `SWIFT_VERSION` 5 with **default actor isolation MainActor**. Off-main code must be `nonisolated` (e.g. `OutgoingMedia.prepare`, `ImageSize.probe`, decoded web types). Pass closures, not function references, to `map` and friends, or the compiler warns about isolation.
 - The build has **no warnings**; keep it that way.
 - SourceKit "Cannot find type … in scope" diagnostics are cross-file indexing noise. Trust `xcodebuild`.
@@ -101,7 +101,9 @@ Share extension (ShareExtension/) ──App Group files + messengermac:// URL─
 - `Shared/`: `ShareHandoff` (how the extension and the app talk), `RoundAvatar`. `ShareExtension/`: the Share menu's chat picker.
 
 ### Data on disk
-`~/Library/Application Support/MessengerMac/`: `app.db`, `e2ee.db` (the whatsmeow device and keys; never commit it), `core.log` (zerolog JSON), `media/`, `outgoing/`, `linkpreviews/`.
+`~/Library/Application Support/Hermes/`: `app.db`, `e2ee.db` (the whatsmeow device and keys; never commit it), `core.log` (zerolog JSON), `media/`, `outgoing/`, `linkpreviews/`.
+
+The app used to be called MessengerMac (bundle ID `<prefix>.MessengerMac`). `App/Util/RenameMigration.swift` moves that name's data folder, web view data (the Messenger web login) and settings over on the first launch as Hermes.
 
 ## Feature status
 

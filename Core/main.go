@@ -1,4 +1,4 @@
-// Package main is the Go core of MessengerMac, built as a C archive and linked
+// Package main is the Go core of Hermes, built as a C archive and linked
 // into the Swift app. It exposes two C functions:
 //
 //	MMStart(dataDir, callback)  initialises the core and registers the callback

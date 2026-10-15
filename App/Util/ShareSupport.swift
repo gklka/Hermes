@@ -85,7 +85,7 @@ final class ShareSupport {
 
     // MARK: - Sending
 
-    /// `messengermac://share?id=<folder>`, from the share extension.
+    /// `hermes://share?id=<folder>`, from the share extension.
     func handle(_ url: URL) {
         guard url.scheme == ShareHandoff.urlScheme, url.host() == ShareHandoff.shareHost else { return }
         Task { await sendOutbox() }

@@ -7,18 +7,24 @@ cd "$(dirname "$0")/.."
 export DEVELOPER_DIR
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
-xcodebuild -project MessengerMac.xcodeproj -scheme MessengerMac -configuration Release \
+xcodebuild -project Hermes.xcodeproj -scheme Hermes -configuration Release \
     -derivedDataPath build/DerivedData build 2>&1 | grep -E "error: |\*\* BUILD"
-BUILT=build/DerivedData/Build/Products/Release/MessengerMac.app
+BUILT=build/DerivedData/Build/Products/Release/Hermes.app
 codesign --verify --strict "$BUILT"
 
-pkill -x MessengerMac && sleep 1 || true
-rm -rf /Applications/MessengerMac.app
-ditto "$BUILT" /Applications/MessengerMac.app
-for copy in build/DerivedData/Build/Products/*/MessengerMac.app; do
+pkill -x Hermes && sleep 1 || true
+# The app used to be called MessengerMac: that copy goes (Hermes takes over its data at launch).
+if [ -d /Applications/MessengerMac.app ]; then
+    pkill -x MessengerMac && sleep 1 || true
+    "$LSREGISTER" -u /Applications/MessengerMac.app 2>/dev/null || true
+    rm -rf /Applications/MessengerMac.app
+fi
+rm -rf /Applications/Hermes.app
+ditto "$BUILT" /Applications/Hermes.app
+for copy in build/DerivedData/Build/Products/*/Hermes.app; do
     "$LSREGISTER" -u "$copy" 2>/dev/null || true
 done
-"$LSREGISTER" -f /Applications/MessengerMac.app
-open /Applications/MessengerMac.app
+"$LSREGISTER" -f /Applications/Hermes.app
+open /Applications/Hermes.app
 # Siri keeps the app's old actions until its daemon restarts (launchd starts it again).
 killall intelligenceflowd 2>/dev/null || true

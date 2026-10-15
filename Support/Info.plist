@@ -10,7 +10,7 @@
 	<array>
 		<string>INSendMessageIntent</string>
 	</array>
-	<!-- messengermac://share?id=… : the share extension handing over what to send (ShareHandoff). -->
+	<!-- hermes://share?id=… : the share extension handing over what to send (ShareHandoff). -->
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -18,7 +18,7 @@
 			<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>messengermac</string>
+				<string>hermes</string>
 			</array>
 		</dict>
 	</array>

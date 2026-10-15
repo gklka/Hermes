@@ -1,4 +1,4 @@
-module messengermac/core
+module hermes/core
 
 go 1.27
 

@@ -52,7 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    /// `messengermac://share?id=…` from the share extension (ShareSupport).
+    /// `hermes://share?id=…` from the share extension (ShareSupport).
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
             ShareSupport.shared.handle(url)
