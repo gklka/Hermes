@@ -436,10 +436,20 @@ func (c *Core) saveWebImage(messageID string, index int, img webImage) (string, 
 	return path, os.WriteFile(path, data, 0o600)
 }
 
+// webThreadID is the web app's ID of an encrypted chat: its Facebook thread key, which Messenger
+// tells us for every encrypted chat (mapThread), or else the one read from the web app's chat
+// list (which only shows the chats it has loaded). "" if neither is known.
+func (c *Core) webThreadID(threadID string) string {
+	if t := c.store.GetThread(threadID); t != nil && t.Type.IsWhatsApp() && t.FBKey != "" && t.FBKey != threadID {
+		return t.FBKey
+	}
+	return c.store.Get(kvWebID + threadID)
+}
+
 // webThreadPath is where the web app shows a chat, or "" if the encrypted chat's web ID isn't known yet.
 func (c *Core) webThreadPath(threadID string) string {
 	if t := c.store.GetThread(threadID); t != nil && t.Type.IsWhatsApp() {
-		if webID := c.store.Get(kvWebID + threadID); webID != "" {
+		if webID := c.webThreadID(threadID); webID != "" {
 			return "/messages/e2ee/t/" + webID + "/"
 		}
 		return ""

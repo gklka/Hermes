@@ -106,7 +106,7 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		c.setThreadTheme(p.ThreadID, p.Colors, p.Emoji)
 		return nil, nil
 	case "web.threadWebID":
-		return map[string]string{"webID": c.store.Get(kvWebID + p.ThreadID)}, nil
+		return map[string]string{"webID": c.webThreadID(p.ThreadID)}, nil
 	case "web.threadPath":
 		return map[string]string{"path": c.webThreadPath(p.ThreadID)}, nil
 	case "web.oldestEncrypted":
