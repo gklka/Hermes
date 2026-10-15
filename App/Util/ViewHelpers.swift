@@ -1,5 +1,18 @@
 import AppKit
 
+extension NSButton {
+    /// A sheet's round Liquid Glass ✕ for its top right corner; Esc presses it too.
+    static func glassClose(target: AnyObject, action: Selector) -> NSButton {
+        let button = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close")!, target: target, action: action)
+        button.bezelStyle = .glass
+        button.borderShape = .circle
+        button.controlSize = .large
+        button.keyEquivalent = "\u{1b}"
+        button.toolTip = "Close"
+        return button
+    }
+}
+
 extension NSView {
     /// What the view draws in `rect` (its bounds by default), as an image: for drag images and
     /// for animating views that are gone.

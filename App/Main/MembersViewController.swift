@@ -33,12 +33,7 @@ final class MembersViewController: NSViewController, NSTableViewDataSource, NSTa
         count.font = .systemFont(ofSize: 11)
         count.textColor = .secondaryLabelColor
 
-        let close = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close")!, target: self, action: #selector(closeSheet))
-        close.bezelStyle = .glass
-        close.borderShape = .circle
-        close.controlSize = .large
-        close.keyEquivalent = "\u{1b}"
-        close.toolTip = "Close"
+        let close = NSButton.glassClose(target: self, action: #selector(closeSheet))
 
         tableView.addTableColumn(NSTableColumn(identifier: .init("member")))
         tableView.headerView = nil

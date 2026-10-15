@@ -46,23 +46,23 @@ final class NewMessageViewController: NSViewController, NSTableViewDataSource, N
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
 
-        let cancel = NSButton(title: "Cancel", target: self, action: #selector(cancel))
-        cancel.keyEquivalent = "\u{1b}"
-        let open = NSButton(title: "Open", target: self, action: #selector(pickSelected))
-        open.keyEquivalent = "\r"
+        // Return (in the search field) opens the selected chat; Esc closes.
+        let close = NSButton.glassClose(target: self, action: #selector(cancel))
 
         let note = NSTextField(wrappingLabelWithString: "Finds anyone on Messenger. A message to someone who isn't your friend may land in their message requests.")
         note.font = .systemFont(ofSize: 11)
         note.textColor = .secondaryLabelColor
 
-        for view in [title, searchField, scroll, note, cancel, open] as [NSView] {
+        for view in [title, close, searchField, scroll, note] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
         NSLayoutConstraint.activate([
+            close.topAnchor.constraint(equalTo: root.topAnchor, constant: 12),
+            close.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -12),
             title.topAnchor.constraint(equalTo: root.topAnchor, constant: 16),
             title.centerXAnchor.constraint(equalTo: root.centerXAnchor),
-            searchField.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 12),
+            searchField.topAnchor.constraint(equalTo: close.bottomAnchor, constant: 8),
             searchField.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
             searchField.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
             scroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
@@ -71,11 +71,7 @@ final class NewMessageViewController: NSViewController, NSTableViewDataSource, N
             note.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 8),
             note.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 16),
             note.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            open.topAnchor.constraint(equalTo: note.bottomAnchor, constant: 12),
-            open.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -16),
-            open.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -16),
-            cancel.centerYAnchor.constraint(equalTo: open.centerYAnchor),
-            cancel.trailingAnchor.constraint(equalTo: open.leadingAnchor, constant: -8),
+            note.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -14),
             root.widthAnchor.constraint(equalToConstant: 360),
             root.heightAnchor.constraint(equalToConstant: 440),
         ])
