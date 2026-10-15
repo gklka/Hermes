@@ -27,9 +27,9 @@ func TestParseAge(t *testing.T) {
 }
 
 func TestWebMessageID(t *testing.T) {
-	id, ts, ok := webMessageID("100000400487929@msgr.7515335101685728864")
-	// 2026-10-12 10:58:36.416 +02:00
-	if !ok || id != "7515335101685728864" || ts != 1791795516416 {
+	id, ts, ok := webMessageID("100000000000001@msgr.7412462596916434567")
+	// 2026-01-01 12:00:00 UTC
+	if !ok || id != "7412462596916434567" || ts != 1767268800000 {
 		t.Errorf("webMessageID = %q, %d, %v", id, ts, ok)
 	}
 }
@@ -40,7 +40,7 @@ func TestUnrestoredPlaceholder(t *testing.T) {
 			t.Errorf("isUnrestoredPlaceholder(%q) = false", text)
 		}
 	}
-	if isUnrestoredPlaceholder("Jövő héten egy bor nálunk?") {
+	if isUnrestoredPlaceholder("Mikor indulunk holnap?") {
 		t.Errorf("a normal message was treated as a placeholder")
 	}
 	// In a language the list doesn't know: a long text on several messages.
@@ -54,7 +54,7 @@ func TestUnrestoredPlaceholder(t *testing.T) {
 
 func TestWithoutEmoji(t *testing.T) {
 	// The same message read before (no emoji) and after emoji were collected.
-	if withoutEmoji("Lusta felkelni ") != withoutEmoji("Lusta felkelni 😆") {
+	if withoutEmoji("See you tomorrow ") != withoutEmoji("See you tomorrow 😆") {
 		t.Errorf("texts differing only by emoji should match")
 	}
 	if withoutEmoji("👍🏽") != "" || withoutEmoji("❤️") != "" {
@@ -66,8 +66,8 @@ func TestWithoutEmoji(t *testing.T) {
 }
 
 func TestAvatarKey(t *testing.T) {
-	url := "https://scontent-vie1-1.xx.fbcdn.net/v/t39.30808-1/805854260_28617347014528600_4651105664370678377_n.jpg?stp=cp6"
-	if got := avatarKey(url); got != "805854260_28617347014528600_4651105664370678377" {
+	url := "https://scontent.xx.fbcdn.net/v/t39.30808-1/123456789_1234567890123456_1234567890123456789_n.jpg?stp=cp6"
+	if got := avatarKey(url); got != "123456789_1234567890123456_1234567890123456789" {
 		t.Errorf("avatarKey = %q", got)
 	}
 }

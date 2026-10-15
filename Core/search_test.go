@@ -7,7 +7,7 @@ import (
 
 func TestSearchFold(t *testing.T) {
 	cases := []struct{ text, query string }{
-		{"Ősrégi Ürömőrségi", "uromorseg"},
+		{"Árvíztűrő tükörfúrógép", "tukorfuro"},
 		{"Árvíztűrő tükörfúrógép", "ARVIZTURO"},
 		{"Hello World", "o w"},
 	}

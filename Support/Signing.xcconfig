@@ -1,0 +1,17 @@
+// Signing settings, shared by the app and the share extension.
+//
+// Put your own values in Signing.local.xcconfig next to this file (it's not committed):
+//
+//     BUNDLE_ID_PREFIX = com.yourname
+//     DEVELOPMENT_TEAM = ABCDE12345
+//
+// Shortcuts and Spotlight need a team-signed app; the share extension needs the team for its
+// App Group.
+
+BUNDLE_ID_PREFIX = com.example
+DEVELOPMENT_TEAM =
+
+// Shared by the app and the share extension (ShareHandoff), in the entitlements and Info.plists.
+APP_GROUP_ID = $(DEVELOPMENT_TEAM).$(BUNDLE_ID_PREFIX).MessengerMac
+
+#include? "Signing.local.xcconfig"

@@ -36,10 +36,10 @@ These come from the user's global `~/.claude/CLAUDE.md` plus feedback given duri
    ```sh
    cd Core && CC="xcrun --sdk macosx clang" go vet . && go test -run 'TestSearchFold|TestParseAge|TestAvatarKey|TestWebMessageID|TestUnrestoredPlaceholder|TestWithoutEmoji' .
    ```
-4. Shortcuts end-to-end tests: `shortcuts run "MM Test Send"` (also `Edit`, `Unsend`, `Unread`, `Read`). They act on the self-chat `767652903`; check the result in `app.db` (`messages`, and the kv key `unread:767652903`). A run can hang on a one-time "Allow" prompt, so wrap it in a timeout.
+4. Shortcuts end-to-end tests: `shortcuts run "MM Test Send"` (also `Edit`, `Unsend`, `Unread`, `Read`). They act on your chat with yourself (its thread ID is your Facebook user ID); check the result in `app.db` (`messages`, and the kv key `unread:<thread ID>`). A run can hang on a one-time "Allow" prompt, so wrap it in a timeout.
 5. The first launch shows facebook.com's login in a web view. The app then registers itself as a new E2EE device; restore encrypted chats with the PIN once ("Restore Encrypted Chats…").
 
-Signing: the personal team `ZWNU8P9B33` (manual, "Apple Development"). Bundle ID `com.kristofgruber.MessengerMac`; App Group `ZWNU8P9B33.com.kristofgruber.MessengerMac` (shared with the share extension).
+Signing: `Support/Signing.xcconfig` holds placeholders; the real bundle ID prefix and team go in `Support/Signing.local.xcconfig`, which isn't committed (create it on a new machine). The App Group (`<team>.<prefix>.MessengerMac`, shared with the share extension) is derived from them, also in the entitlements and Info.plists.
 
 ## Architecture
 
@@ -97,7 +97,7 @@ Share extension (ShareExtension/) ──App Group files + messengermac:// URL─
   - `WebChatImporter.swift`: every 10 minutes, reads the encrypted chats from the web chat list.
   - `WebHistoryImporter.swift`: when an encrypted 1:1 chat opens, scrolls its web chat back and collects messages, pictures, links and reactions.
   - `WebThemeReader.swift`: an encrypted chat's theme, from the web app.
-  - `WebDOMInspector.swift`: dev hooks (`defaults write com.kristofgruber.MessengerMac WebDumpEnabled -bool YES`; `webeval.js` in the data folder runs in the page).
+  - `WebDOMInspector.swift`: dev hooks (`defaults write <bundle ID> WebDumpEnabled -bool YES`; `webeval.js` in the data folder runs in the page).
 - `Shared/`: `ShareHandoff` (how the extension and the app talk), `RoundAvatar`. `ShareExtension/`: the Share menu's chat picker.
 
 ### Data on disk

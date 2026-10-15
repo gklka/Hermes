@@ -1,6 +1,8 @@
 Core/build/
 # A plain `go build` in Core/
 Core/core
+# Your bundle ID prefix and team (see Support/Signing.xcconfig)
+Support/Signing.local.xcconfig
 build/
 xcuserdata/
 *.xcuserstate

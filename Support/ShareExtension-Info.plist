@@ -2,6 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- The App Group shared with the app (ShareHandoff; Support/Signing.xcconfig). -->
+	<key>MMAppGroupID</key>
+	<string>$(APP_GROUP_ID)</string>
 	<!-- Merged into the share extension's generated Info.plist. -->
 	<key>NSExtension</key>
 	<dict>

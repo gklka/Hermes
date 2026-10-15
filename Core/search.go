@@ -11,7 +11,7 @@ import (
 
 // MARK: - Searching a chat
 
-// searchFold lowercases and drops accents, so "uromorseg" finds "Ürömőrségi".
+// searchFold lowercases and drops accents, so "tukorfuro" finds "Tükörfúrógép".
 func searchFold(s string) string {
 	folded, _, err := transform.String(transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC), s)
 	if err != nil {

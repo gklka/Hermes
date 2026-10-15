@@ -5,8 +5,8 @@ import WebKit
 /// links, short text) to Application Support/MessengerMac/webdump.json, so the importer's
 /// selectors can be written against the real page.
 ///
-/// Enable with: defaults write com.kristofgruber.MessengerMac WebDumpEnabled -bool YES
-/// Optionally open a thread first: defaults write com.kristofgruber.MessengerMac WebDumpThread <id>
+/// Enable with: defaults write <bundle ID> WebDumpEnabled -bool YES
+/// Optionally open a thread first: defaults write <bundle ID> WebDumpThread <id>
 enum WebDOMInspector {
     private static var dumpedThread = false
     private static var consoleTimer: Timer?

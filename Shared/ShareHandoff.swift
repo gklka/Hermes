@@ -6,7 +6,8 @@ import Foundation
 /// recent chats (and their pictures) there for the extension's chat picker. (The share sheet's
 /// own conversation suggestions are iOS-only: NSExtensionContext.intent is unavailable on macOS.)
 enum ShareHandoff {
-    nonisolated static let groupID = "ZWNU8P9B33.com.kristofgruber.MessengerMac"
+    /// From the Info.plist (set in Support/Signing.xcconfig).
+    nonisolated static let groupID = Bundle.main.object(forInfoDictionaryKey: "MMAppGroupID") as? String ?? ""
     nonisolated static let urlScheme = "messengermac"
     nonisolated static let shareHost = "share"
 
