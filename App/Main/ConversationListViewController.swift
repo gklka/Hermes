@@ -2,12 +2,14 @@ import AppKit
 import Combine
 
 enum ConversationFilter: Int, CaseIterable {
-    case all, messages, marketplace
+    // The raw values are stored (the chosen filter), so new cases get new ones.
+    case all = 0, messages = 1, groups = 3, marketplace = 2
 
     var title: String {
         switch self {
         case .all: "All"
         case .messages: "Messages"
+        case .groups: "Groups"
         case .marketplace: "Marketplace"
         }
     }
@@ -15,7 +17,8 @@ enum ConversationFilter: Int, CaseIterable {
     func includes(_ conversation: Conversation) -> Bool {
         switch self {
         case .all: true
-        case .messages: !conversation.isMarketplace
+        case .messages: !conversation.isGroup && !conversation.isMarketplace
+        case .groups: conversation.isGroup && !conversation.isMarketplace
         case .marketplace: conversation.isMarketplace
         }
     }
