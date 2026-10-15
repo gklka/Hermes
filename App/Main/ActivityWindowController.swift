@@ -1,7 +1,7 @@
 import AppKit
 
 /// Window › Activity, like Mail's: a small utility panel with the timeline of what's loaded
-/// from Messenger web (encrypted chats' history): up next (the queue, and chats waiting to be
+/// from Messenger web (encrypted chats' history, and the chat list): up next (the queue, and chats waiting to be
 /// checked again), now (the running import with its progress), and done (since launch).
 /// Double-click a chat to open it.
 final class ActivityWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
@@ -100,11 +100,14 @@ final class ActivityWindowController: NSWindowController, NSTableViewDataSource,
 
     @objc private func refresh() {
         guard window?.isVisible == true else { return }
-        let items = WebHistoryImporter.shared.activityItems
+        let items = WebChatImporter.shared.activityItems + WebHistoryImporter.shared.activityItems
         rows = []
         let sections: [(WebHistoryImporter.ActivityItem.Section, String)] = [(.upNext, "Up Next"), (.now, "Now"), (.done, "Done")]
         for (section, title) in sections {
-            let inSection = items.filter { $0.section == section }
+            var inSection = items.filter { $0.section == section }
+            if section == .done {
+                inSection.sort { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
+            }
             guard !inSection.isEmpty else { continue }
             rows.append(.header(title))
             rows += inSection.map { .item($0) }
@@ -115,8 +118,8 @@ final class ActivityWindowController: NSWindowController, NSTableViewDataSource,
 
     @objc private func openChat() {
         let row = tableView.clickedRow
-        guard rows.indices.contains(row), case .item(let item) = rows[row] else { return }
-        (NSApp.delegate as? AppDelegate)?.openChat(item.threadID)
+        guard rows.indices.contains(row), case .item(let item) = rows[row], let threadID = item.threadID else { return }
+        (NSApp.delegate as? AppDelegate)?.openChat(threadID)
     }
 
     // MARK: - Table
@@ -167,10 +170,12 @@ final class ActivityWindowController: NSWindowController, NSTableViewDataSource,
     }
 }
 
-/// A chat in the Activity window: its picture and name, what's read, what's happening, and a
-/// progress bar while it's being read.
+/// A chat in the Activity window (or the chat list): its picture and name, what's read, what's
+/// happening, and a progress bar while it's being read.
 private final class ActivityCellView: NSTableCellView {
     private let avatar = AvatarView()
+    /// In place of the avatar for rows that aren't about one chat.
+    private let symbol = NSImageView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let stateLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
@@ -198,8 +203,11 @@ private final class ActivityCellView: NSTableCellView {
         progressBar.controlSize = .small
         progressBar.minValue = 0
         progressBar.maxValue = 1
+        symbol.image = NSImage(systemSymbolName: "list.bullet", accessibilityDescription: nil)
+        symbol.symbolConfiguration = .init(pointSize: 15, weight: .medium)
+        symbol.contentTintColor = .secondaryLabelColor
 
-        let views: [NSView] = [avatar, nameLabel, stateLabel, detailLabel, statusLabel, progressBar]
+        let views: [NSView] = [avatar, symbol, nameLabel, stateLabel, detailLabel, statusLabel, progressBar]
         for view in views {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
@@ -212,6 +220,8 @@ private final class ActivityCellView: NSTableCellView {
             avatar.widthAnchor.constraint(equalToConstant: 28),
             avatar.heightAnchor.constraint(equalToConstant: 28),
             avatar.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -8),
+            symbol.centerXAnchor.constraint(equalTo: avatar.centerXAnchor),
+            symbol.centerYAnchor.constraint(equalTo: avatar.centerYAnchor),
 
             nameLabel.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: 8),
             nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 7),
@@ -245,10 +255,16 @@ private final class ActivityCellView: NSTableCellView {
     }
 
     func configure(_ item: WebHistoryImporter.ActivityItem) {
-        let conversation = ChatStore.shared.conversation(item.threadID)
-        let name = conversation?.name ?? "Chat \(item.threadID)"
-        nameLabel.stringValue = name
-        avatar.configure(name: name, url: conversation?.avatarURL)
+        if let threadID = item.threadID {
+            let conversation = ChatStore.shared.conversation(threadID)
+            let name = conversation?.name ?? "Chat \(threadID)"
+            nameLabel.stringValue = name
+            avatar.configure(name: name, url: conversation?.avatarURL)
+        } else {
+            nameLabel.stringValue = item.name ?? ""
+        }
+        avatar.isHidden = item.threadID == nil
+        symbol.isHidden = item.threadID != nil
         statusLabel.stringValue = item.status
         detailLabel.stringValue = Self.detail(item)
         stateLabel.textColor = .secondaryLabelColor
@@ -286,6 +302,7 @@ private final class ActivityCellView: NSTableCellView {
         let past = item.section == .done
         nameLabel.textColor = past ? .secondaryLabelColor : .labelColor
         avatar.alphaValue = past ? 0.6 : 1
+        symbol.alphaValue = past ? 0.6 : 1
     }
 
     /// "Older messages · 10:57, took 23 s".

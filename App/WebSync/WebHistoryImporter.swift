@@ -519,7 +519,9 @@ final class WebHistoryImporter {
         var text: String {
             switch self {
             case .startingWebApp: return "Starting Messenger web…"
-            case .waitingForPage: return "Waiting for Messenger web to finish another task…"
+            case .waitingForPage: return WebChatImporter.shared.isReading
+                ? "Waiting for the chat list to be read…"
+                : "Waiting for Messenger web to finish another task…"
             case .openingChat: return "Opening the chat on Messenger web…"
             case .finding: return "Waiting for the messages to appear…"
             case .scrollingBack(let mode, let hasCoverage, let fresh, let older, let skipped):
@@ -558,7 +560,8 @@ final class WebHistoryImporter {
     struct ActivityItem {
         enum Section { case upNext, now, done }
         enum Kind { case running, queued, waiting, done, retrying, needsRestore, failed }
-        let threadID: String
+        /// The chat read; nil for work on the whole chat list (see `name`).
+        let threadID: String?
         let section: Section
         let kind: Kind
         /// What the import reads ("Newest messages", "Older messages").
@@ -570,6 +573,8 @@ final class WebHistoryImporter {
         let date: Date?
         /// How long a finished import took.
         let duration: TimeInterval?
+        /// The row's name when it isn't about one chat.
+        var name: String? = nil
     }
 
     private static func title(_ mode: Mode) -> String {

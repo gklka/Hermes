@@ -40,10 +40,93 @@ final class WebChatImporter {
         timer?.invalidate()
         timer = nil
         currentRun = nil
+        stage = nil
+        notifyActivity()
     }
 
     /// The import running now, if any.
     private var currentRun: (id: UUID, task: Task<Void, Never>)?
+
+    // MARK: - Activity
+
+    /// Where the running import is (nil: none running).
+    private enum Stage {
+        case startingWebApp
+        /// A chat's history (or theme) is being read from the page.
+        case waitingForPage
+        /// Scrolling through the list; how many encrypted chats it found so far.
+        case reading(found: Int)
+        /// Opening chats whose person couldn't be matched, to read who it is.
+        case matching(done: Int, total: Int)
+        case saving
+
+        var text: String {
+            switch self {
+            case .startingWebApp: return "Starting Messenger web…"
+            case .waitingForPage: return "Waiting for Messenger web to finish another task…"
+            case .reading(0): return "Waiting for the chat list to appear…"
+            case .reading(let found): return "Scrolling through the chat list: \(found) encrypted chats so far"
+            case .matching(let done, let total): return "Finding out who's in new chats: \(done) of \(total)"
+            case .saving: return "Saving the chat list…"
+            }
+        }
+
+        var progress: Double? {
+            if case .matching(let done, let total) = self, total > 0 { return Double(done) / Double(total) }
+            return nil
+        }
+    }
+
+    private struct Record {
+        let started: Date
+        let ended: Date
+        let failed: Bool
+        let summary: String
+    }
+
+    private var stage: Stage?
+    private var started = Date()
+    /// The imports finished since launch, the latest first.
+    private var log: [Record] = []
+
+    /// Whether the chat list is being read now (other readers of the page wait for it).
+    var isReading: Bool { stage != nil }
+
+    private static let activityName = "Chat List"
+
+    /// The running import and the finished ones, for the Activity window.
+    var activityItems: [WebHistoryImporter.ActivityItem] {
+        var items: [WebHistoryImporter.ActivityItem] = []
+        if let stage {
+            items.append(.init(threadID: nil, section: .now, kind: .running, title: "Encrypted chats",
+                               status: stage.text, progress: stage.progress, date: started, duration: nil,
+                               name: Self.activityName))
+        }
+        for record in log {
+            items.append(.init(threadID: nil, section: .done, kind: record.failed ? .failed : .done, title: "Encrypted chats",
+                               status: record.summary, progress: nil, date: record.ended,
+                               duration: record.ended.timeIntervalSince(record.started), name: Self.activityName))
+        }
+        return items
+    }
+
+    private func setStage(_ stage: Stage?) {
+        self.stage = stage
+        notifyActivity()
+    }
+
+    private func notifyActivity() {
+        NotificationCenter.default.post(name: WebHistoryImporter.activityDidChange, object: self)
+    }
+
+    private func finish(_ summary: String, failed: Bool = false) {
+        guard stage != nil else { return }
+        log.insert(Record(started: started, ended: Date(), failed: failed, summary: summary), at: 0)
+        log = Array(log.prefix(20))
+        setStage(nil)
+    }
+
+    // MARK: - Import
 
     /// Imports the chat list, or waits for the import already running (e.g. the restore window
     /// closed during one; what follows needs the list).
@@ -57,8 +140,18 @@ final class WebChatImporter {
         let task = Task {
             let web = WebSyncController.shared
             CoreBridge.shared.log("WebChatImporter:starting")
-            guard await web.start(showWindow: false) else { return }
-            try? await web.withExclusiveAccess { await importList(web, for: account) }
+            started = Date()
+            setStage(.startingWebApp)
+            guard await web.start(showWindow: false) else {
+                finish("Messenger web couldn't be started.", failed: true)
+                return
+            }
+            setStage(.waitingForPage)
+            do {
+                try await web.withExclusiveAccess { await importList(web, for: account) }
+            } catch {
+                finish(error.localizedDescription, failed: true)
+            }
         }
         currentRun = (id, task)
         await task.value
@@ -69,6 +162,16 @@ final class WebChatImporter {
         // Logged out (or in as someone else) while the page was read.
         func stillLoggedIn() -> Bool { ChatStore.shared.account?.id == account }
         do {
+            setStage(.reading(found: 0))
+            // The collect script counts what it found in window.__mmChatList.
+            let poll = Task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    guard let found = try? await web.evaluate("return JSON.stringify((window.__mmChatList || {}).found || 0)", as: Int.self),
+                          !Task.isCancelled else { continue }
+                    setStage(.reading(found: found))
+                }
+            }
             // The web app sometimes redirects/re-renders right after loading; retry a few times.
             var rows: [Row] = []
             for attempt in 1...3 {
@@ -79,8 +182,17 @@ final class WebChatImporter {
                     try? await Task.sleep(for: .seconds(5))
                 }
             }
+            poll.cancel()
             CoreBridge.shared.log("WebChatImporter:found \(rows.count) encrypted chats in web list")
-            guard !rows.isEmpty, stillLoggedIn() else { return }
+            guard stillLoggedIn() else {
+                finish("Logged out while the chat list was read.", failed: true)
+                return
+            }
+            guard !rows.isEmpty else {
+                finish("Messenger web showed no encrypted chats.")
+                return
+            }
+            setStage(.saving)
             struct Params: Encodable { let rows: [Row] }
             var result = try await CoreBridge.shared.call("web.importThreads", Params(rows: rows), as: ImportResult.self)
 
@@ -88,19 +200,27 @@ final class WebChatImporter {
             // read the profile link from the chat header (the core caches the mapping).
             if !result.unresolved.isEmpty {
                 var resolved = rows
-                for webID in result.unresolved.prefix(10) {
+                let unresolved = result.unresolved.prefix(10)
+                for (index, webID) in unresolved.enumerated() {
+                    setStage(.matching(done: index, total: unresolved.count))
                     let userID = try? await web.evaluate(Self.resolveScript(webID: webID), as: String.self)
                     if let userID, !userID.isEmpty, let index = resolved.firstIndex(where: { $0.webID == webID }) {
                         resolved[index].userID = userID
                     }
                 }
                 _ = try? await web.evaluate(Self.backToListScript, as: String.self)
-                guard stillLoggedIn() else { return }
+                guard stillLoggedIn() else {
+                    finish("Logged out while the chat list was read.", failed: true)
+                    return
+                }
+                setStage(.saving)
                 result = try await CoreBridge.shared.call("web.importThreads", Params(rows: resolved), as: ImportResult.self)
             }
             CoreBridge.shared.log("WebChatImporter:imported \(result.imported), unresolved \(result.unresolved.count)")
+            finish("Read \(rows.count) encrypted chat\(rows.count == 1 ? "" : "s") from Messenger web's chat list.")
         } catch {
             CoreBridge.shared.log("WebChatImporter:\(error)")
+            finish(error.localizedDescription, failed: true)
         }
     }
 
@@ -169,6 +289,7 @@ final class WebChatImporter {
         const old = rows.get(webID);
         if (!old || fullness(entry) > fullness(old)) rows.set(webID, entry);
       }
+      window.__mmChatList = { found: rows.size };
     };
     collect();
     // The list's scrolling element: inside the list (the tallest one), or else around it.
