@@ -215,6 +215,9 @@ final class ComposeView: NSView, NSTextViewDelegate {
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
+        // The glass around the field would otherwise add insets, shifting the text off center.
+        scrollView.automaticallyAdjustsContentInsets = false
+        scrollView.contentInsets = NSEdgeInsetsZero
 
         fieldGlass.cornerRadius = Self.minTextHeight / 2
         fieldGlass.contentView = field
@@ -559,7 +562,16 @@ final class ComposeView: NSView, NSTextViewDelegate {
         guard let layoutManager = textView.layoutManager, let container = textView.textContainer else { return }
         layoutManager.ensureLayout(for: container)
         let used = layoutManager.usedRect(for: container).height + textView.textContainerInset.height * 2
-        textHeight.constant = min(Self.maxTextHeight, max(Self.minTextHeight, ceil(used)))
+        let height = min(Self.maxTextHeight, max(Self.minTextHeight, ceil(used)))
+        if textHeight.constant != height {
+            textHeight.constant = height
+            // Grow now, before the text view scrolls to the cursor: scrolling inside the old,
+            // shorter field would leave the text shifted up once it grows.
+            superview?.layoutSubtreeIfNeeded()
+            let clip = scrollView.contentView
+            clip.scroll(to: clip.constrainBoundsRect(clip.bounds).origin)
+            scrollView.reflectScrolledClipView(clip)
+        }
         if textView.string.isEmpty {
             // After a tall picture is sent, the field shrinks but would stay scrolled down,
             // leaving the cursor below the placeholder.
