@@ -6,7 +6,6 @@ import Foundation
 final class WebChatImporter {
     static let shared = WebChatImporter()
 
-    private var isRunning = false
     private var timer: Timer?
 
     struct Row: Codable {
@@ -35,18 +34,40 @@ final class WebChatImporter {
         }
     }
 
-    func runOnce() async {
-        guard !isRunning else { return }
-        isRunning = true
-        defer { isRunning = false }
-
-        let web = WebSyncController.shared
-        CoreBridge.shared.log("WebChatImporter:starting")
-        await web.start(showWindow: false)
-        try? await web.withExclusiveAccess { await importList(web) }
+    /// No more imports (the account logged out). One still reading the page may never finish
+    /// (the page is closed), so it doesn't block the next account's.
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        currentRun = nil
     }
 
-    private func importList(_ web: WebSyncController) async {
+    /// The import running now, if any.
+    private var currentRun: (id: UUID, task: Task<Void, Never>)?
+
+    /// Imports the chat list, or waits for the import already running (e.g. the restore window
+    /// closed during one; what follows needs the list).
+    func runOnce() async {
+        if let currentRun {
+            await currentRun.task.value
+            return
+        }
+        guard let account = ChatStore.shared.account?.id else { return }
+        let id = UUID()
+        let task = Task {
+            let web = WebSyncController.shared
+            CoreBridge.shared.log("WebChatImporter:starting")
+            guard await web.start(showWindow: false) else { return }
+            try? await web.withExclusiveAccess { await importList(web, for: account) }
+        }
+        currentRun = (id, task)
+        await task.value
+        if currentRun?.id == id { currentRun = nil }
+    }
+
+    private func importList(_ web: WebSyncController, for account: String) async {
+        // Logged out (or in as someone else) while the page was read.
+        func stillLoggedIn() -> Bool { ChatStore.shared.account?.id == account }
         do {
             // The web app sometimes redirects/re-renders right after loading; retry a few times.
             var rows: [Row] = []
@@ -59,7 +80,7 @@ final class WebChatImporter {
                 }
             }
             CoreBridge.shared.log("WebChatImporter:found \(rows.count) encrypted chats in web list")
-            guard !rows.isEmpty else { return }
+            guard !rows.isEmpty, stillLoggedIn() else { return }
             struct Params: Encodable { let rows: [Row] }
             var result = try await CoreBridge.shared.call("web.importThreads", Params(rows: rows), as: ImportResult.self)
 
@@ -74,6 +95,7 @@ final class WebChatImporter {
                     }
                 }
                 _ = try? await web.evaluate(Self.backToListScript, as: String.self)
+                guard stillLoggedIn() else { return }
                 result = try await CoreBridge.shared.call("web.importThreads", Params(rows: resolved), as: ImportResult.self)
             }
             CoreBridge.shared.log("WebChatImporter:imported \(result.imported), unresolved \(result.unresolved.count)")

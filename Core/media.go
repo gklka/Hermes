@@ -46,7 +46,7 @@ func (c *Core) downloadMedia(ctx context.Context, messageID, attachmentID string
 	var err error
 	switch {
 	case att.WA != nil:
-		e2ee, connErr := c.requireE2EE()
+		e2ee, connErr := waitForConnection(ctx, c, c.requireE2EE)
 		if connErr != nil {
 			return "", connErr
 		}

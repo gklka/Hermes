@@ -107,9 +107,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func connectionChanged() {
         switch store.connectionState {
         case .loggedOut:
+            // Logged out, or the session ended: nothing of the account stays on screen,
+            // searchable or offered, and nothing reads its web app any more.
             didLoadConversations = false
             SpotlightIndex.shared.clear()
             ShareSupport.shared.clear()
+            Notifier.shared.reset()
+            WebChatImporter.shared.stop()
+            WebHistoryImporter.shared.reset()
+            WebThemeReader.shared.reset()
+            Task { await WebSyncController.shared.endSession(deletingData: false) }
             ChatWindowController.closeAll()
             mainWindowController?.close()
             mainWindowController = nil
@@ -171,7 +178,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await WebSyncController.shared.start(showWindow: true) }
     }
 
+    /// Asks first: logging out deletes the account's chats from this Mac.
     @objc func logOut(_ sender: Any?) {
-        Task { await store.logout() }
+        guard let window = NSApp.keyWindow ?? mainWindowController?.window else {
+            Task { await logOutNow() }
+            return
+        }
+        NSAlert.confirm(
+            "Log out of Messenger?",
+            detail: "Your chats are removed from this Mac. After logging back in, you'll need your PIN to restore your encrypted chats.",
+            button: "Log Out", in: window
+        ) { [weak self] in
+            await self?.logOutNow()
+        }
+    }
+
+    /// Logging out also deletes the account's web app session (and its restored encrypted
+    /// chats), the copies of sent files and the link previews.
+    private func logOutNow() async {
+        await store.logout()
+        await WebSyncController.shared.endSession(deletingData: true)
+        OutgoingMedia.clear()
+        LinkPreviews.shared.clear()
     }
 }

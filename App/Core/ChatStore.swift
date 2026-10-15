@@ -93,9 +93,23 @@ final class ChatStore {
 
     func logout() async {
         try? await core.call("logout")
+        forgetAccount()
+    }
+
+    /// Drops everything of the account that was logged in (logged out, or its session ended).
+    private func forgetAccount() {
+        account = nil
         conversations = []
         conversationsByID = [:]
         messagesByThread = [:]
+        hasMoreHistory = [:]
+        typing = [:]
+        typingTimers.values.forEach { $0.invalidate() }
+        typingTimers = [:]
+        presence = [:]
+        themesRefreshed = []
+        markedUnread = []
+        downloadedFiles = [:]
         unseenReactions = [:]
         notify(.conversations)
     }
@@ -422,7 +436,11 @@ final class ChatStore {
         case "state":
             guard let event = core.decodeEvent(StateEvent.self, from: payload) else { return }
             connectionState = event.state
-            if let account = event.account { self.account = account }
+            if event.state == .loggedOut {
+                forgetAccount()
+            } else if let account = event.account {
+                self.account = account
+            }
             notify(.connection)
 
         case "thread":

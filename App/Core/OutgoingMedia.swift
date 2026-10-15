@@ -17,6 +17,11 @@ enum OutgoingMedia {
         return url
     }()
 
+    /// Deletes the copies of what was sent (logging out).
+    nonisolated static func clear() {
+        try? FileManager.default.removeItem(at: directory)
+    }
+
     /// A fresh folder for one file, so its original name can be kept (it's shown for documents).
     nonisolated static func newSlot() -> URL {
         let url = directory.appendingPathComponent(UUID().uuidString, isDirectory: true)

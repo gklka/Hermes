@@ -24,6 +24,14 @@ final class LinkPreviews {
 
     private let directory = AppData.folder.appendingPathComponent("linkpreviews", isDirectory: true)
 
+    /// Forgets the links seen (logging out).
+    func clear() {
+        inFlight.values.forEach { $0.cancel() }
+        inFlight = [:]
+        web = [:]
+        try? FileManager.default.removeItem(at: directory)
+    }
+
     /// What to show now: the loaded preview, or what's known before loading (for cards all but
     /// a not yet loaded picture; for web links the site's name).
     func preview(for source: Source) -> Preview {

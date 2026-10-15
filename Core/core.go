@@ -171,6 +171,23 @@ func (c *Core) requireE2EE() (*whatsmeow.Client, error) {
 	return nil, errNotConnected
 }
 
+// waitForConnection waits for a connection (c.requireClient or c.requireE2EE) until the
+// context ends or the user logs out: the chat shown at launch asks for its pictures and theme
+// before the connections are up.
+func waitForConnection[T any](ctx context.Context, c *Core, connection func() (T, error)) (T, error) {
+	for {
+		conn, err := connection()
+		if err == nil || c.currentCookies() == nil {
+			return conn, err
+		}
+		select {
+		case <-ctx.Done():
+			return conn, err
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
 // MARK: - Cookies
 
 func (c *Core) loadCookies() *cookies.Cookies {
@@ -221,7 +238,7 @@ func (c *Core) Login(ctx context.Context, values map[string]string) error {
 	}
 
 	c.disconnect()
-	_ = c.store.Wipe()
+	c.forgetAccount()
 	c.mu.Lock()
 	c.cookies = ck
 	c.account = accountFromUser(user)
@@ -272,16 +289,25 @@ func (c *Core) Logout(ctx context.Context) {
 			c.log.Err(err).Msg("Failed to delete E2EE device")
 		}
 	}
-	_ = c.store.Wipe()
-	forgetThreadMappings()
-	forgetNameLookups()
-	_ = os.RemoveAll(c.mediaDir())
-	_ = os.MkdirAll(c.mediaDir(), 0o700)
+	c.forgetAccount()
 	c.mu.Lock()
 	c.cookies = nil
 	c.account = nil
 	c.mu.Unlock()
 	c.setState(stateLoggedOut, "")
+}
+
+// forgetAccount deletes everything of the account that was logged in (at logout, and at a
+// login, which may be another account): its chats, media and in-memory caches.
+func (c *Core) forgetAccount() {
+	_ = c.store.Wipe()
+	forgetThreadMappings()
+	forgetNameLookups()
+	c.pendingLock.Lock()
+	c.pending = make(map[string]pendingSend)
+	c.pendingLock.Unlock()
+	_ = os.RemoveAll(c.mediaDir())
+	_ = os.MkdirAll(c.mediaDir(), 0o700)
 }
 
 // MARK: - Connection

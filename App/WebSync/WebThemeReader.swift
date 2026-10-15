@@ -8,12 +8,18 @@ final class WebThemeReader {
 
     private var readThisSession: Set<String> = []
 
+    /// Forgets which chats were read (the account logged out).
+    func reset() {
+        readThisSession = []
+    }
+
     /// Reads the theme once per session per chat, returning when done. The colors are stored with
     /// the chat in the core, so they show right away next time.
     func refresh(threadID: String) async {
         // The user may be entering the PIN there; don't navigate away.
         guard !readThisSession.contains(threadID), WebSyncController.shared.window?.isVisible != true else { return }
         readThisSession.insert(threadID)
+        let account = ChatStore.shared.account?.id
         do {
             struct Params: Encodable { let threadID: String }
             struct PathResult: Decodable { let path: String }
@@ -24,7 +30,10 @@ final class WebThemeReader {
                 return
             }
             let web = WebSyncController.shared
-            await web.start(showWindow: false)
+            guard await web.start(showWindow: false) else {
+                readThisSession.remove(threadID)
+                return
+            }
             struct Theme: Decodable { let colors: [String]; let emoji: String }
             let theme = try await web.withExclusiveAccess {
                 await web.navigate(toPath: path)
@@ -35,6 +44,8 @@ final class WebThemeReader {
                 readThisSession.remove(threadID)
                 return
             }
+            // Logged out (or in as someone else) while the page was read.
+            guard ChatStore.shared.account?.id == account else { return }
             CoreBridge.shared.log("WebThemeReader: \(threadID) colors \(theme.colors), emoji '\(theme.emoji)'")
             struct ThemeParams: Encodable { let threadID: String; let colors: [String]; let emoji: String }
             try await CoreBridge.shared.call(

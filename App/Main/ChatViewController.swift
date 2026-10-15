@@ -253,12 +253,12 @@ final class ChatViewController: NSViewController {
         }
     }
 
-    /// After the user restored chats in the web window, pick up the chat list and retry this chat.
+    /// After the user restored chats in the web window, pick up the chat list (every chat view
+    /// asks; they wait for the same import) and retry this chat.
     @objc private func restoreWindowClosed() {
-        guard let threadID, WebHistoryImporter.shared.needsRestore.contains(threadID) else { return }
         Task {
             await WebChatImporter.shared.runOnce()
-            if self.threadID == threadID {
+            if let threadID, WebHistoryImporter.shared.needsRestore.contains(threadID) {
                 WebHistoryImporter.shared.importHistory(threadID: threadID)
             }
         }

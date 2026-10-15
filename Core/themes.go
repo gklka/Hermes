@@ -32,18 +32,9 @@ func (c *Core) refreshTheme(ctx context.Context, threadID string) error {
 	if t := c.store.GetThread(threadID); t != nil && t.Type.IsWhatsApp() {
 		return nil
 	}
-	// The chat shown at launch is opened before the connection is up.
-	cli := c.client()
-	for i := 0; cli == nil && i < 60; i++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(time.Second):
-		}
-		cli = c.client()
-	}
-	if cli == nil {
-		return errNotConnected
+	cli, err := waitForConnection(ctx, c, c.requireClient)
+	if err != nil {
+		return err
 	}
 	if err := cli.WaitUntilCanSendMessages(ctx, 30*time.Second); err != nil {
 		return err

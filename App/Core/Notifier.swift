@@ -79,6 +79,15 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
+    /// Removes every notification (the account logged out).
+    func reset() {
+        center.removeAllDeliveredNotifications()
+        center.removeAllPendingNotificationRequests()
+        notifiedIDs = []
+        notifiedThreads = []
+        reactionNotifications = [:]
+    }
+
     /// Dev hook (WebDOMInspector): two notifications in each of two fake chats, to check grouping.
     func postTest() {
         Task {

@@ -49,6 +49,14 @@ final class WebHistoryImporter {
         let height: Int
     }
 
+    /// Forgets what was imported (the account logged out). An import still reading the page may
+    /// never finish (the page is closed), so it doesn't block the next account's.
+    func reset() {
+        needsRestore = []
+        importedThisSession = []
+        importing = []
+    }
+
     func importHistory(threadID: String) {
         guard !importing.contains(threadID), !importedThisSession.contains(threadID) else {
             CoreBridge.shared.log("WebHistoryImporter: \(threadID) skipped (importing: \(importing.contains(threadID)), done: \(importedThisSession.contains(threadID)))")
@@ -57,6 +65,7 @@ final class WebHistoryImporter {
         CoreBridge.shared.log("WebHistoryImporter: \(threadID) requested")
         importing.insert(threadID)
         onStateChange?(threadID, true)
+        let account = ChatStore.shared.account?.id
         Task {
             defer {
                 importing.remove(threadID)
@@ -74,7 +83,7 @@ final class WebHistoryImporter {
                 }
                 let web = WebSyncController.shared
                 CoreBridge.shared.log("WebHistoryImporter: \(threadID) → web chat \(webID), starting")
-                await web.start(showWindow: false)
+                guard await web.start(showWindow: false) else { return }
                 let result = try await web.withExclusiveAccess {
                     CoreBridge.shared.log("WebHistoryImporter: navigating")
                     await web.navigate(toPath: "/messages/e2ee/t/\(webID)/")
@@ -87,6 +96,8 @@ final class WebHistoryImporter {
                 if let error = result.error {
                     CoreBridge.shared.log("WebHistoryImporter: \(error)")
                 }
+                // Logged out (or in as someone else) while the page was read.
+                guard ChatStore.shared.account?.id == account else { return }
                 struct ImportParams: Encodable { let threadID: String; let messages: [Message] }
                 struct ImportResult: Decodable { let imported: Int; let unrestored: Int }
                 let imported = try await CoreBridge.shared.call(

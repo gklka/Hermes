@@ -8,7 +8,6 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
     static let shared = WebSyncController()
 
     let webView: WKWebView
-    private var didSetUpSession = false
     /// Where the web view lives while its own window is closed. WebKit pauses lazy loading and
     /// animation frames for pages that aren't in a visible window, so it's kept (invisibly) in
     /// the main window instead of an offscreen one.
@@ -85,26 +84,16 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    /// Copies the core's session cookies into the web view and loads Messenger.
-    func start(showWindow: Bool) async {
-        if !didSetUpSession {
-            didSetUpSession = true
-            // Identify as what this really is (Safari's engine). Pretending to be Chrome makes
-            // Messenger serve Chrome-only code, which breaks the encrypted chat restore.
-            webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
-            await resetDataIfNeeded()
-            let cookies = (try? await CoreBridge.shared.call("session.cookies", as: [String: String].self)) ?? [:]
-            let store = webView.configuration.websiteDataStore.httpCookieStore
-            for (name, value) in cookies {
-                let properties: [HTTPCookiePropertyKey: Any] = [
-                    .domain: ".facebook.com", .path: "/", .name: name, .value: value,
-                    .secure: "TRUE", .expires: Date().addingTimeInterval(365 * 24 * 3600),
-                ]
-                if let cookie = HTTPCookie(properties: properties) {
-                    await store.setCookie(cookie)
-                }
-            }
-            webView.load(URLRequest(url: Self.messagesURL))
+    /// Copies the core's session cookies into the web view and loads Messenger. Returns false
+    /// (without loading anything) when the app isn't logged in.
+    @discardableResult
+    func start(showWindow: Bool) async -> Bool {
+        if sessionSetup == nil {
+            sessionSetup = Task { await setUpSession() }
+        }
+        guard await sessionSetup?.value == true else {
+            sessionSetup = nil
+            return false
         }
         if !hasLoaded {
             await withCheckedContinuation { loadWaiters.append($0) }
@@ -124,6 +113,63 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
                 CoreBridge.shared.log("WebSync: no chat to open for the restore")
             }
         }
+        return true
+    }
+
+    /// The first start's setup (later ones wait for the same one); false if not logged in.
+    private var sessionSetup: Task<Bool, Never>?
+
+    private func setUpSession() async -> Bool {
+        // Identify as what this really is (Safari's engine). Pretending to be Chrome makes
+        // Messenger serve Chrome-only code, which breaks the encrypted chat restore.
+        webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
+        await resetDataIfNeeded()
+        guard let cookies = try? await CoreBridge.shared.call("session.cookies", as: [String: String].self),
+              let userID = cookies["c_user"] else { return false }
+        let store = webView.configuration.websiteDataStore.httpCookieStore
+        // What's stored belongs to the account that used the web app last: another account's
+        // session and restored chats must not show up in this one.
+        if let previous = await store.allCookies().first(where: { $0.name == "c_user" })?.value, previous != userID {
+            CoreBridge.shared.log("WebSync: the web app had another account's data; deleting it")
+            await deleteData()
+        }
+        for (name, value) in cookies {
+            let properties: [HTTPCookiePropertyKey: Any] = [
+                .domain: ".facebook.com", .path: "/", .name: name, .value: value,
+                .secure: "TRUE", .expires: Date().addingTimeInterval(365 * 24 * 3600),
+            ]
+            if let cookie = HTTPCookie(properties: properties) {
+                await store.setCookie(cookie)
+            }
+        }
+        hasLoaded = false
+        webView.load(URLRequest(url: Self.messagesURL))
+        return true
+    }
+
+    /// The account is gone (logged out, or its session expired): the page is closed, so nothing
+    /// reads it any more. `deletingData`: also forget its session and restored chats (logging out).
+    func endSession(deletingData: Bool) async {
+        close()
+        sessionSetup = nil
+        // Work for the account (an import reading the page) may never finish now that the page
+        // is gone: it no longer holds the page, and work waiting for it is cancelled.
+        session += 1
+        isBusy = false
+        let waiting = busyWaiters
+        busyWaiters = []
+        waiting.forEach { $0.resume(throwing: CancellationError()) }
+        hasLoaded = false
+        webView.load(URLRequest(url: URL(string: "about:blank")!))
+        if deletingData {
+            await deleteData()
+        }
+    }
+
+    private func deleteData() async {
+        await webView.configuration.websiteDataStore.removeData(
+            ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast
+        )
     }
 
     /// Clicks the first encrypted chat in the web app's chat list (or the first chat if none).
@@ -173,30 +219,40 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
         }
     }
 
-    /// True while the page shows a dialog asking for the PIN (a code/password field).
+    /// True while the page shows the PIN flow: a code/password field, or a dialog about the PIN.
+    /// Creating a PIN takes several steps, some without a field (an explanation, confirming,
+    /// "done"); the window must stay open through all of them.
     private static let pinPromptScript = """
     const visible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
     const fields = document.querySelectorAll('[role="dialog"] input, input[type="password"], input[autocomplete="one-time-code"], input[inputmode="numeric"]');
-    const showing = Array.from(fields).some(el => visible(el) && (el.closest('[role="dialog"]') || el.type === 'password' || el.inputMode === 'numeric' || el.autocomplete === 'one-time-code'));
-    return JSON.stringify(showing);
+    const field = Array.from(fields).some(el => visible(el) && (el.closest('[role="dialog"]') || el.type === 'password' || el.inputMode === 'numeric' || el.autocomplete === 'one-time-code'));
+    // "PIN" in every language the web app uses ("PIN-kód", "code PIN", …).
+    const dialog = Array.from(document.querySelectorAll('[role="dialog"]')).some(el => visible(el) && /\\bPIN\\b/.test(el.innerText));
+    return JSON.stringify(field || dialog);
     """
 
     // MARK: - Exclusive use
 
     private var isBusy = false
-    private var busyWaiters: [CheckedContinuation<Void, Never>] = []
+    private var busyWaiters: [CheckedContinuation<Void, Error>] = []
+    /// Counts the sessions ended (endSession): work from an earlier one no longer holds the page.
+    private var session = 0
 
-    /// Runs `body` while no other importer is driving the page (they navigate it).
+    /// Runs `body` while no other importer is driving the page (they navigate it). Throws if
+    /// the session ends while waiting.
     func withExclusiveAccess<T>(_ body: () async throws -> T) async throws -> T {
         if isBusy {
-            await withCheckedContinuation { busyWaiters.append($0) }
+            try await withCheckedThrowingContinuation { busyWaiters.append($0) }
         }
+        let session = self.session
         isBusy = true
         defer {
-            if busyWaiters.isEmpty {
-                isBusy = false
-            } else {
-                busyWaiters.removeFirst().resume()
+            if session == self.session {
+                if busyWaiters.isEmpty {
+                    isBusy = false
+                } else {
+                    busyWaiters.removeFirst().resume()
+                }
             }
         }
         return try await body()
@@ -227,9 +283,7 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
     private func resetDataIfNeeded() async {
         let defaults = UserDefaults.standard
         guard defaults.integer(forKey: "WebDataVersion") < Self.dataVersion else { return }
-        await webView.configuration.websiteDataStore.removeData(
-            ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast
-        )
+        await deleteData()
         defaults.set(Self.dataVersion, forKey: "WebDataVersion")
     }
 
