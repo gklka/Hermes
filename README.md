@@ -4,6 +4,30 @@ An unofficial, learning-purpose macOS client for Facebook Messenger with a nativ
 
 > **Not affiliated with Meta.** This is an independent project. It is not made, endorsed or supported by Meta Platforms, Inc. Facebook, Messenger and their logos are trademarks of Meta Platforms, Inc.
 
+<p align="center"><img src="docs/screenshot.png" alt="Hermes showing a chat list and a conversation with a link preview, a tapback and the typing bubble" width="760"></p>
+
+## Features
+
+### A real Mac app
+
+No Electron and no web page in a window. Hermes is written in Swift with AppKit, and looks and behaves like Apple's Messages:
+
+- **Native UI:** Liquid Glass toolbar and compose field, a source-list sidebar, Messages-style bubbles, tapbacks and read pictures.
+- **Mac conventions:** full menus and keyboard shortcuts (⌘1–⌘9 pick a chat, ⌘F, ⌥⌘F Find in Chat, ⌘E Edit, ⌘L Like…), chats in their own windows, drag and drop, Quick Look, a Dock badge and Dock menu.
+- **System integration:** notifications with Reply and Mark as Read, Shortcuts actions, messages in Spotlight, and a Share extension.
+- **Smooth animations:** arriving messages, the typing bubble turning into the message, rows sliding and read pictures moving.
+- **Light and dark mode,** and each chat's Messenger theme colors.
+- **Fast:** messages are stored locally, so chats open instantly.
+
+### Messenger
+
+- 1:1, group and end-to-end encrypted chats, with live sync and full history.
+- Text, replies, pictures and files, link previews, tapbacks and quick reactions.
+- Edit (with earlier versions) and unsend, typing indicators, read receipts and presence.
+- Find in Chat (also fetching older history) and Export Chat as Markdown.
+- Start chats with anyone on Messenger, see a group's members, mute, mark read or unread, delete, leave and block.
+- Encrypted chats' history and themes, read from Messenger's own web app once you've restored it with your PIN.
+
 ## Before you use it
 
 - **It may break Facebook's Terms.** Meta's [Terms of Service](https://www.facebook.com/terms.php) don't allow accessing their products by automated means or with unofficial tools without their permission. Meta can restrict, suspend or disable an account it believes breaks its terms.
