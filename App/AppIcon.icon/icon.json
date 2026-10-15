@@ -1,6 +1,19 @@
 {
   "fill" : {
-    "solid" : "extended-gray:1.00000,1.00000"
+    "linear-gradient" : [
+      "extended-gray:1.00000,1.00000",
+      "display-p3:0.94011,0.94011,0.94011,1.00000"
+    ],
+    "orientation" : {
+      "start" : {
+        "x" : 0.5,
+        "y" : 0
+      },
+      "stop" : {
+        "x" : 0.5,
+        "y" : 0.7
+      }
+    }
   },
   "groups" : [
     {
@@ -8,12 +21,26 @@
         {
           "glass" : true,
           "image-name" : "258EFE0D-6085-40F1-8822-0872B4E0ABBF copy2.png",
-          "name" : "258EFE0D-6085-40F1-8822-0872B4E0ABBF copy2"
+          "name" : "258EFE0D-6085-40F1-8822-0872B4E0ABBF copy2",
+          "position" : {
+            "scale" : 0.88,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
         },
         {
           "hidden" : false,
           "image-name" : "258EFE0D-6085-40F1-8822-0872B4E0ABBF.png",
-          "name" : "258EFE0D-6085-40F1-8822-0872B4E0ABBF"
+          "name" : "258EFE0D-6085-40F1-8822-0872B4E0ABBF",
+          "position" : {
+            "scale" : 0.88,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
         }
       ],
       "shadow" : {
