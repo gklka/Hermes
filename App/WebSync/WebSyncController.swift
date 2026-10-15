@@ -263,9 +263,15 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
     }
 
     /// Opens a path in the web app: client-side if a link to it is on the page, otherwise by loading it.
-    func navigate(toPath path: String) async {
+    /// `fresh`: if the page is already there, it's loaded again (a chat scrolled through by an
+    /// earlier reader can stop loading older messages).
+    func navigate(toPath path: String, fresh: Bool = false) async {
         let trimmed = { (p: String) in p.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
         if let current = webView.url?.path, trimmed(current) == trimmed(path) {
+            guard fresh else { return }
+            hasLoaded = false
+            webView.load(URLRequest(url: URL(string: "https://www.facebook.com\(path)")!))
+            await withCheckedContinuation { loadWaiters.append($0) }
             return
         }
         let script = """

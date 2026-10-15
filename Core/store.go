@@ -602,6 +602,12 @@ func (s *Store) UnsendMessage(id string) {
 	_, _ = s.db.Exec(`UPDATE messages SET text='', attachments='[]', is_unsent=1 WHERE id=?`, id)
 }
 
+// DeleteThreadMessages forgets every stored message of the chat (and their reactions).
+func (s *Store) DeleteThreadMessages(threadID string) {
+	_, _ = s.db.Exec(`DELETE FROM reactions WHERE message_id IN (SELECT id FROM messages WHERE thread_id=?)`, threadID)
+	_, _ = s.db.Exec(`DELETE FROM messages WHERE thread_id=?`, threadID)
+}
+
 func (s *Store) DeleteMessage(id string) {
 	_, _ = s.db.Exec(`DELETE FROM messages WHERE id=?`, id)
 	_, _ = s.db.Exec(`DELETE FROM reactions WHERE message_id=?`, id)

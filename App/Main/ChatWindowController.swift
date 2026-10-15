@@ -208,6 +208,11 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         chat.sendLike()
     }
 
+    @objc func refreshChat(_ sender: Any?) {
+        let threadID = threadID
+        Task { await ChatStore.shared.resync(threadID) }
+    }
+
     @objc func toggleUnread(_ sender: Any?) {
         guard let conversation else { return }
         ChatStore.shared.toggleRead(conversation)

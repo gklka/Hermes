@@ -115,6 +115,18 @@ func (c *Core) openDirectThread(userID string) (apiConversation, error) {
 	return conv, nil
 }
 
+// resyncThread forgets the chat's stored messages, so the next page asked for loads them from
+// Messenger again (an encrypted chat's history comes back from the web app).
+func (c *Core) resyncThread(threadID string) error {
+	if _, err := c.thread(threadID); err != nil {
+		return err
+	}
+	c.store.DeleteThreadMessages(threadID)
+	c.store.SetThreadHasMoreBefore(threadID, true)
+	c.log.Info().Str("thread_id", threadID).Msg("Forgot the chat's messages to load them again")
+	return nil
+}
+
 // createDirectChat creates the 1:1 chat with someone on Messenger (its Facebook thread and the
 // encrypted chat), as Messenger's own apps do when you message someone new.
 func (c *Core) createDirectChat(userID string) {

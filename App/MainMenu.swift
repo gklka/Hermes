@@ -64,6 +64,7 @@ enum MainMenu {
         conversationMenu.addItem(withTitle: "Like", action: #selector(MainWindowController.sendLike(_:)), keyEquivalent: "l")
         conversationMenu.addItem(withTitle: "Edit Message", action: #selector(MainWindowController.editMessage(_:)), keyEquivalent: "e")
         conversationMenu.addItem(.separator())
+        conversationMenu.addItem(withTitle: "Refresh", action: #selector(MainWindowController.refreshChat(_:)), keyEquivalent: "r")
         let export = conversationMenu.addItem(withTitle: "Export Chat…", action: #selector(MainWindowController.exportChat(_:)), keyEquivalent: "e")
         export.keyEquivalentModifierMask = [.command, .shift]
         main.addItem(withTitle: "Conversation", action: nil, keyEquivalent: "").submenu = conversationMenu

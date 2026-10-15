@@ -2,8 +2,8 @@ import AppKit
 
 /// Window › Activity, like Mail's: a small utility panel with the timeline of what's loaded
 /// from Messenger web (encrypted chats' history): up next (the queue, and chats waiting to be
-/// checked again), now (the running import with its progress), and done (a log kept across
-/// launches). Double-click a chat to open it.
+/// checked again), now (the running import with its progress), and done (since launch).
+/// Double-click a chat to open it.
 final class ActivityWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate {
     static let shared = ActivityWindowController()
 

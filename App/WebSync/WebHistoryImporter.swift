@@ -74,8 +74,8 @@ final class WebHistoryImporter {
     }
 
     /// One import in the Activity window's log.
-    struct Record: Codable {
-        enum Result: String, Codable { case done, retrying, needsRestore, failed }
+    struct Record {
+        enum Result { case done, retrying, needsRestore, failed }
         let threadID: String
         let mode: Mode
         let started: Date
@@ -84,16 +84,16 @@ final class WebHistoryImporter {
         let summary: String
     }
 
+    /// The imports finished since launch, the latest first (the Activity window's log).
+    private var log: [Record] = []
+
     private struct Saved: Codable {
         var coverage: [String: Coverage] = [:]
         /// Chats whose start the web app showed: there's nothing older to read.
         var reachedStart: Set<String> = []
-        /// The latest first.
-        var log: [Record] = []
     }
 
     private static let savedKey = "WebHistoryImporterState"
-    private static let logLength = 200
 
     private var saved: Saved {
         didSet {
@@ -182,6 +182,7 @@ final class WebHistoryImporter {
         tries = [:]
         oldest = [:]
         saved = Saved()
+        log = []
         restoredAt = nil
         NotificationCenter.default.post(name: Self.activityDidChange, object: self)
     }
@@ -194,6 +195,17 @@ final class WebHistoryImporter {
     /// The chat was opened: what's new in it is imported next.
     func importHistory(threadID: String) {
         guard !done.contains(threadID), current?.threadID != threadID else { return }
+        enqueueFirst(Job(threadID: threadID, mode: .latest))
+    }
+
+    /// The chat's stored messages were thrown away (Refresh): its history is read again from the
+    /// newest message back.
+    func reimport(threadID: String) {
+        saved.coverage[threadID] = nil
+        saved.reachedStart.remove(threadID)
+        done.remove(threadID)
+        oldest[threadID] = nil
+        // Also while it's being read: it's read again after that.
         enqueueFirst(Job(threadID: threadID, mode: .latest))
     }
 
@@ -309,7 +321,7 @@ final class WebHistoryImporter {
             result = .failed
         }
         let record = Record(threadID: threadID, mode: job.mode, started: currentStarted, ended: Date(), result: result, summary: summary)
-        saved.log = Array(([record] + saved.log).prefix(Self.logLength))
+        log.insert(record, at: 0)
     }
 
     private func retryLater(_ threadID: String) {
@@ -355,7 +367,7 @@ final class WebHistoryImporter {
             let script = Self.collectScript(userID: threadID, mode: job.mode, batch: Self.batchSize, coverage: coverage)
             let result = try await web.withExclusiveAccess {
                 setStage(.openingChat)
-                await web.navigate(toPath: "/messages/e2ee/t/\(webID)/")
+                await web.navigate(toPath: "/messages/e2ee/t/\(webID)/", fresh: true)
                 setStage(.finding)
                 // The collect script reports where it is in window.__mmImport.
                 let poll = Task {
@@ -584,7 +596,7 @@ final class WebHistoryImporter {
             items.append(ActivityItem(threadID: current.threadID, section: .now, kind: .running, title: Self.title(current.mode),
                                       status: stage.text, progress: stage.progress, date: currentStarted, duration: nil))
         }
-        for record in saved.log {
+        for record in log {
             let kind: ActivityItem.Kind
             var status = record.summary
             switch record.result {

@@ -160,6 +160,24 @@ final class ChatStore {
         await loadPage(threadID, before: nil)
     }
 
+    /// Conversation › Refresh: throws away the chat's stored messages and loads them again from
+    /// Messenger (an encrypted chat's history from Messenger web).
+    func resync(_ threadID: String) async {
+        do {
+            try await core.call("threads.resync", ThreadParams(threadID: threadID))
+        } catch {
+            core.log("threads.resync failed: \(error)")
+            return
+        }
+        messagesByThread[threadID] = []
+        hasMoreHistory[threadID] = nil
+        notify(.messages(threadID: threadID))
+        await loadPage(threadID, before: nil)
+        if conversationsByID[threadID]?.isEncrypted == true {
+            WebHistoryImporter.shared.reimport(threadID: threadID)
+        }
+    }
+
     private var themesRefreshed: Set<String> = []
 
     /// Fetches the chat's theme colors and quick reaction once per session; the core stores

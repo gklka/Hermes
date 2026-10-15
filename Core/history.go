@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"go.mau.fi/mautrix-meta/pkg/messagix/socket"
+	"go.mau.fi/mautrix-meta/pkg/messagix/table"
 )
 
 // MARK: - A chat's message history
@@ -39,10 +41,23 @@ func (c *Core) messagesPage(rows []*messageRow, hasMore bool) apiMessagesPage {
 
 // canFetchOlder tells whether Messenger has history before the oldest stored message
 // (end-to-end encrypted chats have none on the server, except an encrypted chat's
-// unencrypted past, under its Facebook thread key).
+// unencrypted past: see historyThreadKey).
 func (c *Core) canFetchOlder(threadID string) bool {
 	t := c.store.GetThread(threadID)
-	return t != nil && t.HasMoreBefore && (!t.Type.IsWhatsApp() || t.FBKey != "")
+	return t != nil && t.HasMoreBefore &&
+		(!t.Type.IsWhatsApp() || t.Type == table.ENCRYPTED_OVER_WA_ONE_TO_ONE || t.FBKey != "")
+}
+
+// historyThreadKey is the Facebook thread holding the chat's history on the server. For an
+// encrypted 1:1 chat that's the plain 1:1 chat with them (its key is their user ID): its
+// unencrypted past, and messages sent without encryption. Its own Facebook key has none.
+func (c *Core) historyThreadKey(threadID string) int64 {
+	if t := c.store.GetThread(threadID); t != nil && t.Type == table.ENCRYPTED_OVER_WA_ONE_TO_ONE {
+		if key, err := strconv.ParseInt(threadID, 10, 64); err == nil {
+			return key
+		}
+	}
+	return c.fbThreadKey(threadID)
 }
 
 // fetchOlder loads one page of history before the oldest stored message from Messenger
@@ -94,7 +109,7 @@ func (c *Core) backfill(threadID string, refTs int64, refID string) bool {
 		refID = ""
 	}
 	resp, err := cli.ExecuteTasks(ctx, &socket.FetchMessagesTask{
-		ThreadKey:            c.fbThreadKey(threadID),
+		ThreadKey:            c.historyThreadKey(threadID),
 		Direction:            0,
 		ReferenceTimestampMs: refTs,
 		ReferenceMessageId:   refID,

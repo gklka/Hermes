@@ -119,6 +119,8 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return nil, c.loadMoreThreads(ctx)
 	case "threads.open":
 		return c.openDirectThread(p.UserID)
+	case "threads.resync":
+		return nil, c.resyncThread(p.ThreadID)
 	case "threads.markRead":
 		return nil, c.markRead(ctx, p.ThreadID)
 	case "threads.setUnread":

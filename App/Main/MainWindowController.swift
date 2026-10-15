@@ -166,6 +166,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         split.sendLike()
     }
 
+    /// Conversation › Refresh (⌘R): throws away the open chat's stored messages and loads them again.
+    @objc func refreshChat(_ sender: Any?) {
+        guard let threadID = split.selectedConversation?.id else { return }
+        Task { await ChatStore.shared.resync(threadID) }
+    }
+
     @objc private func selectFilter(_ sender: NSMenuItem) {
         guard let filter = ConversationFilter(rawValue: sender.tag) else { return }
         split.filter = filter
@@ -179,7 +185,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
             let unread = (split.selectedConversation?.unreadCount ?? 0) > 0
             menuItem.title = unread ? "Mark as Read" : "Mark as Unread"
             return split.selectedConversation != nil
-        case #selector(sendLike(_:)), #selector(editMessage(_:)), #selector(findInChat(_:)), #selector(exportChat(_:)):
+        case #selector(sendLike(_:)), #selector(editMessage(_:)), #selector(findInChat(_:)), #selector(exportChat(_:)), #selector(refreshChat(_:)):
             return split.selectedConversation != nil
         default:
             break
