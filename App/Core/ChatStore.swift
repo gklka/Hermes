@@ -268,9 +268,9 @@ final class ChatStore {
     }
 
     /// Sends each attachment as its own message, then the text (like Messages). The reply
-    /// target applies to the text.
-    func send(text: String, attachments: [URL] = [], in threadID: String, replyTo: String? = nil) {
-        struct TextParams: Encodable { let threadID: String; let text: String; let replyTo: String? }
+    /// target and the tagged people apply to the text.
+    func send(text: String, mentions: [Mention] = [], attachments: [URL] = [], in threadID: String, replyTo: String? = nil) {
+        struct TextParams: Encodable { let threadID: String; let text: String; let replyTo: String?; let mentions: [Mention] }
         struct MediaParams: Encodable { let threadID: String; let path: String }
         Task {
             for url in attachments {
@@ -283,7 +283,7 @@ final class ChatStore {
             }
             guard !text.isEmpty else { return }
             do {
-                try await core.call("messages.send", TextParams(threadID: threadID, text: text, replyTo: replyTo))
+                try await core.call("messages.send", TextParams(threadID: threadID, text: text, replyTo: replyTo, mentions: mentions))
             } catch {
                 core.log("messages.send failed: \(error)")
             }
@@ -300,7 +300,8 @@ final class ChatStore {
     func resend(_ message: ChatMessage) {
         discard(message)
         let files = message.attachments.compactMap { $0.localPath.map { URL(fileURLWithPath: $0) } }
-        send(text: message.text, attachments: files, in: message.threadID, replyTo: message.replyTo?.messageID)
+        send(text: message.text, mentions: message.mentions ?? [], attachments: files, in: message.threadID,
+             replyTo: message.replyTo?.messageID)
     }
 
     /// Pass an empty emoji to remove your reaction.

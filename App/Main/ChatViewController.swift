@@ -344,6 +344,21 @@ final class ChatViewController: NSViewController {
     /// gradient's lower color, which is the one next to the compose bar).
     private func updateComposeTheme() {
         compose.setQuickReaction(lastConversation?.quickEmoji, tint: BubbleColors.theme(lastConversation?.bubbleColors).last)
+        updateMentionCandidates()
+    }
+
+    /// In a group chat, its other members can be tagged with @ (not in encrypted groups, whose
+    /// tags the core doesn't send).
+    private func updateMentionCandidates() {
+        guard let conversation = lastConversation, conversation.isGroup, !conversation.isEncrypted else {
+            compose.mentionCandidates = []
+            return
+        }
+        let selfID = store.account?.id
+        compose.mentionCandidates = conversation.participants
+            .filter { $0.id != selfID && !$0.name.isEmpty }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            .map { MentionCandidate(id: $0.id, name: $0.name, avatarURL: $0.avatarURL) }
     }
 
     /// The chat is in front of the user: its window is the active app's key window, and showing.

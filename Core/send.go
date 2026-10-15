@@ -50,7 +50,7 @@ func newOutgoing() outgoing {
 }
 
 // emitEcho shows the message being sent in its chat.
-func (c *Core) emitEcho(threadID string, out outgoing, text string, replyTo *apiReply, attachments []apiAttachment) {
+func (c *Core) emitEcho(threadID string, out outgoing, text string, mentions []apiMention, replyTo *apiReply, attachments []apiAttachment) {
 	if attachments == nil {
 		attachments = []apiAttachment{}
 	}
@@ -66,6 +66,7 @@ func (c *Core) emitEcho(threadID string, out outgoing, text string, replyTo *api
 		Reactions:   []apiReaction{},
 		Status:      statusPending,
 		PendingID:   out.pendingID,
+		Mentions:    mentions,
 	})
 }
 
@@ -82,14 +83,18 @@ func (c *Core) replyPreview(replyTo string) *apiReply {
 	return reply
 }
 
-func (c *Core) sendText(ctx context.Context, threadID, text, replyTo string) error {
+// sendText sends a text message; mentions are the people tagged in it (not in encrypted chats).
+func (c *Core) sendText(ctx context.Context, threadID, text, replyTo string, mentions []apiMention) error {
 	t, err := c.thread(threadID)
 	if err != nil {
 		return err
 	}
+	if t.Type.IsWhatsApp() {
+		mentions = nil
+	}
 	out := newOutgoing()
 	reply := c.replyPreview(replyTo)
-	c.emitEcho(threadID, out, text, reply, nil)
+	c.emitEcho(threadID, out, text, mentions, reply, nil)
 
 	if t.Type.IsWhatsApp() {
 		content := &waConsumerApplication.ConsumerApplication_Content{
@@ -103,6 +108,19 @@ func (c *Core) sendText(ctx context.Context, threadID, text, replyTo string) err
 
 	task := c.newSendTask(t, out, table.TEXT)
 	task.Text = text
+	if len(mentions) > 0 {
+		tags := make(socket.Mentions, 0, len(mentions))
+		for _, m := range mentions {
+			userID, err := strconv.ParseInt(m.UserID, 10, 64)
+			if err != nil {
+				continue
+			}
+			tags = append(tags, socket.Mention{ID: userID, Offset: m.Offset, Length: m.Length, Type: socket.MentionTypePerson})
+		}
+		if len(tags) > 0 {
+			task.MentionData = tags.ToData()
+		}
+	}
 	if reply != nil {
 		replySender, _ := strconv.ParseInt(reply.SenderID, 10, 64)
 		task.ReplyMetaData = &socket.ReplyMetaData{ReplyMessageId: replyTo, ReplySourceType: 1, ReplyType: 0, ReplySender: replySender}
@@ -268,7 +286,7 @@ func (c *Core) sendMedia(ctx context.Context, threadID, path string) error {
 		return err
 	}
 	out := newOutgoing()
-	c.emitEcho(threadID, out, "", nil, []apiAttachment{f.attachment(out.pendingID + "-0")})
+	c.emitEcho(threadID, out, "", nil, nil, []apiAttachment{f.attachment(out.pendingID + "-0")})
 	if t.Type.IsWhatsApp() {
 		return c.sendE2EEMedia(ctx, t, out, f)
 	}

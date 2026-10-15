@@ -2,7 +2,7 @@ import AppKit
 
 protocol ComposeViewDelegate: AnyObject {
     /// `attachments` are the staged files, in the order they appear in the field.
-    func composeView(_ view: ComposeView, send text: String, attachments: [URL])
+    func composeView(_ view: ComposeView, send text: String, mentions: [Mention], attachments: [URL])
     func composeViewTextDidChange(_ view: ComposeView)
     func composeViewCancelReply(_ view: ComposeView)
 }
@@ -182,6 +182,19 @@ final class ComposeView: NSView, NSTextViewDelegate {
         .foregroundColor: NSColor.labelColor,
     ]
 
+    /// People who can be tagged by typing @ (a group chat's members); empty: no tagging.
+    var mentionCandidates: [MentionCandidate] = [] {
+        didSet {
+            if mentionCandidates != oldValue { updateMentionPicker() }
+        }
+    }
+    private let mentionPicker = MentionPicker()
+    /// The "@name" being typed, which a pick replaces.
+    private var mentionQueryRange: NSRange?
+    /// Marks a tag in the field ("@Anna"), with the person's ID.
+    private static let mentionKey = NSAttributedString.Key("HermesMention")
+    private static let mentionFont = NSFont.boldSystemFont(ofSize: 14)
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
 
@@ -194,6 +207,9 @@ final class ComposeView: NSView, NSTextViewDelegate {
         }
         textView.linkHandler = { [weak self] string in
             self?.insertLinkPreview(string) ?? false
+        }
+        mentionPicker.onPick = { [weak self] candidate in
+            self?.insertMention(candidate)
         }
         textView.allowsUndo = true
         textView.font = .systemFont(ofSize: 14)
@@ -318,28 +334,41 @@ final class ComposeView: NSView, NSTextViewDelegate {
 
     /// The typed text, without staged files; link cards become their links (set apart by spaces).
     var text: String {
-        get {
-            let storage = textView.attributedString()
-            var result = ""
-            var afterLink = false
-            storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, range, _ in
-                if let link = value as? ComposeLinkAttachment {
-                    if let last = result.last, !last.isWhitespace { result += " " }
-                    result += link.url.absoluteString
-                    afterLink = true
-                    return
-                }
-                let part = (storage.string as NSString).substring(with: range)
-                    .replacingOccurrences(of: Self.attachmentCharacter, with: "")
-                if afterLink, let first = part.first, !first.isWhitespace { result += " " }
-                result += part
-                afterLink = afterLink && part.isEmpty
-            }
-            return result
-        }
+        get { composed().text }
         set {
             draft = NSAttributedString(string: newValue, attributes: Self.textAttributes)
         }
+    }
+
+    /// The typed text (see `text`) and the people tagged in it.
+    private func composed() -> (text: String, mentions: [Mention]) {
+        let storage = textView.attributedString()
+        var result = ""
+        var mentions: [Mention] = []
+        var afterLink = false
+        storage.enumerateAttributes(in: NSRange(location: 0, length: storage.length)) { attributes, range, _ in
+            if let link = attributes[.attachment] as? ComposeLinkAttachment {
+                if let last = result.last, !last.isWhitespace { result += " " }
+                result += link.url.absoluteString
+                afterLink = true
+                return
+            }
+            let part = (storage.string as NSString).substring(with: range)
+                .replacingOccurrences(of: Self.attachmentCharacter, with: "")
+            if afterLink, let first = part.first, !first.isWhitespace { result += " " }
+            if let userID = attributes[Self.mentionKey] as? String, !part.isEmpty {
+                let offset = result.utf16.count
+                // A tag split into runs (by other attributes) stays one.
+                if let last = mentions.last, last.userID == userID, last.offset + last.length == offset {
+                    mentions[mentions.count - 1] = Mention(offset: last.offset, length: last.length + part.utf16.count, userID: userID)
+                } else {
+                    mentions.append(Mention(offset: offset, length: part.utf16.count, userID: userID))
+                }
+            }
+            result += part
+            afterLink = afterLink && part.isEmpty
+        }
+        return (result, mentions)
     }
 
     /// Text and staged attachments, for keeping per-chat drafts.
@@ -484,7 +513,7 @@ final class ComposeView: NSView, NSTextViewDelegate {
 
     /// Sends the chat's quick reaction (👍 by default), keeping what's typed.
     func sendQuickReaction() {
-        delegate?.composeView(self, send: quickEmoji ?? "👍", attachments: [])
+        delegate?.composeView(self, send: quickEmoji ?? "👍", mentions: [], attachments: [])
     }
 
     @objc private func cancelReply() {
@@ -501,11 +530,113 @@ final class ComposeView: NSView, NSTextViewDelegate {
         }
         // An emoticon right before Return hasn't been replaced yet (that happens at the next space).
         replaceEmoticon(before: textView.string.utf16.count)
-        let text = self.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let composed = composed()
+        let text = composed.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty || !attachments.isEmpty else { return }
+        // The tags' places in the trimmed text.
+        let leading = text.isEmpty ? 0 : (composed.text as NSString).range(of: text).location
+        let mentions = composed.mentions.compactMap { mention -> Mention? in
+            let offset = mention.offset - leading
+            guard offset >= 0, offset + mention.length <= text.utf16.count else { return nil }
+            return Mention(offset: offset, length: mention.length, userID: mention.userID)
+        }
         // Cleared first: the delegate may put something back (the draft from before editing).
         self.text = ""
-        delegate?.composeView(self, send: text, attachments: attachments)
+        delegate?.composeView(self, send: text, mentions: mentions, attachments: attachments)
+    }
+
+    // MARK: - Tagging people
+
+    /// Opens, updates or closes the list of people for the "@name" before the insertion point.
+    private func updateMentionPicker() {
+        guard !mentionCandidates.isEmpty, let window, let query = mentionQuery() else {
+            hideMentionPicker()
+            return
+        }
+        let matches = Self.matches(mentionCandidates, query: query.text)
+        guard !matches.isEmpty else {
+            hideMentionPicker()
+            return
+        }
+        mentionQueryRange = query.range
+        let anchor = textView.firstRect(forCharacterRange: NSRange(location: query.range.location, length: 1), actualRange: nil)
+        mentionPicker.show(matches, above: anchor, in: window)
+    }
+
+    private func hideMentionPicker() {
+        mentionQueryRange = nil
+        mentionPicker.hide()
+    }
+
+    /// The "@…" typed right before the insertion point: at the start or after a space, on one
+    /// line, and not a tag already.
+    private func mentionQuery() -> (range: NSRange, text: String)? {
+        let selection = textView.selectedRange()
+        guard selection.length == 0, let storage = textView.textStorage else { return nil }
+        let string = storage.string as NSString
+        let isSpace = { (c: unichar) in Unicode.Scalar(c).map { CharacterSet.whitespaces.contains($0) } ?? false }
+        var at = selection.location - 1
+        while at >= 0, selection.location - at <= 40 {
+            let c = string.character(at: at)
+            if c == 0x0A || c == 0x0D || c == 0xFFFC { return nil }
+            if c == 0x40, at == 0 || isSpace(string.character(at: at - 1)) || string.character(at: at - 1) == 0x0A {
+                guard storage.attribute(Self.mentionKey, at: at, effectiveRange: nil) == nil else { return nil }
+                let range = NSRange(location: at, length: selection.location - at)
+                let text = string.substring(with: NSRange(location: at + 1, length: range.length - 1))
+                // A space right after the @, or two in a row: not a name being typed.
+                if text.hasPrefix(" ") || text.contains("  ") { return nil }
+                return (range, text)
+            }
+            at -= 1
+        }
+        return nil
+    }
+
+    /// The people whose name, or one of its words, starts with what's typed (ignoring case
+    /// and accents).
+    private static func matches(_ candidates: [MentionCandidate], query: String) -> [MentionCandidate] {
+        let fold = { (s: String) in s.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil) }
+        let typed = fold(query)
+        guard !typed.isEmpty else { return candidates }
+        return candidates.filter { candidate in
+            let name = fold(candidate.name)
+            if name.hasPrefix(typed) { return true }
+            return name.indices.contains { index in
+                index > name.startIndex && name[name.index(before: index)] == " " && name[index...].hasPrefix(typed)
+            }
+        }
+    }
+
+    /// Replaces the "@name" being typed with the person's tag and a space.
+    private func insertMention(_ candidate: MentionCandidate) {
+        guard let range = mentionQueryRange, let storage = textView.textStorage, NSMaxRange(range) <= storage.length else { return }
+        hideMentionPicker()
+        let tag = NSMutableAttributedString(string: "@" + candidate.name, attributes: Self.textAttributes)
+        tag.addAttributes([Self.mentionKey: candidate.id, .font: Self.mentionFont], range: NSRange(location: 0, length: tag.length))
+        tag.append(NSAttributedString(string: " ", attributes: Self.textAttributes))
+        guard textView.shouldChangeText(in: range, replacementString: tag.string) else { return }
+        storage.replaceCharacters(in: range, with: tag)
+        textView.didChangeText()
+        textView.setSelectedRange(NSRange(location: range.location + tag.length, length: 0))
+        textView.typingAttributes = Self.textAttributes
+    }
+
+    /// Editing inside a tag (or deleting into it) turns it back into plain text, like on Messenger.
+    /// Typing right before or after it leaves it.
+    private func breakMentions(touching range: NSRange) {
+        guard let storage = textView.textStorage else { return }
+        var broken: [NSRange] = []
+        storage.enumerateAttribute(Self.mentionKey, in: NSRange(location: 0, length: storage.length)) { value, tagRange, _ in
+            guard value != nil else { return }
+            let touches = range.length == 0
+                ? range.location > tagRange.location && range.location < NSMaxRange(tagRange)
+                : NSIntersectionRange(range, tagRange).length > 0
+            if touches { broken.append(tagRange) }
+        }
+        for tagRange in broken {
+            storage.removeAttribute(Self.mentionKey, range: tagRange)
+            storage.addAttribute(.font, value: Self.textAttributes[.font] as Any, range: tagRange)
+        }
     }
 
     // MARK: - Link preview
@@ -579,10 +710,37 @@ final class ComposeView: NSView, NSTextViewDelegate {
             scrollView.contentView.scroll(to: .zero)
             scrollView.reflectScrolledClipView(scrollView.contentView)
         }
+        updateMentionPicker()
+    }
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        updateMentionPicker()
+    }
+
+    func textDidEndEditing(_ notification: Notification) {
+        hideMentionPicker()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        hideMentionPicker()
+    }
+
+    /// Text typed after a tag isn't part of it.
+    func textView(_ textView: NSTextView, shouldChangeTypingAttributes oldTypingAttributes: [String: Any],
+                  toAttributes newTypingAttributes: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any] {
+        guard newTypingAttributes[Self.mentionKey] != nil else { return newTypingAttributes }
+        var attributes = newTypingAttributes
+        attributes[Self.mentionKey] = nil
+        attributes[.font] = Self.textAttributes[.font]
+        return attributes
     }
 
     /// Typing a space or newline after an emoticon (":)") turns it into its emoji; Undo brings it back.
     func textView(_ textView: NSTextView, shouldChangeTextIn range: NSRange, replacementString: String?) -> Bool {
+        if replacementString != nil {
+            breakMentions(touching: range)
+        }
         guard let replacementString, replacementString.count == 1, replacementString.first?.isWhitespace == true,
               let tokenRange = emoticonRange(before: range.location),
               let emoji = Emoticons.emoji(for: (textView.string as NSString).substring(with: tokenRange)) else { return true }
@@ -610,6 +768,25 @@ final class ComposeView: NSView, NSTextViewDelegate {
     }
 
     func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        // The list of people takes the arrow keys, Return, Tab and Escape while it's open.
+        if mentionPicker.isVisible {
+            switch commandSelector {
+            case #selector(NSResponder.moveUp(_:)):
+                mentionPicker.moveSelection(by: -1)
+                return true
+            case #selector(NSResponder.moveDown(_:)):
+                mentionPicker.moveSelection(by: 1)
+                return true
+            case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertTab(_:)):
+                mentionPicker.pickSelected()
+                return true
+            case #selector(NSResponder.cancelOperation(_:)):
+                hideMentionPicker()
+                return true
+            default:
+                break
+            }
+        }
         switch commandSelector {
         case #selector(NSResponder.insertNewline(_:)):
             let flags = NSApp.currentEvent?.modifierFlags ?? []

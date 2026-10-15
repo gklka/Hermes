@@ -55,6 +55,7 @@ type requestParams struct {
 	AttachmentID string            `json:"attachmentID"`
 	Text         string            `json:"text"`
 	ReplyTo      string            `json:"replyTo"`
+	Mentions     []apiMention      `json:"mentions"`
 	Emoji        string            `json:"emoji"`
 	Path         string            `json:"path"`
 	IsTyping     bool              `json:"isTyping"`
@@ -155,7 +156,7 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 	case "messages.fetchOlder":
 		return c.fetchOlder(p.ThreadID), nil
 	case "messages.send":
-		return nil, c.sendText(ctx, p.ThreadID, p.Text, p.ReplyTo)
+		return nil, c.sendText(ctx, p.ThreadID, p.Text, p.ReplyTo, p.Mentions)
 	case "messages.sendMedia":
 		return nil, c.sendMedia(ctx, p.ThreadID, p.Path)
 	case "messages.react":

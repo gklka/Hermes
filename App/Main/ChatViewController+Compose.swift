@@ -3,7 +3,7 @@ import AppKit
 // The compose bar: sending, replying, editing a sent message, and telling the chat you're typing.
 
 extension ChatViewController: ComposeViewDelegate {
-    func composeView(_ view: ComposeView, send text: String, attachments: [URL]) {
+    func composeView(_ view: ComposeView, send text: String, mentions: [Mention], attachments: [URL]) {
         guard let threadID else { return }
         store.clearMarkedUnread(threadID)
         if let message = editTarget {
@@ -12,7 +12,7 @@ extension ChatViewController: ComposeViewDelegate {
             saveEdit(of: message, text: text)
             return
         }
-        store.send(text: text, attachments: attachments, in: threadID, replyTo: replyTarget?.id)
+        store.send(text: text, mentions: mentions, attachments: attachments, in: threadID, replyTo: replyTarget?.id)
         replyTarget = nil
         compose.hideReply()
         stopTyping()
