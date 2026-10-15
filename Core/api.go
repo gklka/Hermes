@@ -13,6 +13,8 @@ type apiParticipant struct {
 	Name          string `json:"name"`
 	AvatarURL     string `json:"avatarURL,omitempty"`
 	ReadWatermark int64  `json:"readWatermark,omitempty"`
+	// Detail is what Messenger's people search says about someone ("Friends", a mutual friend).
+	Detail string `json:"detail,omitempty"`
 }
 
 type apiConversation struct {

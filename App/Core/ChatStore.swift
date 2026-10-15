@@ -134,6 +134,12 @@ final class ChatStore {
         return (try? await core.call("contacts.search", Params(text: query), as: [Participant].self)) ?? []
     }
 
+    /// Everyone Messenger finds by the name who can be messaged, not only people you've chatted with.
+    func searchPeople(_ query: String) async -> [Participant] {
+        struct Params: Encodable { let text: String }
+        return (try? await core.call("contacts.searchPeople", Params(text: query), as: [Participant].self)) ?? []
+    }
+
     /// Opens (creating if needed) the 1:1 chat with a contact.
     func openDirectChat(with userID: String) async throws -> Conversation {
         struct Params: Encodable { let userID: String }

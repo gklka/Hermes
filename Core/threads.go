@@ -10,6 +10,7 @@ import (
 	waTypes "go.mau.fi/whatsmeow/types"
 
 	"go.mau.fi/mautrix-meta/pkg/messagix"
+	"go.mau.fi/mautrix-meta/pkg/messagix/methods"
 	"go.mau.fi/mautrix-meta/pkg/messagix/socket"
 	"go.mau.fi/mautrix-meta/pkg/messagix/table"
 )
@@ -100,13 +101,87 @@ func (c *Core) openDirectThread(userID string) (apiConversation, error) {
 		return apiConversation{}, errors.New("missing user ID")
 	}
 	self := c.selfID()
-	if t := c.store.GetThread(userID); t == nil || t.LastActivity == 0 {
+	t := c.store.GetThread(userID)
+	if t == nil || t.LastActivity == 0 {
 		c.store.EnsureEncryptedDirectThread(userID, self)
 		c.store.BumpThread(userID, time.Now().UnixMilli(), "", "")
+	}
+	if t == nil {
+		// Someone you haven't chatted with: Messenger creates the chat too.
+		go c.createDirectChat(userID)
 	}
 	conv := c.store.Conversation(c.store.GetThread(userID), self)
 	emitEvent("thread", conv)
 	return conv, nil
+}
+
+// createDirectChat creates the 1:1 chat with someone on Messenger (its Facebook thread and the
+// encrypted chat), as Messenger's own apps do when you message someone new.
+func (c *Core) createDirectChat(userID string) {
+	cli := c.client()
+	id, err := strconv.ParseInt(userID, 10, 64)
+	if cli == nil || err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	log := c.log.With().Str("user_id", userID).Logger()
+	if _, err := cli.ExecuteTasks(ctx, &socket.CreateThreadTask{ThreadFBID: id, SyncGroup: 1}); err != nil {
+		log.Warn().Err(err).Msg("Failed to create the chat")
+	}
+	resp, err := cli.ExecuteTasks(ctx, &socket.CreateWhatsAppThreadTask{
+		WAJID:            id,
+		OfflineThreadKey: methods.GenerateEpochID(),
+		ThreadType:       table.ENCRYPTED_OVER_WA_ONE_TO_ONE,
+		FolderType:       table.INBOX,
+		BumpTimestampMS:  time.Now().UnixMilli(),
+	})
+	if err != nil {
+		log.Warn().Err(err).Msg("Failed to create the encrypted chat")
+		return
+	}
+	// Messenger answers with follow-up tasks that finish creating it.
+	if len(resp.LSIssueNewTask) > 0 {
+		tasks := make([]socket.Task, len(resp.LSIssueNewTask))
+		for i, task := range resp.LSIssueNewTask {
+			tasks[i] = task
+		}
+		if _, err := cli.ExecuteTasks(ctx, tasks...); err != nil {
+			log.Warn().Err(err).Msg("Failed to finish creating the encrypted chat")
+			return
+		}
+	}
+	log.Info().Msg("Created chat")
+}
+
+// searchPeople finds people on Messenger by name (not only the ones you've chatted with), who
+// can be messaged.
+func (c *Core) searchPeople(ctx context.Context, query string) ([]apiParticipant, error) {
+	cli := c.client()
+	if cli == nil {
+		return nil, errors.New("not connected")
+	}
+	resp, err := cli.ExecuteTasks(ctx, &socket.SearchUserTask{
+		Query: query,
+		SupportedTypes: []table.SearchType{
+			table.SearchTypeContact, table.SearchTypeGroup, table.SearchTypePage, table.SearchTypeNonContact,
+		},
+		SurfaceType: 5,
+	})
+	if err != nil {
+		return nil, err
+	}
+	self := c.selfID()
+	out := []apiParticipant{}
+	for _, r := range resp.LSInsertSearchResult {
+		id := r.GetFBID()
+		if !r.ThreadType.IsOneToOne() || !r.CanViewerMessage || id == 0 || id64(id) == self {
+			continue
+		}
+		c.store.UpsertContact(id64(id), r.GetName(), r.GetAvatarURL())
+		out = append(out, apiParticipant{ID: id64(id), Name: r.GetName(), AvatarURL: r.GetAvatarURL(), Detail: r.ContextLine})
+	}
+	return out, nil
 }
 
 // MARK: - Chat actions

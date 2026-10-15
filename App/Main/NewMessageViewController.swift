@@ -38,7 +38,7 @@ final class NewMessageViewController: NSViewController, NSTableViewDataSource, N
         let open = NSButton(title: "Open", target: self, action: #selector(pickSelected))
         open.keyEquivalent = "\r"
 
-        let note = NSTextField(wrappingLabelWithString: "Earlier messages in encrypted chats can't be loaded. New messages will appear here.")
+        let note = NSTextField(wrappingLabelWithString: "Finds anyone on Messenger. A message to someone who isn't your friend may land in their message requests.")
         note.font = .systemFont(ofSize: 11)
         note.textColor = .secondaryLabelColor
 
@@ -75,16 +75,32 @@ final class NewMessageViewController: NSViewController, NSTableViewDataSource, N
         search("")
     }
 
+    /// People you've chatted with at once, then (after a pause in typing) everyone Messenger
+    /// finds by that name, below them.
     private func search(_ query: String) {
         searchTask?.cancel()
         searchTask = Task {
             let found = await ChatStore.shared.searchContacts(query)
             guard !Task.isCancelled else { return }
-            results = found
-            tableView.reloadData()
-            if !results.isEmpty {
-                tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
-            }
+            show(found)
+            guard query.count >= 2 else { return }
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            let people = await ChatStore.shared.searchPeople(query)
+            guard !Task.isCancelled else { return }
+            let known = Set(found.map(\.id))
+            show(found + people.filter { !known.contains($0.id) })
+        }
+    }
+
+    /// Keeps the selected person selected (the first one if none is).
+    private func show(_ people: [Participant]) {
+        let selectedID = results.indices.contains(tableView.selectedRow) ? results[tableView.selectedRow].id : nil
+        results = people
+        tableView.reloadData()
+        let row = results.firstIndex { $0.id == selectedID } ?? 0
+        if !results.isEmpty {
+            tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
     }
 
@@ -143,15 +159,24 @@ final class NewMessageViewController: NSViewController, NSTableViewDataSource, N
     }
 }
 
+/// A person: picture, name, and what Messenger's search says about them ("Friends").
 final class ContactCellView: NSTableCellView {
     private let avatar = AvatarView()
     private let nameLabel = NSTextField(labelWithString: "")
+    private let detailLabel = NSTextField(labelWithString: "")
 
     init() {
         super.init(frame: .zero)
         nameLabel.font = .systemFont(ofSize: 13)
         nameLabel.lineBreakMode = .byTruncatingTail
-        for view in [avatar, nameLabel] as [NSView] {
+        detailLabel.font = .systemFont(ofSize: 11)
+        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.lineBreakMode = .byTruncatingTail
+        let labels = NSStackView(views: [nameLabel, detailLabel])
+        labels.orientation = .vertical
+        labels.alignment = .leading
+        labels.spacing = 0
+        for view in [avatar, labels] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -160,9 +185,9 @@ final class ContactCellView: NSTableCellView {
             avatar.centerYAnchor.constraint(equalTo: centerYAnchor),
             avatar.widthAnchor.constraint(equalToConstant: 28),
             avatar.heightAnchor.constraint(equalToConstant: 28),
-            nameLabel.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: 8),
-            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -4),
-            nameLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            labels.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: 8),
+            labels.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -4),
+            labels.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
     }
 
@@ -171,6 +196,8 @@ final class ContactCellView: NSTableCellView {
 
     func configure(_ contact: Participant) {
         nameLabel.stringValue = contact.name
+        detailLabel.stringValue = contact.detail ?? ""
+        detailLabel.isHidden = (contact.detail ?? "").isEmpty
         avatar.configure(name: contact.name, url: contact.avatarURL)
     }
 }

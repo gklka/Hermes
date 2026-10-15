@@ -8,6 +8,8 @@ struct Participant: Codable, Hashable {
     var avatarURL: String?
     /// Last message timestamp (ms) this participant has read.
     var readWatermark: Int64?
+    /// What Messenger's people search says about someone ("Friends", a mutual friend).
+    var detail: String?
 }
 
 struct Conversation: Codable, Identifiable, Hashable {

@@ -139,6 +139,8 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return nil, c.blockUser(ctx, p.UserID)
 	case "contacts.search":
 		return c.store.SearchContacts(p.Text, c.selfID(), 50), nil
+	case "contacts.searchPeople":
+		return c.searchPeople(ctx, p.Text)
 
 	// Messages
 	case "messages.list":
