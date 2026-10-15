@@ -38,6 +38,13 @@ extension ChatViewController: MessageCellDelegate {
         if !message.text.isEmpty {
             add("Copy", #selector(copyFromMenu(_:)))
         }
+        let pictures = message.attachments.filter { Self.isPicture($0) }
+        if !pictures.isEmpty {
+            add(pictures.count == 1 ? "Copy Image" : "Copy Images", #selector(copyImagesFromMenu(_:)))
+        }
+        if message.attachments.contains(where: { $0.kind != .link }) {
+            add("Save to Downloads", #selector(saveToDownloadsFromMenu(_:)))
+        }
         if message.isFromMe {
             if !message.text.isEmpty, message.status != .failed {
                 add("Edit", #selector(editFromMenu(_:)))
@@ -57,6 +64,70 @@ extension ChatViewController: MessageCellDelegate {
         guard let message = sender.representedObject as? ChatMessage else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(message.text, forType: .string)
+    }
+
+    private static func isPicture(_ attachment: Attachment) -> Bool {
+        [.image, .gif, .sticker].contains(attachment.kind)
+    }
+
+    /// Copies the message's pictures (full size, downloaded if needed).
+    @objc private func copyImagesFromMenu(_ sender: NSMenuItem) {
+        guard let message = sender.representedObject as? ChatMessage else { return }
+        Task {
+            do {
+                var images: [NSImage] = []
+                for attachment in message.attachments where Self.isPicture(attachment) {
+                    let url = try await store.localFile(for: attachment, in: message)
+                    if let image = NSImage(contentsOf: url) { images.append(image) }
+                }
+                guard !images.isEmpty else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.writeObjects(images)
+            } catch {
+                _ = presentError(error)
+            }
+        }
+    }
+
+    /// Saves the message's files (pictures, videos, files) to the Downloads folder, under new
+    /// names if taken, and bounces the Downloads stack like a browser download.
+    @objc private func saveToDownloadsFromMenu(_ sender: NSMenuItem) {
+        guard let message = sender.representedObject as? ChatMessage,
+              let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else { return }
+        Task {
+            do {
+                for attachment in message.attachments where attachment.kind != .link {
+                    let file = try await store.localFile(for: attachment, in: message)
+                    let destination = Self.freeURL(in: downloads, for: Self.downloadName(of: attachment, in: message, file: file))
+                    try FileManager.default.copyItem(at: file, to: destination)
+                    DistributedNotificationCenter.default().post(name: .init("com.apple.DownloadFileFinished"), object: destination.path)
+                }
+            } catch {
+                _ = presentError(error)
+            }
+        }
+    }
+
+    /// The attachment's own file name, or "Photo 2026-10-16 at 0.08.12.jpg".
+    private static func downloadName(of attachment: Attachment, in message: ChatMessage, file: URL) -> String {
+        if let filename = attachment.filename, !filename.isEmpty { return filename }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd 'at' H.mm.ss"
+        let name = "\(attachment.kind.label) \(formatter.string(from: message.date))"
+        return file.pathExtension.isEmpty ? name : "\(name).\(file.pathExtension)"
+    }
+
+    /// `name` in the folder, or "name 2.ext", "name 3.ext"… if it's taken.
+    private static func freeURL(in folder: URL, for name: String) -> URL {
+        let base = (name as NSString).deletingPathExtension
+        let ext = (name as NSString).pathExtension
+        var url = folder.appendingPathComponent(name)
+        var number = 2
+        while FileManager.default.fileExists(atPath: url.path) {
+            url = folder.appendingPathComponent(ext.isEmpty ? "\(base) \(number)" : "\(base) \(number).\(ext)")
+            number += 1
+        }
+        return url
     }
 
     @objc private func editFromMenu(_ sender: NSMenuItem) {
