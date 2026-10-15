@@ -360,9 +360,19 @@ final class WebHistoryImporter {
             const old = seen.get(domID);
             // Keep the fullest version: pictures decrypt and cards render after the message appears.
             if (old && richness(old) >= richness(entry)) continue;
-            const bubble = el.querySelector('div[dir="auto"]') || el.querySelector('img') || el;
-            const r = bubble.getBoundingClientRect();
-            entry.fromMe = old ? old.fromMe : r.width > 0 && (r.left + r.width / 2) > mid;
+            // Which side the message hugs: all its bubbles and pictures together, since an album
+            // staggers its photos left and right (one photo's center can be on the wrong side).
+            let left = Infinity, right = -Infinity;
+            for (const part of [...el.querySelectorAll('div[dir="auto"]'), ...el.querySelectorAll('img')]) {
+              const r = part.getBoundingClientRect();
+              if (r.width < 20 || part.closest('[role="toolbar"]')) continue;
+              left = Math.min(left, r.left);
+              right = Math.max(right, r.right);
+            }
+            const fromMe = left === Infinity
+              ? (r => r.width > 0 && (r.left + r.width / 2) > mid)(el.getBoundingClientRect())
+              : (logRect.right - right) < (left - logRect.left);
+            entry.fromMe = old ? old.fromMe : fromMe;
             entry.imagesReady = Promise.all(images.slice(0, 6).map(encode));
             entry.linksReady = Promise.all(links.slice(0, 3).map(async l => ({ ...l, image: l.image ? await encode(l.image) : null })));
             seen.set(domID, entry);

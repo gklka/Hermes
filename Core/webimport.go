@@ -336,19 +336,29 @@ func (c *Core) importWebMessages(threadID string, messages []webMessage) apiMess
 		if c.importWebReactions(id, threadID, wm.FromMe, wm.Reactions) {
 			cs.message(id)
 		}
+		sender := threadID
+		if wm.FromMe {
+			sender = self
+		}
 		if existing := c.store.GetMessage(id); existing != nil && !isPlaceholder(existing.Text) &&
 			!(len(wm.Links) > 0 && importedBeforeLinks(existing)) {
+			changed := false
 			// Text read before emoji were collected gets its emoji.
 			if wm.Text != "" && existing.Text != wm.Text && withoutEmoji(existing.Text) == withoutEmoji(wm.Text) {
 				existing.Text = wm.Text
+				changed = true
+			}
+			// Albums were once read as the other side's (their photos are staggered).
+			if len(wm.Images) > 0 && importedBeforeLinks(existing) && existing.SenderID != sender {
+				existing.SenderID = sender
+				existing.WASender = sender + "@msgr"
+				changed = true
+			}
+			if changed {
 				c.store.PutMessage(existing)
 				cs.message(id)
 			}
 			continue
-		}
-		sender := threadID
-		if wm.FromMe {
-			sender = self
 		}
 		row := &messageRow{
 			ID:        id,
