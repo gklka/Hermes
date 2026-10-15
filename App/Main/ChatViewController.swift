@@ -194,11 +194,16 @@ final class ChatViewController: NSViewController {
 
         // No notifications for a chat that's on screen (in the main window or its own).
         Notifier.shared.isThreadVisible = { threadID in
-            Self.instances.allObjects.contains { chat in
-                guard chat.threadID == threadID, let window = chat.view.window else { return false }
-                return NSApp.isActive && window.isKeyWindow && !window.isMiniaturized
-            }
+            Self.instances.allObjects.contains { $0.threadID == threadID && $0.isOnScreen }
         }
+        // Coming back to the app (its window may have stayed key) or uncovering the window: the
+        // chat on screen is read now, and its notifications go.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(maybeBecameVisible), name: NSApplication.didBecomeActiveNotification, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(maybeBecameVisible), name: NSWindow.didChangeOcclusionStateNotification, object: nil
+        )
 
         // Typing while no text field is active goes to the compose field. The event is returned,
         // so it's delivered to the field once it's focused (dead keys and input methods work too).
@@ -341,8 +346,21 @@ final class ChatViewController: NSViewController {
         compose.setQuickReaction(lastConversation?.quickEmoji, tint: BubbleColors.theme(lastConversation?.bubbleColors).last)
     }
 
+    /// The chat is in front of the user: its window is the active app's key window, and showing.
+    var isOnScreen: Bool {
+        guard threadID != nil, let window = view.window else { return false }
+        return NSApp.isActive && window.isKeyWindow && !window.isMiniaturized && window.occlusionState.contains(.visible)
+    }
+
+    @objc private func maybeBecameVisible(_ notification: Notification) {
+        if let window = notification.object as? NSWindow, window !== view.window { return }
+        guard isOnScreen, let threadID else { return }
+        markReadIfVisible()
+        Notifier.shared.clear(threadID: threadID)
+    }
+
     func markReadIfVisible() {
-        guard let threadID, let window = view.window, window.isKeyWindow, NSApp.isActive else { return }
+        guard let threadID, isOnScreen else { return }
         // Its new reactions are seen too (they count in the Dock badge).
         store.clearUnseenReactions(threadID)
         guard !store.markedUnread.contains(threadID),
