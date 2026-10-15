@@ -64,6 +64,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
 
         chat.loadViewIfNeeded()
         chat.show(threadID: threadID)
+        header.onSubtitleClick = { [weak self] in self?.showMembers(nil) }
         updateTitle()
         if let conversation = ChatStore.shared.conversation(threadID), !conversation.isGroup,
            ChatStore.shared.connectionState == .connected {
@@ -114,6 +115,8 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         header.nameLabel.stringValue = conversation?.name ?? ""
         header.subtitleLabel.stringValue = subtitle
         header.subtitleLabel.isHidden = subtitle.isEmpty
+        header.isSubtitleClickable = conversation?.isGroup == true
+        infoToolbarItem?.isHidden = conversation?.isGroup != true
         if let conversation {
             header.avatar.configure(conversation, selfID: ChatStore.shared.account?.id)
         }
@@ -123,9 +126,17 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
 
     private let header = ChatHeaderView()
     private static let headerItem = NSToolbarItem.Identifier("chatHeader")
+    private static let infoItem = NSToolbarItem.Identifier("info")
+    private weak var infoToolbarItem: NSToolbarItem?
+
+    /// The info button, or the "3 people" subtitle: the group chat's members.
+    @objc func showMembers(_ sender: Any?) {
+        guard conversation?.isGroup == true else { return }
+        contentViewController?.presentAsSheet(MembersViewController(threadID: threadID))
+    }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.headerItem, .flexibleSpace]
+        [Self.headerItem, .flexibleSpace, Self.infoItem]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -134,6 +145,17 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        if itemIdentifier == Self.infoItem {
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "Members")
+            item.label = "Members"
+            item.toolTip = "Members"
+            item.target = self
+            item.action = #selector(showMembers(_:))
+            item.isHidden = conversation?.isGroup != true
+            infoToolbarItem = item
+            return item
+        }
         guard itemIdentifier == Self.headerItem else { return nil }
         let item = NSToolbarItem(itemIdentifier: itemIdentifier)
         item.view = header
@@ -203,7 +225,15 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
 private final class ChatHeaderView: NSView {
     let avatar = ConversationAvatarView()
     let nameLabel = NSTextField(labelWithString: "")
-    let subtitleLabel = NSTextField(labelWithString: "")
+    let subtitleLabel = ClickableLabel(labelWithString: "")
+    /// In group chats, clicking "3 people" shows the members.
+    var isSubtitleClickable = false {
+        didSet { subtitleLabel.isClickable = isSubtitleClickable }
+    }
+    var onSubtitleClick: (() -> Void)? {
+        get { subtitleLabel.onClick }
+        set { subtitleLabel.onClick = newValue }
+    }
 
     init() {
         super.init(frame: .zero)
@@ -239,4 +269,28 @@ private final class ChatHeaderView: NSView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+}
+
+/// A label that runs `onClick` when clicked (with a pointing hand over it), while clickable.
+private final class ClickableLabel: NSTextField {
+    var onClick: (() -> Void)?
+    var isClickable = false {
+        didSet { window?.invalidateCursorRects(for: self) }
+    }
+
+    override func resetCursorRects() {
+        if isClickable { addCursorRect(bounds, cursor: .pointingHand) }
+    }
+
+    // Clicks here mustn't drag the window.
+    override var mouseDownCanMoveWindow: Bool { !isClickable }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isClickable else { return super.mouseDown(with: event) }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard isClickable, bounds.contains(convert(event.locationInWindow, from: nil)) else { return super.mouseUp(with: event) }
+        onClick?()
+    }
 }

@@ -85,6 +85,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         guard let window else { return }
         window.title = conversation?.name ?? "Messenger"
         window.subtitle = Self.subtitle(for: conversation)
+        infoToolbarItem?.isHidden = conversation?.isGroup != true
+    }
+
+    /// The info button: the group chat's members.
+    @objc func showMembers(_ sender: Any?) {
+        guard let conversation = split.selectedConversation, conversation.isGroup else { return }
+        split.presentAsSheet(MembersViewController(threadID: conversation.id))
     }
 
     /// The connection state, or the chat's member count or presence. Also used by chat windows.
@@ -197,11 +204,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
 
     private static let newMessageItem = NSToolbarItem.Identifier("newMessage")
     private static let filterItemID = NSToolbarItem.Identifier("filter")
+    private static let infoItem = NSToolbarItem.Identifier("info")
     private weak var filterItem: NSMenuToolbarItem?
     private weak var newMessageToolbarItem: NSToolbarItem?
+    private weak var infoToolbarItem: NSToolbarItem?
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .flexibleSpace, Self.filterItemID, Self.newMessageItem, .sidebarTrackingSeparator, .flexibleSpace]
+        [.toggleSidebar, .flexibleSpace, Self.filterItemID, Self.newMessageItem, .sidebarTrackingSeparator, .flexibleSpace, Self.infoItem]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -236,6 +245,16 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
             item.isHidden = split.isSidebarCollapsed
             filterItem = item
             updateFilterItem()
+            return item
+        case Self.infoItem:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "Members")
+            item.label = "Members"
+            item.toolTip = "Members"
+            item.target = self
+            item.action = #selector(showMembers(_:))
+            item.isHidden = split.selectedConversation?.isGroup != true
+            infoToolbarItem = item
             return item
         default:
             return nil
