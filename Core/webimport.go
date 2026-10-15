@@ -137,8 +137,10 @@ func (c *Core) importWebThreads(rows []webThreadRow) apiThreadImportResult {
 		c.store.Set(kvWebID+userID, r.WebID)
 
 		ts := prevTs - 1
-		if age, _, ok := parseAge(r.Age); ok {
+		var unit time.Duration
+		if age, ageUnit, ok := parseAge(r.Age); ok {
 			ts = min(now-age.Milliseconds(), prevTs-1)
+			unit = ageUnit
 		}
 		prevTs = ts
 		c.log.Debug().Str("thread_id", userID).Str("age", r.Age).Time("guess", time.UnixMilli(ts)).Msg("Web chat list row")
@@ -161,8 +163,15 @@ func (c *Core) importWebThreads(rows []webThreadRow) apiThreadImportResult {
 			m := latest[0]
 			c.store.SetThreadLatest(userID, m.Timestamp, snippetFor(m.Text, len(m.Attachments) > 0), m.SenderID)
 		} else {
-			// The web app knows a newer message; only moves the chat forward in time.
-			c.store.BumpThread(userID, ts, snippet, "")
+			// The web app knows a newer message: moves the chat forward in time, unless the
+			// list's time is only later by its rounding ("15 hete" is 15–16 weeks ago).
+			if t := c.store.GetThread(userID); t == nil || ts-unit.Milliseconds() > t.LastActivity {
+				c.store.BumpThread(userID, ts, snippet, "")
+			}
+			// A chat without a snippet (no stored messages) gets the list's.
+			if snippet != "" {
+				c.store.SetThreadSnippetIfEmpty(userID, snippet)
+			}
 		}
 		cs.thread(userID)
 		imported++

@@ -90,6 +90,28 @@ func (c *Core) backfillThreads(ctx context.Context) {
 			}
 		}
 	}
+	c.fillEmptyPreviews(ctx)
+}
+
+// fillEmptyPreviews loads the latest messages of encrypted 1:1 chats that have neither a snippet
+// nor stored messages (Messenger itself only shows the "end-to-end encrypted" notice for them)
+// from their plain chat on the server, so the chat list shows the latest one.
+func (c *Core) fillEmptyPreviews(ctx context.Context) {
+	ids := c.store.ThreadsWithoutPreview(table.ENCRYPTED_OVER_WA_ONE_TO_ONE)
+	c.log.Info().Int("chats", len(ids)).Msg("Loading the latest messages of chats without a preview")
+	for _, id := range ids {
+		if !c.canFetchOlder(id) {
+			continue
+		}
+		c.backfill(id, time.Now().UnixMilli(), "")
+		// The page can also arrive as a socket event a moment later.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(1500 * time.Millisecond):
+		}
+		c.emitThread(id)
+	}
 }
 
 // openDirectThread returns the 1:1 chat with a user, creating it if needed. 1:1 threads are keyed

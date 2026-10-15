@@ -445,6 +445,8 @@ final class ConversationCellView: NSTableCellView {
 
     func configure(_ conversation: Conversation, isTyping: Bool, selfID: String?) {
         nameLabel.stringValue = conversation.name
+        // Long names (groups listing their members) are cut off; hovering shows them whole.
+        nameLabel.toolTip = conversation.name
         dateLabel.stringValue = Formatters.listTimestamp(conversation.lastActivityDate)
         avatar.configure(conversation, selfID: selfID)
         unreadDot.isHidden = conversation.unreadCount == 0
@@ -454,6 +456,11 @@ final class ConversationCellView: NSTableCellView {
 
         if isTyping {
             snippetLabel.stringValue = "typing…"
+        } else if conversation.snippetUnsent == true {
+            let sender = conversation.snippetSenderID
+            let who = sender == selfID ? "You"
+                : conversation.participants.first { $0.id == sender }?.name ?? (conversation.isGroup ? "Someone" : conversation.name)
+            snippetLabel.stringValue = "\(who) unsent a message"
         } else if conversation.snippetSenderID == selfID, !conversation.snippet.isEmpty {
             snippetLabel.stringValue = "You: \(conversation.snippet)"
         } else if conversation.snippet.isEmpty, conversation.isEncrypted {

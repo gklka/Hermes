@@ -35,6 +35,8 @@ type apiConversation struct {
 	BubbleColors []string `json:"bubbleColors,omitempty"`
 	// The chat's custom quick reaction emoji (the composer's like button). Empty for the default like.
 	QuickEmoji string `json:"quickEmoji,omitempty"`
+	// SnippetUnsent: the latest message was unsent by SnippetSenderID (so there's no snippet text).
+	SnippetUnsent bool `json:"snippetUnsent,omitempty"`
 }
 
 type apiReaction struct {

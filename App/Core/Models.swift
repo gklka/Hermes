@@ -18,6 +18,8 @@ struct Conversation: Codable, Identifiable, Hashable {
     var avatarURL: String?
     var snippet: String
     var snippetSenderID: String?
+    /// The latest message was unsent by `snippetSenderID` (so there's no snippet text).
+    var snippetUnsent: Bool?
     /// Milliseconds since epoch.
     var lastActivity: Int64
     var unreadCount: Int

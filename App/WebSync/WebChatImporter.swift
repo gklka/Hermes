@@ -135,7 +135,8 @@ final class WebChatImporter {
     return JSON.stringify('');
     """
 
-    /// Waits for the chat list, then returns its encrypted rows in display order (newest first).
+    /// Waits for the chat list, then scrolls through it (it only shows the chats it has loaded,
+    /// and drops rows scrolled away) and returns its encrypted rows in display order (newest first).
     private static let collectScript = """
     const sleep = ms => new Promise(r => setTimeout(r, ms));
     let grid = null;
@@ -145,23 +146,53 @@ final class WebChatImporter {
     }
     if (!grid) return '[]';
     await sleep(1500); // let avatars and times fill in
-    const rows = [];
-    for (const row of grid.querySelectorAll('[role="row"]')) {
-      const a = row.querySelector('a[href^="/messages/e2ee/t/"]');
-      if (!a) continue;
-      const webID = (a.getAttribute('href').match(/\\/e2ee\\/t\\/(\\d+)/) || [])[1];
-      if (!webID) continue;
-      const spans = Array.from(a.querySelectorAll('span[dir="auto"]')).map(s => s.textContent.trim()).filter(Boolean);
-      const abbr = a.querySelector('abbr');
-      const img = a.querySelector('img');
-      rows.push({
-        webID,
-        name: spans[0] || '',
-        snippet: spans[1] || '',
-        age: abbr ? (abbr.getAttribute('aria-label') || abbr.textContent || '') : '',
-        avatarURL: img ? img.src : '',
-      });
+    const rows = new Map();
+    const collect = () => {
+      for (const row of grid.querySelectorAll('[role="row"]')) {
+        const a = row.querySelector('a[href^="/messages/e2ee/t/"]');
+        if (!a) continue;
+        const webID = (a.getAttribute('href').match(/\\/e2ee\\/t\\/(\\d+)/) || [])[1];
+        if (!webID) continue;
+        const spans = Array.from(a.querySelectorAll('span[dir="auto"]')).map(s => s.textContent.trim()).filter(Boolean);
+        const abbr = a.querySelector('abbr');
+        const img = a.querySelector('img');
+        const entry = {
+          webID,
+          name: spans[0] || '',
+          snippet: spans[1] || '',
+          age: abbr ? (abbr.getAttribute('aria-label') || abbr.textContent || '') : '',
+          avatarURL: img ? img.src : '',
+        };
+        // A row that just scrolled in can still be empty: keep the fullest reading (a Map keeps
+        // the first insertion's place, so the order stays).
+        const fullness = r => !!r.name + !!r.snippet + !!r.age + !!r.avatarURL;
+        const old = rows.get(webID);
+        if (!old || fullness(entry) > fullness(old)) rows.set(webID, entry);
+      }
+    };
+    collect();
+    // The list's scrolling element: inside the list (the tallest one), or else around it.
+    const scrolls = el => el.scrollHeight > el.clientHeight + 20 && /(auto|scroll)/.test(getComputedStyle(el).overflowY);
+    let scroller = null;
+    for (const el of grid.querySelectorAll('*'))
+      if (scrolls(el) && (!scroller || el.scrollHeight > scroller.scrollHeight)) scroller = el;
+    for (let el = grid; !scroller && el; el = el.parentElement)
+      if (scrolls(el)) scroller = el;
+    if (scroller) {
+      const top = scroller.scrollTop;
+      let quiet = 0;
+      for (let i = 0; i < 150 && quiet < 4; i++) {
+        const before = rows.size, height = scroller.scrollHeight;
+        scroller.scrollTop = scroller.scrollHeight;
+        await sleep(1200);
+        collect();
+        // Rows that came in empty fill in a moment later.
+        await sleep(300);
+        collect();
+        quiet = rows.size === before && scroller.scrollHeight === height ? quiet + 1 : 0;
+      }
+      scroller.scrollTop = top;
     }
-    return JSON.stringify(rows);
+    return JSON.stringify(Array.from(rows.values()));
     """
 }

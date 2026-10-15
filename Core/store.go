@@ -332,6 +332,32 @@ func (s *Store) BumpThread(id string, ts int64, snippet, senderID string) {
 		WHERE id=? AND last_activity<=?`, ts, snippet, senderID, id, ts)
 }
 
+// ThreadsWithoutPreview lists the chats of the type with no snippet and no stored messages,
+// the most recent first.
+func (s *Store) ThreadsWithoutPreview(threadType table.ThreadType) []string {
+	rows, err := s.db.Query(`
+		SELECT id FROM threads t WHERE thread_type=? AND snippet=''
+		AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.thread_id=t.id)
+		ORDER BY last_activity DESC`, int64(threadType))
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// SetThreadSnippetIfEmpty sets the snippet of a thread that has none (its time stays).
+func (s *Store) SetThreadSnippetIfEmpty(id, snippet string) {
+	_, _ = s.db.Exec(`UPDATE threads SET snippet=?, snippet_sender_id='' WHERE id=? AND snippet=''`, snippet, id)
+}
+
 // SetThreadLatest sets the thread's latest activity even if it's older (to undo a guess).
 func (s *Store) SetThreadLatest(id string, ts int64, snippet, senderID string) {
 	_, _ = s.db.Exec(`UPDATE threads SET last_activity=?, snippet=?, snippet_sender_id=? WHERE id=?`,
@@ -722,6 +748,20 @@ func (s *Store) Conversation(t *threadRow, selfID string) apiConversation {
 			conv.Snippet, conv.SnippetSenderID = text, sender
 		} else {
 			conv.Snippet = "Sticker"
+		}
+	}
+	if conv.Snippet == "" {
+		// No snippet from Messenger (an encrypted chat's, or the latest message was unsent):
+		// the latest stored message.
+		var text, sender, attachments string
+		var unsent bool
+		if s.db.QueryRow(`SELECT text, sender_id, attachments, is_unsent FROM messages WHERE thread_id=? AND is_system=0 ORDER BY timestamp DESC LIMIT 1`, t.ID).
+			Scan(&text, &sender, &attachments, &unsent) == nil {
+			conv.SnippetSenderID = sender
+			conv.SnippetUnsent = unsent
+			if !unsent {
+				conv.Snippet = snippetFor(text, attachments != "[]")
+			}
 		}
 	}
 	if colors := s.Get(kvColors + t.ID); colors != "" {
