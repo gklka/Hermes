@@ -186,7 +186,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         filterItem?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Filter")
     }
 
-    /// Filter and New Message belong to the sidebar, so they're hidden while it's collapsed.
+    /// Filter and Open Chat belong to the sidebar, so they're hidden while it's collapsed.
     private func updateSidebarItems() {
         let collapsed = split.isSidebarCollapsed
         filterItem?.isHidden = collapsed
@@ -212,9 +212,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         switch itemIdentifier {
         case Self.newMessageItem:
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.image = NSImage(systemSymbolName: "square.and.pencil", accessibilityDescription: "New Message")
-            item.label = "New Message"
-            item.toolTip = "New Message (⌘N)"
+            item.image = NSImage(systemSymbolName: "square.and.pencil", accessibilityDescription: "Open Chat")
+            item.label = "Open Chat"
+            item.toolTip = "Open Chat (⌘O)"
             item.target = self
             item.action = #selector(newMessage(_:))
             item.isHidden = split.isSidebarCollapsed

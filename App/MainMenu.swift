@@ -23,7 +23,11 @@ enum MainMenu {
         main.addItem(withTitle: appName, action: nil, keyEquivalent: "").submenu = appMenu
 
         let fileMenu = NSMenu(title: "File")
-        fileMenu.addItem(withTitle: "New Message", action: #selector(MainWindowController.newMessage(_:)), keyEquivalent: "n")
+        fileMenu.addItem(withTitle: "Open Chat…", action: #selector(MainWindowController.newMessage(_:)), keyEquivalent: "o")
+        // ⌘N still works, as in Messages.
+        let newMessage = fileMenu.addItem(withTitle: "New Message", action: #selector(MainWindowController.newMessage(_:)), keyEquivalent: "n")
+        newMessage.isHidden = true
+        newMessage.allowsKeyEquivalentWhenHidden = true
         let attach = fileMenu.addItem(withTitle: "Attach Files…", action: #selector(MainWindowController.attachFiles(_:)), keyEquivalent: "a")
         attach.keyEquivalentModifierMask = [.command, .shift]
         let export = fileMenu.addItem(withTitle: "Export Chat…", action: #selector(MainWindowController.exportChat(_:)), keyEquivalent: "e")

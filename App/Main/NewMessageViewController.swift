@@ -1,6 +1,6 @@
 import AppKit
 
-/// "New Message" sheet: search contacts and open a 1:1 chat.
+/// "Open Chat" sheet: search people and open a 1:1 chat.
 final class NewMessageViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
     var onPick: ((Participant) -> Void)?
 
@@ -12,7 +12,7 @@ final class NewMessageViewController: NSViewController, NSTableViewDataSource, N
     override func loadView() {
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 440))
 
-        let title = NSTextField(labelWithString: "New Message")
+        let title = NSTextField(labelWithString: "Open Chat")
         title.font = .systemFont(ofSize: 13, weight: .semibold)
 
         searchField.placeholderString = "To: name"

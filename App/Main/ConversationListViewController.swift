@@ -140,7 +140,7 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         tableView.scrollRowToVisible(index)
     }
 
-    /// Selects a conversation programmatically (e.g. after "New Message").
+    /// Selects a conversation programmatically (e.g. after "Open Chat").
     func select(threadID: String) {
         searchField.stringValue = ""
         selectedID = threadID
@@ -294,6 +294,15 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
 
     func controlTextDidChange(_ obj: Notification) {
         reload()
+    }
+
+    /// Esc clears the search and leaves the field (typing then goes to the message field).
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard control === searchField, commandSelector == #selector(NSResponder.cancelOperation(_:)) else { return false }
+        searchField.stringValue = ""
+        reload()
+        view.window?.makeFirstResponder(nil)
+        return true
     }
 
     // MARK: - Table

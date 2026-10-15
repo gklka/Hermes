@@ -61,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Dock menu
 
-    /// The five most recent chats (unread ones in bold), then New Message.
+    /// The five most recent chats (unread ones in bold), then Open Chat.
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         guard didLoadConversations else { return nil }
         let menu = NSMenu()
@@ -83,7 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !menu.items.isEmpty {
             menu.addItem(.separator())
         }
-        let newMessage = NSMenuItem(title: "New Message", action: #selector(dockNewMessage(_:)), keyEquivalent: "")
+        let newMessage = NSMenuItem(title: "Open Chat…", action: #selector(dockNewMessage(_:)), keyEquivalent: "")
         newMessage.target = self
         menu.addItem(newMessage)
         return menu
