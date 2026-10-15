@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         Notifier.shared.start()
         DockBadge.shared.start()
+        WebSyncController.shared.onRestoreFinished = { WebHistoryImporter.shared.restoreFinished() }
     }
 
     /// A chat (and message) chosen in Spotlight before the chats were loaded.
@@ -129,6 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 didLoadConversations = true
                 Task {
                     await store.loadConversations()
+                    WebHistoryImporter.shared.chatsLoaded()
                     // Launched by choosing a chat in Spotlight.
                     if let target = spotlightTarget {
                         spotlightTarget = nil

@@ -403,6 +403,15 @@ func (c *Core) importWebMessages(threadID string, messages []webMessage) apiMess
 		c.store.BumpThread(threadID, newest.Timestamp, snippetFor(newest.Text, len(newest.Attachments) > 0), newest.SenderID)
 		cs.thread(threadID)
 	}
+	// The chat's read position isn't known (it came from the web app's chat list, e.g. after
+	// a new login): its history counts as read, or every imported chat would look unread.
+	// Messages arriving from now on count as usual.
+	if t := c.store.GetThread(threadID); t != nil && t.LastRead == 0 {
+		if latest := c.store.ListMessages(threadID, 0, 1); len(latest) == 1 {
+			c.store.SetThreadLastRead(threadID, latest[0].Timestamp)
+			cs.thread(threadID)
+		}
+	}
 	c.flush(cs)
 	c.log.Info().Str("thread_id", threadID).Int("received", len(messages)).Int("imported", imported).Int("unrestored", unrestored).Msg("Imported web message history")
 	return apiMessageImportResult{Imported: imported, Unrestored: unrestored}

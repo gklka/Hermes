@@ -1,17 +1,57 @@
 import Foundation
 
-/// Imports the history of an encrypted 1:1 chat from Messenger's web app (after it has been
+/// Imports the history of encrypted 1:1 chats from Messenger's web app (after it has been
 /// restored there with your PIN). The web app shows each message with its real message ID,
 /// so imported messages line up with ones the live connection delivers.
+///
+/// Chats wait in a queue, as they take turns with the page: the open chat first, then (after
+/// a restore) the recent ones. For a while after a restore the web app is still downloading
+/// the history, so a chat is imported again every few minutes until nothing older turns up.
 final class WebHistoryImporter {
     static let shared = WebHistoryImporter()
 
-    /// Called on the main thread when an import starts/finishes for a thread.
-    var onStateChange: ((_ threadID: String, _ isImporting: Bool) -> Void)?
-    private(set) var importing: Set<String> = []
-    /// Threads whose history the web app couldn't show (not restored there with the PIN yet).
+    /// Called on the main thread when a chat's import is queued, starts or ends.
+    var onStateChange: ((_ threadID: String) -> Void)?
+    /// Chats whose history the web app couldn't show (not restored there with the PIN yet).
     private(set) var needsRestore: Set<String> = []
-    private var importedThisSession: Set<String> = []
+    /// Chats whose history (as far as the web app has it) is imported.
+    private var done: Set<String> = []
+    /// Waiting to be imported, the next first.
+    private var queue: [String] = []
+    /// Being imported now.
+    private var current: String?
+    private var isRunning = false
+    /// Waiting to be imported again (more history may still arrive), and how often each was.
+    private var waiting: Set<String> = []
+    private var tries: [String: Int] = [:]
+    /// The oldest message collected per chat (ms), to tell when an import found nothing older.
+    private var oldest: [String: Int64] = [:]
+    /// Changes when the account logs out, so the work for it stops.
+    private var generation = 0
+
+    private static let retryDelay: Duration = .seconds(120)
+    private static let maxTries = 6
+    /// How many of the most recent encrypted chats are imported after a restore.
+    private static let recentChatCount = 15
+    private static let maxMessages = 400
+    /// For this long after a restore, the web app may still be downloading the history.
+    private static let restoringPeriod: TimeInterval = 30 * 60
+    private static let restoredAtKey = "WebRestoredAt"
+
+    /// When the encrypted chats were restored here last (kept across launches).
+    private var restoredAt: Date? {
+        get { UserDefaults.standard.object(forKey: Self.restoredAtKey) as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: Self.restoredAtKey) }
+    }
+
+    private var isRestoring: Bool {
+        restoredAt.map { Date().timeIntervalSince($0) < Self.restoringPeriod } ?? false
+    }
+
+    /// Queued, being imported, or waiting to be imported again: the chat shows it's loading.
+    func isPending(_ threadID: String) -> Bool {
+        current == threadID || queue.contains(threadID) || waiting.contains(threadID)
+    }
 
     // What the collect script returns (decoded off the main actor).
     nonisolated private struct Result: Decodable {
@@ -49,73 +89,180 @@ final class WebHistoryImporter {
         let height: Int
     }
 
-    /// Forgets what was imported (the account logged out). An import still reading the page may
-    /// never finish (the page is closed), so it doesn't block the next account's.
+    /// Forgets everything (the account logged out). An import still reading the page may never
+    /// finish (the page is closed), so it doesn't block the next account's.
     func reset() {
+        generation += 1
         needsRestore = []
-        importedThisSession = []
-        importing = []
+        done = []
+        queue = []
+        current = nil
+        isRunning = false
+        waiting = []
+        tries = [:]
+        oldest = [:]
+        restoredAt = nil
     }
 
+    /// The chat was opened: it's imported next.
     func importHistory(threadID: String) {
-        guard !importing.contains(threadID), !importedThisSession.contains(threadID) else {
-            CoreBridge.shared.log("WebHistoryImporter: \(threadID) skipped (importing: \(importing.contains(threadID)), done: \(importedThisSession.contains(threadID)))")
-            return
-        }
-        CoreBridge.shared.log("WebHistoryImporter: \(threadID) requested")
-        importing.insert(threadID)
-        onStateChange?(threadID, true)
-        let account = ChatStore.shared.account?.id
+        guard !done.contains(threadID), current != threadID else { return }
+        queue.removeAll { $0 == threadID }
+        queue.insert(threadID, at: 0)
+        waiting.remove(threadID)
+        onStateChange?(threadID)
+        runQueue()
+    }
+
+    /// The encrypted chats were just restored with the PIN: everything is worth importing again,
+    /// and the recent chats are imported in the background.
+    func restoreFinished() {
+        CoreBridge.shared.log("WebHistoryImporter: restore finished")
+        restoredAt = Date()
+        needsRestore = []
+        done = []
+        tries = [:]
+        oldest = [:]
+        importRecentChats()
+    }
+
+    /// The chats are loaded (at launch): soon after a restore, the recent chats' import goes on.
+    func chatsLoaded() {
+        if isRestoring { importRecentChats() }
+    }
+
+    private func importRecentChats() {
+        let generation = self.generation
         Task {
-            defer {
-                importing.remove(threadID)
-                onStateChange?(threadID, false)
+            // The chat list maps the chats to the web app's.
+            await WebChatImporter.shared.runOnce()
+            guard generation == self.generation else { return }
+            let recent = ChatStore.shared.conversations.filter { $0.isEncrypted && !$0.isGroup }.prefix(Self.recentChatCount)
+            for conversation in recent where !isPending(conversation.id) {
+                queue.append(conversation.id)
+                onStateChange?(conversation.id)
             }
-            do {
-                struct WebIDResult: Decodable { let webID: String }
-                struct Params: Encodable { let threadID: String }
-                let webID = try await CoreBridge.shared.call("web.threadWebID", Params(threadID: threadID), as: WebIDResult.self).webID
-                CoreBridge.shared.log("WebHistoryImporter: web ID for \(threadID) is '\(webID)'")
-                guard !webID.isEmpty else {
-                    CoreBridge.shared.log("WebHistoryImporter: no web chat known for \(threadID)")
-                    needsRestore.insert(threadID)
-                    return
-                }
-                let web = WebSyncController.shared
-                CoreBridge.shared.log("WebHistoryImporter: \(threadID) → web chat \(webID), starting")
-                guard await web.start(showWindow: false) else { return }
-                let result = try await web.withExclusiveAccess {
-                    CoreBridge.shared.log("WebHistoryImporter: navigating")
-                    await web.navigate(toPath: "/messages/e2ee/t/\(webID)/")
-                    CoreBridge.shared.log("WebHistoryImporter: collecting from \(web.webView.url?.path ?? "?")")
-                    return try await web.evaluate(Self.collectScript(userID: threadID), as: Result.self)
-                }
-                CoreBridge.shared.log("WebHistoryImporter: collected \(result.messages.count) messages")
-                let empty = result.messages.filter { $0.text.isEmpty && $0.images.isEmpty && $0.links.isEmpty }.map(\.domID)
-                CoreBridge.shared.log("WebHistoryImporter: \(empty.count) came back empty: \(empty.prefix(12).joined(separator: ", "))")
-                if let error = result.error {
-                    CoreBridge.shared.log("WebHistoryImporter: \(error)")
-                }
-                // Logged out (or in as someone else) while the page was read.
-                guard ChatStore.shared.account?.id == account else { return }
-                struct ImportParams: Encodable { let threadID: String; let messages: [Message] }
-                struct ImportResult: Decodable { let imported: Int; let unrestored: Int }
-                let imported = try await CoreBridge.shared.call(
-                    "web.importMessages", ImportParams(threadID: threadID, messages: result.messages), as: ImportResult.self
-                )
-                CoreBridge.shared.log("WebHistoryImporter: imported \(imported.imported), not restored \(imported.unrestored)")
-                // The core emits each stored message as an event, so open chats update by themselves.
-                if result.messages.isEmpty || imported.unrestored > 0 {
-                    // Not marked as imported, so it's tried again after a restore.
-                    needsRestore.insert(threadID)
-                    return
-                }
-                needsRestore.remove(threadID)
-                importedThisSession.insert(threadID)
-            } catch {
-                CoreBridge.shared.log("WebHistoryImporter: \(error)")
-            }
+            runQueue()
         }
+    }
+
+    /// Imports the queued chats one after the other.
+    private func runQueue() {
+        guard !isRunning else { return }
+        isRunning = true
+        let generation = self.generation
+        Task {
+            while generation == self.generation, !queue.isEmpty {
+                let threadID = queue.removeFirst()
+                current = threadID
+                onStateChange?(threadID)
+                let outcome = await importOnce(threadID)
+                guard generation == self.generation else { return }
+                current = nil
+                finish(threadID, outcome)
+                onStateChange?(threadID)
+            }
+            if generation == self.generation { isRunning = false }
+        }
+    }
+
+    private enum Outcome {
+        /// Everything the web app has is imported.
+        case complete
+        /// The web app may still be downloading older messages: import it again later.
+        case moreMayCome
+        /// The web app doesn't show the chat's history (it isn't restored with the PIN).
+        case needsRestore
+        /// Something went wrong; it's tried again when the chat is opened.
+        case failed
+    }
+
+    private func finish(_ threadID: String, _ outcome: Outcome) {
+        switch outcome {
+        case .complete:
+            needsRestore.remove(threadID)
+            done.insert(threadID)
+        case .needsRestore:
+            needsRestore.insert(threadID)
+        case .moreMayCome:
+            needsRestore.remove(threadID)
+            let tried = tries[threadID, default: 0] + 1
+            tries[threadID] = tried
+            if tried < Self.maxTries {
+                retryLater(threadID)
+            } else {
+                done.insert(threadID)
+            }
+        case .failed:
+            break
+        }
+    }
+
+    private func retryLater(_ threadID: String) {
+        waiting.insert(threadID)
+        let generation = self.generation
+        Task {
+            try? await Task.sleep(for: Self.retryDelay)
+            // Opened meanwhile (imported then), or logged out.
+            guard generation == self.generation, waiting.remove(threadID) != nil else { return }
+            if !queue.contains(threadID) { queue.append(threadID) }
+            runQueue()
+        }
+    }
+
+    /// Reads the chat from the web app and stores what's new.
+    private func importOnce(_ threadID: String) async -> Outcome {
+        let account = ChatStore.shared.account?.id
+        do {
+            struct WebIDResult: Decodable { let webID: String }
+            struct Params: Encodable { let threadID: String }
+            let webID = try await CoreBridge.shared.call("web.threadWebID", Params(threadID: threadID), as: WebIDResult.self).webID
+            guard !webID.isEmpty else {
+                CoreBridge.shared.log("WebHistoryImporter: no web chat known for \(threadID)")
+                return .needsRestore
+            }
+            let web = WebSyncController.shared
+            guard await web.start(showWindow: false) else { return .failed }
+            CoreBridge.shared.log("WebHistoryImporter: \(threadID) → web chat \(webID), collecting")
+            let result = try await web.withExclusiveAccess {
+                await web.navigate(toPath: "/messages/e2ee/t/\(webID)/")
+                return try await web.evaluate(Self.collectScript(userID: threadID, max: Self.maxMessages), as: Result.self)
+            }
+            if let error = result.error {
+                CoreBridge.shared.log("WebHistoryImporter: \(threadID): \(error)")
+            }
+            // Logged out (or in as someone else) while the page was read.
+            guard ChatStore.shared.account?.id == account else { return .failed }
+            struct ImportParams: Encodable { let threadID: String; let messages: [Message] }
+            struct ImportResult: Decodable { let imported: Int; let unrestored: Int }
+            let imported = try await CoreBridge.shared.call(
+                "web.importMessages", ImportParams(threadID: threadID, messages: result.messages), as: ImportResult.self
+            )
+            CoreBridge.shared.log("WebHistoryImporter: \(threadID): collected \(result.messages.count), imported \(imported.imported), not restored \(imported.unrestored)")
+            // The core emits each stored message as an event, so open chats update by themselves.
+
+            // Nothing readable (no messages, placeholders, or only the "now encrypted" notice).
+            let readable = result.messages.contains { !$0.text.isEmpty || !$0.images.isEmpty || !$0.links.isEmpty }
+            if !readable || imported.unrestored > 0 {
+                return isRestoring ? .moreMayCome : .needsRestore
+            }
+            if result.messages.count >= Self.maxMessages { return .complete }
+            // Nothing older than last time: that's all there is.
+            let oldestNow = result.messages.compactMap { Self.timestamp(ofDOMID: $0.domID) }.min()
+            defer { oldest[threadID] = oldestNow }
+            if let oldestNow, oldestNow == oldest[threadID] { return .complete }
+            return isRestoring ? .moreMayCome : .complete
+        } catch {
+            CoreBridge.shared.log("WebHistoryImporter: \(threadID): \(error)")
+            return .failed
+        }
+    }
+
+    /// The time of a message from its web ID ("<user>@msgr.<message ID>"): Messenger message IDs
+    /// are milliseconds << 22 | random (as in the core's webMessageID).
+    private static func timestamp(ofDOMID domID: String) -> Int64? {
+        guard let dot = domID.lastIndex(of: "."), let id = UInt64(domID[domID.index(after: dot)...]) else { return nil }
+        return Int64(id >> 22)
     }
 
     /// Scrolls the open chat back (up to `max` messages) and returns every message's ID,
@@ -222,11 +369,12 @@ final class WebHistoryImporter {
           }
         };
         collect();
+        // Older messages can take a moment to load (longer while the web app is still restoring).
         let stable = 0;
-        for (let i = 0; i < 80 && scroller && stable < 3 && seen.size < \(max); i++) {
+        for (let i = 0; i < 80 && scroller && stable < 4 && seen.size < \(max); i++) {
           const before = seen.size;
           scroller.scrollTop = 0;
-          await sleep(1500);
+          await sleep(2000);
           collect();
           stable = seen.size === before ? stable + 1 : 0;
         }

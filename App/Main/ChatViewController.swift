@@ -16,6 +16,8 @@ final class ChatViewController: NSViewController {
         /// "Not Delivered" under a failed message; clicking offers to resend or delete it.
         case notDelivered(ChatMessage)
         case restore
+        /// A spinner: earlier messages are being loaded from the web app.
+        case loading
         case message(ChatMessage, MessageCellView.Layout)
         /// Under a message: the people whose read position it is (their last seen message).
         case readers([Participant])
@@ -181,7 +183,7 @@ final class ChatViewController: NSViewController {
         )
 
         Self.instances.add(self)
-        WebHistoryImporter.shared.onStateChange = { threadID, _ in
+        WebHistoryImporter.shared.onStateChange = { threadID in
             for chat in Self.instances.allObjects where chat.threadID == threadID { chat.reload() }
         }
         NotificationCenter.default.addObserver(
@@ -401,8 +403,9 @@ final class ChatViewController: NSViewController {
         let messages = store.messages(in: threadID)
         let seenAt = Self.readPositions(in: messages, of: conversation, selfID: store.account?.id)
         var result: [Row] = []
-        if WebHistoryImporter.shared.importing.contains(threadID) {
-            result.append(.caption("Loading earlier messages from Messenger web…", .center))
+        if WebHistoryImporter.shared.isPending(threadID) {
+            // Queued or being imported from the web app (e.g. still downloading after a restore).
+            result.append(.loading)
         } else if conversation.isEncrypted && (messages.isEmpty || WebHistoryImporter.shared.needsRestore.contains(threadID)) {
             result.append(.restore)
         }
@@ -651,6 +654,8 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
             let cell = reuse("Restore", sizing: sizing) { RestoreCellView() }
             cell.configure(maxWidth: bubbleMaxWidth)
             return cell
+        case .loading:
+            return reuse("Loading", sizing: sizing) { LoadingCellView() }
         case .message(let message, let layout):
             let cell = (sizing ? nil : transitioningCell(for: row)) ?? reuse("Message", sizing: sizing) { MessageCellView() }
             cell.delegate = self

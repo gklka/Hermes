@@ -188,6 +188,9 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
 
     private var restoreWatchTimer: Timer?
 
+    /// Called when the PIN was entered and its prompt went away (before the window closes).
+    var onRestoreFinished: (() -> Void)?
+
     /// Closes the window once the PIN prompt has been shown and then went away (restore finished).
     /// If the prompt never shows (already restored), the window stays until the user closes it.
     private func watchForFinishedRestore() {
@@ -211,6 +214,7 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
                         // Twice in a row, so a re-render between steps doesn't count.
                         if goneCount >= 2 {
                             CoreBridge.shared.log("WebSync: PIN prompt gone, closing restore window")
+                            self.onRestoreFinished?()
                             self.close()
                         }
                     }

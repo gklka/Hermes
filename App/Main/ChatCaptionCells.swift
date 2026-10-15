@@ -103,6 +103,40 @@ final class RestoreCellView: NSTableCellView {
     }
 }
 
+/// At the top of an encrypted chat while its history is loaded from Messenger web: a spinner.
+final class LoadingCellView: NSTableCellView {
+    private let spinner = NSProgressIndicator()
+
+    init() {
+        super.init(frame: .zero)
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isIndeterminate = true
+        spinner.setAccessibilityLabel("Loading earlier messages")
+        spinner.toolTip = "Loading earlier messages from Messenger web"
+        spinner.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(spinner)
+        NSLayoutConstraint.activate([
+            spinner.centerXAnchor.constraint(equalTo: centerXAnchor),
+            spinner.topAnchor.constraint(equalTo: topAnchor, constant: 14),
+            spinner.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    // Animations stop when a cell leaves the window; it spins again when it's back.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            spinner.startAnimation(nil)
+        } else {
+            spinner.stopAnimation(nil)
+        }
+    }
+}
+
 /// Under the last message someone has seen: their small pictures on the right, like Messenger's
 /// read heads ("Seen by …" on hover).
 final class ReadersCellView: NSTableCellView {
