@@ -103,7 +103,7 @@ final class RestoreCellView: NSTableCellView {
     }
 }
 
-/// At the top of an encrypted chat while its history is loaded from Messenger web: a spinner.
+/// At the top of a chat while earlier messages are loaded (also from Messenger web): a spinner.
 final class LoadingCellView: NSTableCellView {
     private let spinner = NSProgressIndicator()
 
@@ -113,7 +113,7 @@ final class LoadingCellView: NSTableCellView {
         spinner.controlSize = .small
         spinner.isIndeterminate = true
         spinner.setAccessibilityLabel("Loading earlier messages")
-        spinner.toolTip = "Loading earlier messages from Messenger web"
+        spinner.toolTip = "Loading earlier messages"
         spinner.translatesAutoresizingMaskIntoConstraints = false
         addSubview(spinner)
         NSLayoutConstraint.activate([

@@ -107,6 +107,13 @@ func (c *Core) backfill(threadID string, refTs int64, refID string) bool {
 	}
 	if resp != nil {
 		c.handleTable(resp)
+		// An encrypted chat's Facebook thread may have no history at all: the server answers
+		// with nothing (not even a range), so it would be asked again forever.
+		if t := c.store.GetThread(threadID); t != nil && t.Type.IsWhatsApp() {
+			if upserts, inserts := resp.WrapMessages(); len(upserts) == 0 && len(inserts) == 0 {
+				c.store.SetThreadHasMoreBefore(threadID, false)
+			}
+		}
 	}
 	return true
 }

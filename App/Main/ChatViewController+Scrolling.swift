@@ -63,11 +63,23 @@ extension ChatViewController {
         alignGradients()
         guard let threadID, !isLoadingOlder, searchResults == nil, scrollView.contentView.bounds.minY < 200, !rows.isEmpty else { return }
         isLoadingOlder = true
+        let count = store.messages(in: threadID).count
         Task {
             let started = await store.loadOlderMessages(threadID)
+            if !started, store.reachedHistoryStart(threadID) {
+                // An encrypted chat's older messages may be on the web app only.
+                WebHistoryImporter.shared.loadEarlier(threadID: threadID)
+            }
             // Give server backfill a moment before asking again.
             try? await Task.sleep(for: .seconds(started ? 1 : 3))
             isLoadingOlder = false
+            guard self.threadID == threadID else { return }
+            olderLoadsWithoutNews = store.messages(in: threadID).count > count ? 0 : olderLoadsWithoutNews + 1
+            // Still at the top (the spinner showing): go on without a scroll, until it's clear
+            // nothing more comes (the next ask learns there's no more and the spinner goes).
+            if started, olderLoadsWithoutNews < 3 {
+                scrolled()
+            }
         }
     }
 

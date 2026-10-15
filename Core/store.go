@@ -537,6 +537,14 @@ func (s *Store) OldestMessage(threadID string) (int64, string) {
 	return ts, id
 }
 
+// OldestEncryptedMessage is the time (ms) of the chat's oldest end-to-end encrypted message (not
+// a Facebook "mid." one), 0 if there's none. The web app shows every one of those.
+func (s *Store) OldestEncryptedMessage(threadID string) int64 {
+	var ts int64
+	_ = s.db.QueryRow(`SELECT COALESCE(MIN(timestamp), 0) FROM messages WHERE thread_id=? AND id NOT LIKE 'mid.%' AND timestamp > 0`, threadID).Scan(&ts)
+	return ts
+}
+
 // ListMessages returns up to `limit` messages older than `before` (ms; 0 = newest), oldest first.
 func (s *Store) ListMessages(threadID string, before int64, limit int) []*messageRow {
 	if before <= 0 {

@@ -16,7 +16,7 @@ final class ChatViewController: NSViewController {
         /// "Not Delivered" under a failed message; clicking offers to resend or delete it.
         case notDelivered(ChatMessage)
         case restore
-        /// A spinner: earlier messages are being loaded from the web app.
+        /// A spinner: earlier messages are being loaded (from the web app, or Messenger's history).
         case loading
         case message(ChatMessage, MessageCellView.Layout)
         /// Under a message: the people whose read position it is (their last seen message).
@@ -79,6 +79,8 @@ final class ChatViewController: NSViewController {
     // MARK: State of scrolling (+Scrolling)
 
     var isLoadingOlder = false
+    /// Loads in a row (at the top) that brought nothing older, to stop asking by itself.
+    var olderLoadsWithoutNews = 0
     /// A message to scroll to and select once it's loaded (from a clicked notification, a
     /// Spotlight result or a Find in Chat result).
     var pendingReveal: String?
@@ -324,11 +326,11 @@ final class ChatViewController: NSViewController {
                 markReadIfVisible()
             }
             if store.conversation(threadID)?.isEncrypted == true {
-                // An encrypted chat's theme changed while the app wasn't running only shows in
-                // the web app. Read first (a few seconds): the history import can scroll back
-                // for minutes and would hold the web view the whole time.
-                await WebThemeReader.shared.refresh(threadID: threadID)
+                // Queued at once (the Activity window shows it), even while another chat is
+                // being read. An encrypted chat's theme changed while the app wasn't running
+                // only shows in the web app; reading it waits its turn for the page too.
                 WebHistoryImporter.shared.importHistory(threadID: threadID)
+                await WebThemeReader.shared.refresh(threadID: threadID)
             }
         }
     }
@@ -408,6 +410,9 @@ final class ChatViewController: NSViewController {
             result.append(.loading)
         } else if conversation.isEncrypted && (messages.isEmpty || WebHistoryImporter.shared.needsRestore.contains(threadID)) {
             result.append(.restore)
+        } else if !messages.isEmpty && (store.hasOlderMessages(threadID) || WebHistoryImporter.shared.hasEarlier(threadID)) {
+            // Scrolling up to it loads them (scrolled()).
+            result.append(.loading)
         }
 
         for (index, message) in messages.enumerated() {

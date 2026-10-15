@@ -175,6 +175,16 @@ final class ChatStore {
         hasMoreHistory[threadID] = nil
     }
 
+    /// Whether the chat has older messages to load (stored, or on Messenger).
+    func hasOlderMessages(_ threadID: String) -> Bool {
+        hasMoreHistory[threadID] == true
+    }
+
+    /// Whether everything stored (and on Messenger's servers) is loaded.
+    func reachedHistoryStart(_ threadID: String) -> Bool {
+        hasMoreHistory[threadID] == false
+    }
+
     /// Loads an older page. Returns false when there is nothing more to load.
     @discardableResult
     func loadOlderMessages(_ threadID: String) async -> Bool {

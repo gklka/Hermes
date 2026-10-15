@@ -180,6 +180,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await WebSyncController.shared.start(showWindow: true) }
     }
 
+    @objc func toggleActivity(_ sender: Any?) {
+        ActivityWindowController.shared.toggle()
+    }
+
     /// Asks first: logging out deletes the account's chats from this Mac.
     @objc func logOut(_ sender: Any?) {
         guard let window = NSApp.keyWindow ?? mainWindowController?.window else {

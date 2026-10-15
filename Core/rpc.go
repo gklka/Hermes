@@ -109,6 +109,8 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return map[string]string{"webID": c.store.Get(kvWebID + p.ThreadID)}, nil
 	case "web.threadPath":
 		return map[string]string{"path": c.webThreadPath(p.ThreadID)}, nil
+	case "web.oldestEncrypted":
+		return map[string]int64{"timestamp": c.store.OldestEncryptedMessage(p.ThreadID)}, nil
 
 	// Chats
 	case "threads.list":

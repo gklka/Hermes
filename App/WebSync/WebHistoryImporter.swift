@@ -5,38 +5,108 @@ import Foundation
 /// so imported messages line up with ones the live connection delivers.
 ///
 /// Chats wait in a queue, as they take turns with the page: the open chat first, then (after
-/// a restore) the recent ones. For a while after a restore the web app is still downloading
-/// the history, so a chat is imported again every few minutes until nothing older turns up.
+/// a restore) the recent ones. Each chat remembers the stretch of its history that's imported
+/// (its coverage, kept across launches), so opening it again only reads what's newer, and
+/// scrolling to its top reads the next batch before it, again and again until the chat's start.
+/// The page always loads a chat from its newest message back, so an import scrolls past the
+/// imported stretch without reading it again.
+///
+/// For a while after a restore the web app is still downloading the history, so a chat is
+/// imported again every few minutes until nothing older turns up.
+///
+/// The Activity window shows the queue, the running import and a log of the finished ones.
 final class WebHistoryImporter {
     static let shared = WebHistoryImporter()
 
     /// Called on the main thread when a chat's import is queued, starts or ends.
     var onStateChange: ((_ threadID: String) -> Void)?
+    /// Posted when anything the Activity window shows changes (also the running import's progress).
+    static let activityDidChange = Notification.Name("WebHistoryImporterActivityDidChange")
+
+    enum Mode: String, Codable {
+        /// What's newer than the imported stretch (the first time: a batch from the newest back).
+        case latest
+        /// The batch before the imported stretch (and what's newer, which is read on the way).
+        case earlier
+    }
+
+    private struct Job {
+        let threadID: String
+        var mode: Mode
+    }
+
     /// Chats whose history the web app couldn't show (not restored there with the PIN yet).
     private(set) var needsRestore: Set<String> = []
-    /// Chats whose history (as far as the web app has it) is imported.
+    /// Chats whose newest messages were imported since launch (opening them again doesn't).
     private var done: Set<String> = []
     /// Waiting to be imported, the next first.
-    private var queue: [String] = []
-    /// Being imported now.
-    private var current: String?
+    private var queue: [Job] = []
+    /// Being imported now, since when.
+    private var current: Job?
+    private var currentStarted = Date()
     private var isRunning = false
-    /// Waiting to be imported again (more history may still arrive), and how often each was.
-    private var waiting: Set<String> = []
+    /// Waiting to be imported again (more history may still arrive): when, and how often each was.
+    private var retryAt: [String: Date] = [:]
     private var tries: [String: Int] = [:]
     /// The oldest message collected per chat (ms), to tell when an import found nothing older.
     private var oldest: [String: Int64] = [:]
     /// Changes when the account logs out, so the work for it stops.
     private var generation = 0
+    /// Where the running import is.
+    private var stage: Stage = .startingWebApp
 
-    private static let retryDelay: Duration = .seconds(120)
+    private static let retryDelay: TimeInterval = 120
     private static let maxTries = 6
     /// How many of the most recent encrypted chats are imported after a restore.
     private static let recentChatCount = 15
-    private static let maxMessages = 400
+    /// How many messages an import reads (new ones; the imported stretch is skipped).
+    private static let batchSize = 400
     /// For this long after a restore, the web app may still be downloading the history.
     private static let restoringPeriod: TimeInterval = 30 * 60
     private static let restoredAtKey = "WebRestoredAt"
+
+    // MARK: - Kept across launches
+
+    /// The imported stretch of a chat's history (message times, ms).
+    private struct Coverage: Codable {
+        var oldest: Int64
+        var newest: Int64
+    }
+
+    /// One import in the Activity window's log.
+    struct Record: Codable {
+        enum Result: String, Codable { case done, retrying, needsRestore, failed }
+        let threadID: String
+        let mode: Mode
+        let started: Date
+        let ended: Date
+        let result: Result
+        let summary: String
+    }
+
+    private struct Saved: Codable {
+        var coverage: [String: Coverage] = [:]
+        /// Chats whose start the web app showed: there's nothing older to read.
+        var reachedStart: Set<String> = []
+        /// The latest first.
+        var log: [Record] = []
+    }
+
+    private static let savedKey = "WebHistoryImporterState"
+    private static let logLength = 200
+
+    private var saved: Saved {
+        didSet {
+            if let data = try? JSONEncoder().encode(saved) {
+                UserDefaults.standard.set(data, forKey: Self.savedKey)
+            }
+        }
+    }
+
+    private init() {
+        saved = UserDefaults.standard.data(forKey: Self.savedKey)
+            .flatMap { try? JSONDecoder().decode(Saved.self, from: $0) } ?? Saved()
+    }
 
     /// When the encrypted chats were restored here last (kept across launches).
     private var restoredAt: Date? {
@@ -50,13 +120,23 @@ final class WebHistoryImporter {
 
     /// Queued, being imported, or waiting to be imported again: the chat shows it's loading.
     func isPending(_ threadID: String) -> Bool {
-        current == threadID || queue.contains(threadID) || waiting.contains(threadID)
+        current?.threadID == threadID || queue.contains { $0.threadID == threadID } || retryAt[threadID] != nil
+    }
+
+    /// Whether the web app has messages older than the imported ones (scrolling to the top of
+    /// the chat reads them: loadEarlier).
+    func hasEarlier(_ threadID: String) -> Bool {
+        saved.coverage[threadID] != nil && !saved.reachedStart.contains(threadID)
     }
 
     // What the collect script returns (decoded off the main actor).
     nonisolated private struct Result: Decodable {
         let messages: [Message]
         let error: String?
+        /// The page showed the chat's first message.
+        let reachedStart: Bool?
+        /// It scrolled back into the imported stretch (so everything newer is read).
+        let overlap: Bool?
     }
 
     nonisolated struct Message: Codable {
@@ -98,19 +178,41 @@ final class WebHistoryImporter {
         queue = []
         current = nil
         isRunning = false
-        waiting = []
+        retryAt = [:]
         tries = [:]
         oldest = [:]
+        saved = Saved()
         restoredAt = nil
+        NotificationCenter.default.post(name: Self.activityDidChange, object: self)
     }
 
-    /// The chat was opened: it's imported next.
-    func importHistory(threadID: String) {
-        guard !done.contains(threadID), current != threadID else { return }
-        queue.removeAll { $0 == threadID }
-        queue.insert(threadID, at: 0)
-        waiting.remove(threadID)
+    private func stateChanged(_ threadID: String) {
         onStateChange?(threadID)
+        NotificationCenter.default.post(name: Self.activityDidChange, object: self)
+    }
+
+    /// The chat was opened: what's new in it is imported next.
+    func importHistory(threadID: String) {
+        guard !done.contains(threadID), current?.threadID != threadID else { return }
+        enqueueFirst(Job(threadID: threadID, mode: .latest))
+    }
+
+    /// Scrolled to the top of the chat: the batch before the imported messages is read next.
+    func loadEarlier(threadID: String) {
+        guard hasEarlier(threadID), !isPending(threadID) else { return }
+        enqueueFirst(Job(threadID: threadID, mode: .earlier))
+    }
+
+    private func enqueueFirst(_ job: Job) {
+        var job = job
+        // Reading earlier messages also reads the new ones on the way.
+        if let queued = queue.first(where: { $0.threadID == job.threadID }), queued.mode == .earlier {
+            job.mode = .earlier
+        }
+        queue.removeAll { $0.threadID == job.threadID }
+        queue.insert(job, at: 0)
+        retryAt[job.threadID] = nil
+        stateChanged(job.threadID)
         runQueue()
     }
 
@@ -123,6 +225,8 @@ final class WebHistoryImporter {
         done = []
         tries = [:]
         oldest = [:]
+        // The restore can bring older messages.
+        saved.reachedStart = []
         importRecentChats()
     }
 
@@ -139,8 +243,8 @@ final class WebHistoryImporter {
             guard generation == self.generation else { return }
             let recent = ChatStore.shared.conversations.filter { $0.isEncrypted && !$0.isGroup }.prefix(Self.recentChatCount)
             for conversation in recent where !isPending(conversation.id) {
-                queue.append(conversation.id)
-                onStateChange?(conversation.id)
+                queue.append(Job(threadID: conversation.id, mode: .latest))
+                stateChanged(conversation.id)
             }
             runQueue()
         }
@@ -153,21 +257,23 @@ final class WebHistoryImporter {
         let generation = self.generation
         Task {
             while generation == self.generation, !queue.isEmpty {
-                let threadID = queue.removeFirst()
-                current = threadID
-                onStateChange?(threadID)
-                let outcome = await importOnce(threadID)
+                let job = queue.removeFirst()
+                current = job
+                currentStarted = Date()
+                stage = .startingWebApp
+                stateChanged(job.threadID)
+                let (outcome, summary) = await importOnce(job)
                 guard generation == self.generation else { return }
                 current = nil
-                finish(threadID, outcome)
-                onStateChange?(threadID)
+                finish(job, outcome, summary: summary)
+                stateChanged(job.threadID)
             }
             if generation == self.generation { isRunning = false }
         }
     }
 
     private enum Outcome {
-        /// Everything the web app has is imported.
+        /// Everything asked for is imported.
         case complete
         /// The web app may still be downloading older messages: import it again later.
         case moreMayCome
@@ -177,41 +283,58 @@ final class WebHistoryImporter {
         case failed
     }
 
-    private func finish(_ threadID: String, _ outcome: Outcome) {
+    private func finish(_ job: Job, _ outcome: Outcome, summary: String) {
+        let threadID = job.threadID
+        let result: Record.Result
         switch outcome {
         case .complete:
             needsRestore.remove(threadID)
             done.insert(threadID)
+            result = .done
         case .needsRestore:
             needsRestore.insert(threadID)
+            result = .needsRestore
         case .moreMayCome:
             needsRestore.remove(threadID)
             let tried = tries[threadID, default: 0] + 1
             tries[threadID] = tried
             if tried < Self.maxTries {
                 retryLater(threadID)
+                result = .retrying
             } else {
                 done.insert(threadID)
+                result = .done
             }
         case .failed:
-            break
+            result = .failed
         }
+        let record = Record(threadID: threadID, mode: job.mode, started: currentStarted, ended: Date(), result: result, summary: summary)
+        saved.log = Array(([record] + saved.log).prefix(Self.logLength))
     }
 
     private func retryLater(_ threadID: String) {
-        waiting.insert(threadID)
+        retryAt[threadID] = Date().addingTimeInterval(Self.retryDelay)
         let generation = self.generation
         Task {
-            try? await Task.sleep(for: Self.retryDelay)
+            try? await Task.sleep(for: .seconds(Self.retryDelay))
             // Opened meanwhile (imported then), or logged out.
-            guard generation == self.generation, waiting.remove(threadID) != nil else { return }
-            if !queue.contains(threadID) { queue.append(threadID) }
+            guard generation == self.generation, retryAt.removeValue(forKey: threadID) != nil else { return }
+            if !queue.contains(where: { $0.threadID == threadID }) {
+                queue.append(Job(threadID: threadID, mode: .latest))
+            }
+            stateChanged(threadID)
             runQueue()
         }
     }
 
-    /// Reads the chat from the web app and stores what's new.
-    private func importOnce(_ threadID: String) async -> Outcome {
+    private func setStage(_ stage: Stage) {
+        self.stage = stage
+        NotificationCenter.default.post(name: Self.activityDidChange, object: self)
+    }
+
+    /// Reads the chat from the web app and stores what's new; also says what it found.
+    private func importOnce(_ job: Job) async -> (Outcome, String) {
+        let threadID = job.threadID
         let account = ChatStore.shared.account?.id
         do {
             struct WebIDResult: Decodable { let webID: String }
@@ -219,20 +342,41 @@ final class WebHistoryImporter {
             let webID = try await CoreBridge.shared.call("web.threadWebID", Params(threadID: threadID), as: WebIDResult.self).webID
             guard !webID.isEmpty else {
                 CoreBridge.shared.log("WebHistoryImporter: no web chat known for \(threadID)")
-                return .needsRestore
+                return (.needsRestore, "The chat isn't on Messenger web's chat list yet.")
             }
             let web = WebSyncController.shared
-            guard await web.start(showWindow: false) else { return .failed }
-            CoreBridge.shared.log("WebHistoryImporter: \(threadID) → web chat \(webID), collecting")
+            setStage(.startingWebApp)
+            guard await web.start(showWindow: false) else {
+                return (.failed, "Messenger web couldn't be started.")
+            }
+            let coverage = saved.coverage[threadID]
+            CoreBridge.shared.log("WebHistoryImporter: \(threadID) → web chat \(webID), reading \(job.mode.rawValue)")
+            setStage(.waitingForPage)
+            let script = Self.collectScript(userID: threadID, mode: job.mode, batch: Self.batchSize, coverage: coverage)
             let result = try await web.withExclusiveAccess {
+                setStage(.openingChat)
                 await web.navigate(toPath: "/messages/e2ee/t/\(webID)/")
-                return try await web.evaluate(Self.collectScript(userID: threadID, max: Self.maxMessages), as: Result.self)
+                setStage(.finding)
+                // The collect script reports where it is in window.__mmImport.
+                let poll = Task {
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .milliseconds(500))
+                        guard let progress = try? await web.evaluate("return JSON.stringify(window.__mmImport || {})", as: Progress.self),
+                              !Task.isCancelled else { continue }
+                        apply(progress, mode: job.mode, hasCoverage: coverage != nil)
+                    }
+                }
+                defer { poll.cancel() }
+                return try await web.evaluate(script, as: Result.self)
             }
             if let error = result.error {
                 CoreBridge.shared.log("WebHistoryImporter: \(threadID): \(error)")
             }
             // Logged out (or in as someone else) while the page was read.
-            guard ChatStore.shared.account?.id == account else { return .failed }
+            guard ChatStore.shared.account?.id == account else {
+                return (.failed, "Logged out while the chat was read.")
+            }
+            setStage(.saving(result.messages.count))
             struct ImportParams: Encodable { let threadID: String; let messages: [Message] }
             struct ImportResult: Decodable { let imported: Int; let unrestored: Int }
             let imported = try await CoreBridge.shared.call(
@@ -241,35 +385,260 @@ final class WebHistoryImporter {
             CoreBridge.shared.log("WebHistoryImporter: \(threadID): collected \(result.messages.count), imported \(imported.imported), not restored \(imported.unrestored)")
             // The core emits each stored message as an event, so open chats update by themselves.
 
-            // Nothing readable (no messages, placeholders, or only the "now encrypted" notice).
-            let readable = result.messages.contains { !$0.text.isEmpty || !$0.images.isEmpty || !$0.links.isEmpty }
-            if !readable || imported.unrestored > 0 {
-                return isRestoring ? .moreMayCome : .needsRestore
+            if result.error != nil {
+                return (isRestoring ? .moreMayCome : .needsRestore, "Messenger web shows no messages in this chat.")
             }
-            if result.messages.count >= Self.maxMessages { return .complete }
+            if imported.unrestored > 0 {
+                let summary = "\(imported.unrestored) message\(imported.unrestored == 1 ? " isn't" : "s aren't") restored on Messenger web yet."
+                return (isRestoring ? .moreMayCome : .needsRestore, summary)
+            }
+            // Loading older messages can stall on the page and look like the chat's start; it
+            // isn't if an older encrypted message is stored (the page shows all of those).
+            var reachedStart = result.reachedStart == true
+            if reachedStart {
+                struct Oldest: Decodable { let timestamp: Int64 }
+                let oldestStored = try await CoreBridge.shared.call("web.oldestEncrypted", Params(threadID: threadID), as: Oldest.self).timestamp
+                let oldestRead = result.messages.compactMap { Self.timestamp(ofDOMID: $0.domID) }.min() ?? coverage?.oldest ?? .max
+                if oldestStored > 0, oldestStored < min(oldestRead, coverage?.oldest ?? .max) {
+                    CoreBridge.shared.log("WebHistoryImporter: \(threadID): loading stalled, not the chat's start")
+                    reachedStart = false
+                }
+            }
+            updateCoverage(threadID, job: job, result: result, reachedStart: reachedStart)
+            let summary = Self.summary(job: job, result: result, reachedStart: reachedStart, imported: imported.imported, hadCoverage: coverage != nil)
+            guard job.mode == .latest, isRestoring else { return (.complete, summary) }
             // Nothing older than last time: that's all there is.
             let oldestNow = result.messages.compactMap { Self.timestamp(ofDOMID: $0.domID) }.min()
             defer { oldest[threadID] = oldestNow }
-            if let oldestNow, oldestNow == oldest[threadID] { return .complete }
-            return isRestoring ? .moreMayCome : .complete
+            if let oldestNow, oldestNow == oldest[threadID] { return (.complete, summary) }
+            return (.moreMayCome, summary)
         } catch {
             CoreBridge.shared.log("WebHistoryImporter: \(threadID): \(error)")
-            return .failed
+            return (.failed, error.localizedDescription)
         }
+    }
+
+    /// Adds what was read to the chat's imported stretch.
+    private func updateCoverage(_ threadID: String, job: Job, result: Result, reachedStart: Bool) {
+        let stamps = result.messages.compactMap { Self.timestamp(ofDOMID: $0.domID) }
+        if let low = stamps.min(), let high = stamps.max() {
+            if var coverage = saved.coverage[threadID], job.mode == .earlier || result.overlap == true {
+                coverage.oldest = min(coverage.oldest, low)
+                coverage.newest = max(coverage.newest, high)
+                saved.coverage[threadID] = coverage
+            } else {
+                // The first import, or a batch of new messages that didn't reach the imported
+                // stretch: a gap, so the stretch starts over from here.
+                saved.coverage[threadID] = Coverage(oldest: low, newest: high)
+                saved.reachedStart.remove(threadID)
+            }
+        }
+        if reachedStart {
+            saved.reachedStart.insert(threadID)
+        }
+    }
+
+    private static func summary(job: Job, result: Result, reachedStart: Bool, imported: Int, hadCoverage: Bool) -> String {
+        let read = result.messages.count
+        let plural = { (n: Int, word: String) in "\(n) \(word)\(n == 1 ? "" : "s")" }
+        var text: String
+        if read == 0 {
+            text = job.mode == .earlier ? "No older messages." : "Up to date, nothing new."
+        } else if job.mode == .earlier {
+            text = "Read \(plural(read, "message")) (\(imported) new)."
+        } else if hadCoverage, result.overlap == true {
+            text = "Up to date: read \(plural(read, "newer message")) (\(imported) new)."
+        } else {
+            text = "Read \(plural(read, "message")) (\(imported) new)."
+        }
+        let readable = result.messages.contains { !$0.text.isEmpty || !$0.images.isEmpty || !$0.links.isEmpty }
+        if read > 0, !readable {
+            text = "Only Messenger's “end-to-end encrypted” notice, no messages to import."
+        }
+        if reachedStart {
+            text += " Reached the start of the chat."
+        } else if result.reachedStart == true {
+            text += " Messenger web stopped loading older messages; scroll to the top to try again."
+        }
+        return text
+    }
+
+    /// The collect script's progress report.
+    nonisolated private struct Progress: Decodable {
+        let phase: String?
+        /// Messages read (not imported before).
+        let fresh: Int?
+        /// Of those, the ones older than the imported stretch.
+        let older: Int?
+        /// Imported before, scrolled past.
+        let skipped: Int?
+        let fraction: Double?
+        let done: Int?
+        let total: Int?
+    }
+
+    private func apply(_ progress: Progress, mode: Mode, hasCoverage: Bool) {
+        switch progress.phase {
+        case "back":
+            setStage(.scrollingBack(mode: mode, hasCoverage: hasCoverage, fresh: progress.fresh ?? 0,
+                                    older: progress.older ?? 0, skipped: progress.skipped ?? 0))
+        case "forward": setStage(.rendering(fraction: progress.fraction ?? 0, read: progress.fresh ?? 0))
+        case "pictures": setStage(.pictures(done: progress.done ?? 0, total: progress.total ?? 0))
+        default: break
+        }
+    }
+
+    // MARK: - Activity
+
+    /// Where the running import is.
+    private enum Stage {
+        case startingWebApp
+        /// Another reader (the chat list, a chat's theme) is using the page.
+        case waitingForPage
+        case openingChat
+        /// Waiting for the chat's messages to show on the page.
+        case finding
+        case scrollingBack(mode: Mode, hasCoverage: Bool, fresh: Int, older: Int, skipped: Int)
+        /// Going through the chat again so every message renders fully.
+        case rendering(fraction: Double, read: Int)
+        case pictures(done: Int, total: Int)
+        case saving(Int)
+
+        var text: String {
+            switch self {
+            case .startingWebApp: return "Starting Messenger web…"
+            case .waitingForPage: return "Waiting for Messenger web to finish another task…"
+            case .openingChat: return "Opening the chat on Messenger web…"
+            case .finding: return "Waiting for the messages to appear…"
+            case .scrollingBack(let mode, let hasCoverage, let fresh, let older, let skipped):
+                switch mode {
+                case .earlier where older == 0:
+                    return "Scrolling past the \(skipped) messages imported before…"
+                case .earlier:
+                    return "Reading older messages: \(older) of \(WebHistoryImporter.batchSize)"
+                case .latest where hasCoverage:
+                    return "Scrolling back to the messages imported before: \(fresh) new so far"
+                case .latest:
+                    return "Scrolling back: \(fresh) of up to \(WebHistoryImporter.batchSize) messages read"
+                }
+            case .rendering(_, let read): return "Reading \(read) messages in full (pictures, links, reactions)"
+            case .pictures(let done, let total): return "Copying pictures: message \(done) of \(total)"
+            case .saving(let count): return "Saving \(count) messages…"
+            }
+        }
+
+        /// Nil while it can't be measured.
+        var progress: Double? {
+            switch self {
+            case .scrollingBack(let mode, let hasCoverage, let fresh, let older, _):
+                switch mode {
+                case .earlier: return older > 0 ? min(1, Double(older) / Double(WebHistoryImporter.batchSize)) : nil
+                case .latest: return hasCoverage ? nil : min(1, Double(fresh) / Double(WebHistoryImporter.batchSize))
+                }
+            case .rendering(let fraction, _): return min(1, fraction)
+            case .pictures(let done, let total): return total > 0 ? Double(done) / Double(total) : nil
+            default: return nil
+            }
+        }
+    }
+
+    /// A row in the Activity window.
+    struct ActivityItem {
+        enum Section { case upNext, now, done }
+        enum Kind { case running, queued, waiting, done, retrying, needsRestore, failed }
+        let threadID: String
+        let section: Section
+        let kind: Kind
+        /// What the import reads ("Newest messages", "Older messages").
+        let title: String
+        let status: String
+        /// For a running import: how far it is (nil: indeterminate).
+        let progress: Double?
+        /// When it started (running) or ended (done).
+        let date: Date?
+        /// How long a finished import took.
+        let duration: TimeInterval?
+    }
+
+    private static func title(_ mode: Mode) -> String {
+        mode == .earlier ? "Older messages" : "Newest messages"
+    }
+
+    /// Up next (the queue in order, then the chats waiting to be imported again), the running
+    /// import, then the log of finished ones, the latest first.
+    var activityItems: [ActivityItem] {
+        var items: [ActivityItem] = []
+        for (index, job) in queue.enumerated() {
+            let ahead = index + (current == nil ? 0 : 1)
+            let status = ahead == 0 ? "Next" : "Waiting, \(ahead) before it"
+            items.append(ActivityItem(threadID: job.threadID, section: .upNext, kind: .queued, title: Self.title(job.mode),
+                                      status: status, progress: nil, date: nil, duration: nil))
+        }
+        for (threadID, date) in retryAt.sorted(by: { $0.value < $1.value }) {
+            let seconds = max(0, Int(date.timeIntervalSinceNow.rounded()))
+            let status = "Checking again in \(seconds / 60):\(String(format: "%02d", seconds % 60)) (try \(tries[threadID, default: 0] + 1) of \(Self.maxTries)): Messenger web may still be downloading its history."
+            items.append(ActivityItem(threadID: threadID, section: .upNext, kind: .waiting, title: Self.title(.latest),
+                                      status: status, progress: nil, date: nil, duration: nil))
+        }
+        if let current {
+            items.append(ActivityItem(threadID: current.threadID, section: .now, kind: .running, title: Self.title(current.mode),
+                                      status: stage.text, progress: stage.progress, date: currentStarted, duration: nil))
+        }
+        for record in saved.log {
+            let kind: ActivityItem.Kind
+            var status = record.summary
+            switch record.result {
+            case .done: kind = .done
+            case .retrying: kind = .retrying
+            case .needsRestore:
+                kind = .needsRestore
+                status += " Restore your encrypted chats with your PIN (File › Restore Encrypted Chats…)."
+            case .failed:
+                kind = .failed
+                status += " It's tried again when you open the chat."
+            }
+            items.append(ActivityItem(threadID: record.threadID, section: .done, kind: kind, title: Self.title(record.mode),
+                                      status: status, progress: nil, date: record.ended,
+                                      duration: record.ended.timeIntervalSince(record.started)))
+        }
+        return items
     }
 
     /// The time of a message from its web ID ("<user>@msgr.<message ID>"): Messenger message IDs
     /// are milliseconds << 22 | random (as in the core's webMessageID).
+    /// Nil for elements whose ID isn't a message ID (the time would be decades off).
     private static func timestamp(ofDOMID domID: String) -> Int64? {
         guard let dot = domID.lastIndex(of: "."), let id = UInt64(domID[domID.index(after: dot)...]) else { return nil }
-        return Int64(id >> 22)
+        let timestamp = Int64(id >> 22)
+        return timestamp > minTimestamp ? timestamp : nil
     }
 
-    /// Scrolls the open chat back (up to `max` messages) and returns every message's ID,
+    /// 2010 (ms): message times before it come from IDs that aren't message IDs.
+    private static let minTimestamp: Int64 = 1_262_304_000_000
+
+    // MARK: - Reading the page
+
+    /// Scrolls the open chat back and returns the messages that aren't imported yet: their ID,
     /// direction, text and inline images (as base64; the page already shows them decrypted).
-    private static func collectScript(userID: String, max: Int = 400) -> String {
+    /// `latest` stops on reaching the imported stretch (or after a batch), `earlier` scrolls
+    /// past it and stops after a batch of older messages. Both stop at the chat's start.
+    private static func collectScript(userID: String, mode: Mode, batch: Int, coverage: Coverage?) -> String {
         """
         const sleep = ms => new Promise(r => setTimeout(r, ms));
+        const MODE = '\(mode.rawValue)', BATCH = \(batch);
+        // The imported stretch (message times): messages in it are skipped.
+        const COV_FROM = \(coverage?.oldest ?? 0), COV_TO = \(coverage?.newest ?? -1);
+        // Message IDs are milliseconds << 22 | random; 0 for IDs that aren't (before 2010).
+        const tsOf = domID => {
+          try {
+            const ts = Number(BigInt(domID.slice(domID.lastIndexOf('.') + 1)) >> 22n);
+            return ts > \(minTimestamp) ? ts : 0;
+          } catch (e) { return 0; }
+        };
+        const covered = ts => ts >= COV_FROM && ts <= COV_TO;
+        // Read by the app while this runs (the Activity window).
+        const progress = p => { window.__mmImport = p; };
+        progress({ phase: 'finding' });
         let log = null;
         for (let i = 0; i < 40; i++) {
           log = document.querySelector('[role="main"] [role="log"]');
@@ -325,12 +694,17 @@ final class WebHistoryImporter {
         };
 
         const seen = new Map();
+        const skipped = new Set();
+        let oldestTs = Infinity;
         const richness = m => m.text.length + 1000 * (m.images.length + m.links.length) + 10 * m.reactions.length;
         const collect = () => {
           const logRect = log.getBoundingClientRect();
           const mid = logRect.left + logRect.width / 2;
           for (const el of log.querySelectorAll('[data-message-id^="\(userID)@"]')) {
             const domID = el.getAttribute('data-message-id');
+            const ts = tsOf(domID);
+            if (ts > 0) oldestTs = Math.min(oldestTs, ts);
+            if (covered(ts)) { skipped.add(domID); continue; }
             // Shared links' cards: <a href> with a title (and description, picture) inside. Links
             // in the message text sit in its div[dir=auto]; links around a bare photo are photos.
             const cards = Array.from(el.querySelectorAll('a[href^="http"]')).filter(a =>
@@ -356,7 +730,7 @@ final class WebHistoryImporter {
               const emojis = Array.from(button.querySelectorAll('img[alt]')).map(i => i.getAttribute('alt')).filter(Boolean);
               if (emojis.length) reactions.push({ emojis, count });
             }
-            const entry = { domID, text: texts.join('\\n'), images, links, reactions };
+            const entry = { domID, ts, text: texts.join('\\n'), images, links, reactions };
             const old = seen.get(domID);
             // Keep the fullest version: pictures decrypt and cards render after the message appears.
             if (old && richness(old) >= richness(entry)) continue;
@@ -378,35 +752,56 @@ final class WebHistoryImporter {
             seen.set(domID, entry);
           }
         };
+        // Older than the imported stretch.
+        const older = () => { let n = 0; for (const m of seen.values()) if (m.ts < COV_FROM) n++; return n; };
+        const enough = () => MODE === 'earlier' ? older() >= BATCH : seen.size >= BATCH;
+        // Scrolled back into the imported stretch: everything newer has been seen.
+        const overlap = () => MODE === 'latest' && COV_TO >= 0 && oldestTs <= COV_TO;
+        const report = () => progress({ phase: 'back', fresh: seen.size, older: older(), skipped: skipped.size });
         collect();
-        // Older messages can take a moment to load (longer while the web app is still restoring).
+        report();
+        // Older messages can take a moment to load (longer while the web app is still restoring);
+        // scrolling back faster than this makes the page stop loading them.
         let stable = 0;
-        for (let i = 0; i < 80 && scroller && stable < 4 && seen.size < \(max); i++) {
-          const before = seen.size;
+        let reachedStart = !scroller;
+        for (let i = 0; i < 3000 && scroller && !enough() && !overlap(); i++) {
+          const before = seen.size + skipped.size;
           scroller.scrollTop = 0;
           await sleep(2000);
           collect();
-          stable = seen.size === before ? stable + 1 : 0;
+          report();
+          stable = seen.size + skipped.size === before ? stable + 1 : 0;
+          if (stable >= 5) { reachedStart = true; break; }
         }
-        // Second pass, forward through the chat, so every message gets time to render fully.
+        // The first message on screen, to stop the second pass once it's in the imported stretch.
+        const firstVisibleTs = () => {
+          const top = scroller.getBoundingClientRect().top;
+          for (const el of log.querySelectorAll('[data-message-id^="\(userID)@"]'))
+            if (el.getBoundingClientRect().bottom > top) return tsOf(el.getAttribute('data-message-id'));
+          return Infinity;
+        };
+        // Second pass, forward through what was read, so every message gets time to render fully.
         if (scroller) {
           scroller.scrollTop = 0;
           await sleep(1000);
           for (let i = 0; i < 400 && scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 5; i++) {
+            if (MODE === 'earlier' && COV_TO >= 0 && covered(firstVisibleTs())) break;
             scroller.scrollTop += scroller.clientHeight * 0.7;
             await sleep(700);
             collect();
+            progress({ phase: 'forward', fresh: seen.size, fraction: (scroller.scrollTop + scroller.clientHeight) / scroller.scrollHeight });
           }
           await sleep(1000);
           collect();
         }
         const messages = [];
         for (const m of seen.values()) {
+          progress({ phase: 'pictures', done: messages.length + 1, total: seen.size });
           const images = (await m.imagesReady).filter(Boolean);
           const links = await m.linksReady;
           messages.push({ domID: m.domID, fromMe: m.fromMe, text: m.text, images, links, reactions: m.reactions });
         }
-        return JSON.stringify({ messages });
+        return JSON.stringify({ messages, reachedStart, overlap: overlap() });
         """
     }
 }

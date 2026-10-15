@@ -66,6 +66,9 @@ enum MainMenu {
         let windowMenu = NSMenu(title: "Window")
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
         windowMenu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
+        windowMenu.addItem(.separator())
+        let activity = windowMenu.addItem(withTitle: "Activity", action: #selector(AppDelegate.toggleActivity(_:)), keyEquivalent: "0")
+        activity.keyEquivalentModifierMask = [.command, .option]
         main.addItem(withTitle: "Window", action: nil, keyEquivalent: "").submenu = windowMenu
         NSApp.windowsMenu = windowMenu
 
