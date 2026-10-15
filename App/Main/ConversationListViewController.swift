@@ -518,6 +518,7 @@ final class ConversationCellView: NSTableCellView {
         // Long names (groups listing their members) are cut off; hovering shows them whole.
         nameLabel.toolTip = conversation.name
         dateLabel.stringValue = Formatters.listTimestamp(conversation.lastActivityDate)
+        dateLabel.toolTip = Formatters.exact(conversation.lastActivityDate)
         avatar.configure(conversation, selfID: selfID)
         unreadDot.isHidden = conversation.unreadCount == 0
         mutedIcon.isHidden = !conversation.isMuted

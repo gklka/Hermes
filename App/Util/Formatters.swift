@@ -55,7 +55,8 @@ enum Formatters {
         return f
     }()
 
-    /// Find in Chat's results: always the full date with the year, "Tue, Oct 3, 2023 at 9:41 AM".
+    /// Find in Chat's results and the chat list's time tooltips: always the full date with the
+    /// year, "Tue, Oct 3, 2023 at 9:41 AM".
     static func exact(_ date: Date) -> String {
         "\(exactDate.string(from: date)) at \(time.string(from: date))"
     }
