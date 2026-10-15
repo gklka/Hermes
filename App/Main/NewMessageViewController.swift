@@ -1,12 +1,25 @@
 import AppKit
 
-/// "Open Chat" sheet: search people and open a 1:1 chat.
+/// "Open Chat" sheet: search people and group chats, and open the chat.
 final class NewMessageViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
-    var onPick: ((Participant) -> Void)?
+    enum Entry {
+        /// A 1:1 chat with them (created if there's none yet).
+        case person(Participant)
+        case group(Conversation)
+
+        var id: String {
+            switch self {
+            case .person(let person): person.id
+            case .group(let conversation): conversation.id
+            }
+        }
+    }
+
+    var onPick: ((Entry) -> Void)?
 
     private let searchField = NSSearchField()
     private let tableView = NSTableView()
-    private var results: [Participant] = []
+    private var results: [Entry] = []
     private var searchTask: Task<Void, Never>?
 
     override func loadView() {
@@ -15,7 +28,7 @@ final class NewMessageViewController: NSViewController, NSTableViewDataSource, N
         let title = NSTextField(labelWithString: "Open Chat")
         title.font = .systemFont(ofSize: 13, weight: .semibold)
 
-        searchField.placeholderString = "To: name"
+        searchField.placeholderString = "To: name or group"
         searchField.delegate = self
         searchField.sendsSearchStringImmediately = true
 
@@ -75,12 +88,12 @@ final class NewMessageViewController: NSViewController, NSTableViewDataSource, N
         search("")
     }
 
-    /// People you've chatted with at once, then (after a pause in typing) everyone Messenger
-    /// finds by that name, below them.
+    /// People you've chatted with and your group chats at once, then (after a pause in typing)
+    /// everyone Messenger finds by that name, below them.
     private func search(_ query: String) {
         searchTask?.cancel()
         searchTask = Task {
-            let found = await ChatStore.shared.searchContacts(query)
+            let found = await ChatStore.shared.searchContacts(query).map(Entry.person) + Self.groups(matching: query).map(Entry.group)
             guard !Task.isCancelled else { return }
             show(found)
             guard query.count >= 2 else { return }
@@ -89,12 +102,20 @@ final class NewMessageViewController: NSViewController, NSTableViewDataSource, N
             let people = await ChatStore.shared.searchPeople(query)
             guard !Task.isCancelled else { return }
             let known = Set(found.map(\.id))
-            show(found + people.filter { !known.contains($0.id) })
+            show(found + people.filter { !known.contains($0.id) }.map(Entry.person))
         }
     }
 
-    /// Keeps the selected person selected (the first one if none is).
-    private func show(_ people: [Participant]) {
+    /// Group chats whose name, or a member's, contains the text (most recent first).
+    private static func groups(matching query: String) -> [Conversation] {
+        let matches = { (text: String) in text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
+        let groups = ChatStore.shared.conversations.filter(\.isGroup)
+        guard !query.isEmpty else { return Array(groups.prefix(50)) }
+        return groups.filter { matches($0.name) || $0.participants.contains { matches($0.name) } }
+    }
+
+    /// Keeps the selected entry selected (the first one if none is).
+    private func show(_ people: [Entry]) {
         let selectedID = results.indices.contains(tableView.selectedRow) ? results[tableView.selectedRow].id : nil
         results = people
         tableView.reloadData()
@@ -132,9 +153,9 @@ final class NewMessageViewController: NSViewController, NSTableViewDataSource, N
     @objc private func pickSelected() {
         let row = tableView.selectedRow
         guard row >= 0, row < results.count else { return }
-        let contact = results[row]
+        let entry = results[row]
         dismiss(nil)
-        onPick?(contact)
+        onPick?(entry)
     }
 
     @objc private func cancel() {
@@ -159,9 +180,11 @@ final class NewMessageViewController: NSViewController, NSTableViewDataSource, N
     }
 }
 
-/// A person: picture, name, and what Messenger's search says about them ("Friends").
+/// A person (picture, name, and what Messenger's search says about them: "Friends") or a group
+/// chat (its pictures, name and members).
 final class ContactCellView: NSTableCellView {
     private let avatar = AvatarView()
+    private let groupAvatar = ConversationAvatarView()
     private let nameLabel = NSTextField(labelWithString: "")
     private let detailLabel = NSTextField(labelWithString: "")
 
@@ -176,7 +199,7 @@ final class ContactCellView: NSTableCellView {
         labels.orientation = .vertical
         labels.alignment = .leading
         labels.spacing = 0
-        for view in [avatar, labels] as [NSView] {
+        for view in [avatar, groupAvatar, labels] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -185,6 +208,10 @@ final class ContactCellView: NSTableCellView {
             avatar.centerYAnchor.constraint(equalTo: centerYAnchor),
             avatar.widthAnchor.constraint(equalToConstant: 28),
             avatar.heightAnchor.constraint(equalToConstant: 28),
+            groupAvatar.leadingAnchor.constraint(equalTo: avatar.leadingAnchor),
+            groupAvatar.centerYAnchor.constraint(equalTo: avatar.centerYAnchor),
+            groupAvatar.widthAnchor.constraint(equalTo: avatar.widthAnchor),
+            groupAvatar.heightAnchor.constraint(equalTo: avatar.heightAnchor),
             labels.leadingAnchor.constraint(equalTo: avatar.trailingAnchor, constant: 8),
             labels.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -4),
             labels.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -194,10 +221,23 @@ final class ContactCellView: NSTableCellView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    func configure(_ contact: Participant) {
-        nameLabel.stringValue = contact.name
-        detailLabel.stringValue = contact.detail ?? ""
-        detailLabel.isHidden = (contact.detail ?? "").isEmpty
-        avatar.configure(name: contact.name, url: contact.avatarURL)
+    func configure(_ entry: NewMessageViewController.Entry) {
+        let detail: String
+        switch entry {
+        case .person(let contact):
+            nameLabel.stringValue = contact.name
+            detail = contact.detail ?? ""
+            avatar.configure(name: contact.name, url: contact.avatarURL)
+        case .group(let conversation):
+            let selfID = ChatStore.shared.account?.id
+            nameLabel.stringValue = conversation.name
+            detail = conversation.participants.filter { $0.id != selfID }.map(\.name).joined(separator: ", ")
+            groupAvatar.configure(conversation, selfID: selfID)
+        }
+        let isGroup = if case .group = entry { true } else { false }
+        avatar.isHidden = isGroup
+        groupAvatar.isHidden = !isGroup
+        detailLabel.stringValue = detail
+        detailLabel.isHidden = detail.isEmpty
     }
 }

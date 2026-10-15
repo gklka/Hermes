@@ -351,7 +351,11 @@ final class MainSplitViewController: NSSplitViewController {
 
     func newMessage() {
         let picker = NewMessageViewController()
-        picker.onPick = { [weak self] contact in
+        picker.onPick = { [weak self] entry in
+            guard case .person(let contact) = entry else {
+                self?.list.select(threadID: entry.id)
+                return
+            }
             Task {
                 do {
                     let conversation = try await ChatStore.shared.openDirectChat(with: contact.id)
