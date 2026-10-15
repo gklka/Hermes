@@ -108,8 +108,20 @@ struct ChatMessage: Codable, Identifiable, Hashable {
     var previousTexts: [String]?
     /// Set for messages created locally before the server echoed them back.
     var pendingID: String?
+    /// People (or @everyone) tagged in the text.
+    var mentions: [Mention]?
 
     var date: Date { Date(timeIntervalSince1970: TimeInterval(timestamp) / 1000) }
+}
+
+/// A tag in a message's text ("@Anna"), apiMention. The range counts UTF-16 code units (NSString's).
+struct Mention: Codable, Hashable {
+    let offset: Int
+    let length: Int
+    /// The person tagged; nil for the whole chat (@everyone).
+    let userID: String?
+
+    var range: NSRange { NSRange(location: offset, length: length) }
 }
 
 struct Account: Codable, Hashable {

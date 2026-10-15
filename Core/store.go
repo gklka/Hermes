@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS messages (
 	is_edited   INTEGER NOT NULL DEFAULT 0,
 	otid        TEXT NOT NULL DEFAULT '',
 	wa_chat     TEXT NOT NULL DEFAULT '',
-	wa_sender   TEXT NOT NULL DEFAULT ''
+	wa_sender   TEXT NOT NULL DEFAULT '',
+	mentions    TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS messages_thread_ts ON messages (thread_id, timestamp);
 CREATE TABLE IF NOT EXISTS reactions (
@@ -85,6 +86,8 @@ func OpenStore(path string) (*Store, error) {
 	if _, err = db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("failed to create schema: %w", err)
 	}
+	// Columns added since: these fail harmlessly once they exist.
+	_, _ = db.Exec(`ALTER TABLE messages ADD COLUMN mentions TEXT NOT NULL DEFAULT '[]'`)
 	return &Store{db: db}, nil
 }
 
@@ -477,15 +480,16 @@ type messageRow struct {
 	OTID        string
 	WAChat      string
 	WASender    string
+	Mentions    []apiMention
 }
 
-const messageColumns = `id, thread_id, sender_id, timestamp, text, is_system, reply_to, attachments, status, is_unsent, is_edited, otid, wa_chat, wa_sender`
+const messageColumns = `id, thread_id, sender_id, timestamp, text, is_system, reply_to, attachments, status, is_unsent, is_edited, otid, wa_chat, wa_sender, mentions`
 
 func scanMessage(row interface{ Scan(...any) error }) (*messageRow, error) {
 	var m messageRow
-	var replyJSON, attachmentsJSON string
+	var replyJSON, attachmentsJSON, mentionsJSON string
 	err := row.Scan(&m.ID, &m.ThreadID, &m.SenderID, &m.Timestamp, &m.Text, &m.IsSystem, &replyJSON, &attachmentsJSON,
-		&m.Status, &m.IsUnsent, &m.IsEdited, &m.OTID, &m.WAChat, &m.WASender)
+		&m.Status, &m.IsUnsent, &m.IsEdited, &m.OTID, &m.WAChat, &m.WASender, &mentionsJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -493,6 +497,7 @@ func scanMessage(row interface{ Scan(...any) error }) (*messageRow, error) {
 		_ = json.Unmarshal([]byte(replyJSON), &m.ReplyTo)
 	}
 	_ = json.Unmarshal([]byte(attachmentsJSON), &m.Attachments)
+	_ = json.Unmarshal([]byte(mentionsJSON), &m.Mentions)
 	return &m, nil
 }
 
@@ -505,19 +510,23 @@ func (s *Store) PutMessage(m *messageRow) {
 		m.Attachments = []storedAttachment{}
 	}
 	attachmentsJSON, _ := json.Marshal(m.Attachments)
+	if m.Mentions == nil {
+		m.Mentions = []apiMention{}
+	}
+	mentionsJSON, _ := json.Marshal(m.Mentions)
 	if m.Status == "" {
 		m.Status = statusSent
 	}
 	_, _ = s.db.Exec(`
-		INSERT INTO messages (`+messageColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO messages (`+messageColumns+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			thread_id=excluded.thread_id, sender_id=excluded.sender_id, timestamp=excluded.timestamp,
 			text=excluded.text, is_system=excluded.is_system, reply_to=excluded.reply_to,
 			attachments=excluded.attachments, status=excluded.status, is_unsent=excluded.is_unsent,
 			is_edited=MAX(messages.is_edited, excluded.is_edited), otid=excluded.otid,
-			wa_chat=excluded.wa_chat, wa_sender=excluded.wa_sender
+			wa_chat=excluded.wa_chat, wa_sender=excluded.wa_sender, mentions=excluded.mentions
 	`, m.ID, m.ThreadID, m.SenderID, m.Timestamp, m.Text, m.IsSystem, string(replyJSON), string(attachmentsJSON),
-		m.Status, m.IsUnsent, m.IsEdited, m.OTID, m.WAChat, m.WASender)
+		m.Status, m.IsUnsent, m.IsEdited, m.OTID, m.WAChat, m.WASender, string(mentionsJSON))
 }
 
 func (s *Store) GetMessage(id string) *messageRow {
@@ -612,7 +621,8 @@ func (s *Store) EditMessage(id, text string) string {
 		data, _ := json.Marshal(versions)
 		s.Set(kvEdits+id, string(data))
 	}
-	_, _ = s.db.Exec(`UPDATE messages SET text=?, is_edited=1 WHERE id=?`, text, id)
+	// The mentions' places were in the old text.
+	_, _ = s.db.Exec(`UPDATE messages SET text=?, is_edited=1, mentions='[]' WHERE id=?`, text, id)
 	var threadID string
 	err := s.db.QueryRow(`
 		SELECT m.thread_id FROM messages m
@@ -860,5 +870,6 @@ func (m *messageRow) toAPI(selfID string, reactions []apiReaction) apiMessage {
 		Status:      m.Status,
 		IsUnsent:    m.IsUnsent,
 		IsEdited:    m.IsEdited,
+		Mentions:    m.Mentions,
 	}
 }

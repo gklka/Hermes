@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"sync"
 
+	"go.mau.fi/mautrix-meta/pkg/messagix/socket"
 	"go.mau.fi/mautrix-meta/pkg/messagix/table"
 )
 
@@ -318,6 +319,29 @@ func (c *Core) putThread(key int64, threadType table.ThreadType, name, picture, 
 // The big like, sent as one of these stickers; stored as a 👍 text instead.
 var thumbsUpStickers = map[int64]bool{369239263222822: true, 369239343222814: true, 369239383222810: true}
 
+// parseMentions reads a message's tags (people, or the whole chat for @everyone) from its
+// comma-separated mention columns.
+func parseMentions(ids, offsets, lengths, types string) []apiMention {
+	mentions, err := (&socket.MentionData{
+		MentionIDs: ids, MentionOffsets: offsets, MentionLengths: lengths, MentionTypes: types,
+	}).Parse()
+	if err != nil {
+		return nil
+	}
+	var out []apiMention
+	for _, m := range mentions {
+		if m.Length <= 0 {
+			continue
+		}
+		mention := apiMention{Offset: m.Offset, Length: m.Length}
+		if m.Type == socket.MentionTypePerson || m.Type == socket.MentionTypeSilent {
+			mention.UserID = id64(m.ID)
+		}
+		out = append(out, mention)
+	}
+	return out
+}
+
 func (c *Core) storeFBMessage(m *table.WrappedMessage, cs *changeSet) {
 	if m == nil || m.LSInsertMessage == nil || m.MessageId == "" {
 		return
@@ -336,6 +360,9 @@ func (c *Core) storeFBMessage(m *table.WrappedMessage, cs *changeSet) {
 		IsSystem:  m.IsAdminMessage,
 		IsUnsent:  m.IsUnsent,
 		OTID:      m.OfflineThreadingId,
+	}
+	if !isThumbsUp {
+		row.Mentions = parseMentions(m.MentionIds, m.MentionOffsets, m.MentionLengths, m.MentionTypes)
 	}
 	if m.ReplySourceId != "" {
 		row.ReplyTo = &apiReply{MessageID: m.ReplySourceId, Text: firstNonEmpty(m.ReplyMessageText, m.ReplySnippet)}

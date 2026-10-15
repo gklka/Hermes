@@ -377,7 +377,8 @@ final class MessageCellView: NSTableCellView {
         textView.selectedTextAttributes = [.backgroundColor: selection]
         let insets = jumbo ? NSEdgeInsetsZero : BubbleMetrics.textInsets
         textView.maxWidth = layout.maxWidth - BubbleMetrics.textInsets.left - BubbleMetrics.textInsets.right
-        textView.setText(Self.attributed(text, font: font, color: color, italic: message.isUnsent))
+        textView.setText(Self.attributed(text, font: font, color: color, italic: message.isUnsent,
+                                         mentions: message.isUnsent ? [] : message.mentions ?? []))
         textInsets[0].constant = insets.left
         textInsets[1].constant = -insets.right
         textInsets[2].constant = insets.top
@@ -431,12 +432,18 @@ final class MessageCellView: NSTableCellView {
     }
 
     /// Link styling comes from the text view's linkTextAttributes, so only the URL is attached here.
-    private static func attributed(_ text: String, font: NSFont, color: NSColor, italic: Bool) -> NSAttributedString {
+    /// Tagged names are bold.
+    private static func attributed(_ text: String, font: NSFont, color: NSColor, italic: Bool,
+                                   mentions: [Mention]) -> NSAttributedString {
         var font = font
         if italic {
             font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
         }
         let result = NSMutableAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
+        let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
+        for mention in mentions where NSMaxRange(mention.range) <= result.length {
+            result.addAttribute(.font, value: bold, range: mention.range)
+        }
         if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
             for match in detector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
                 guard let url = match.url else { continue }

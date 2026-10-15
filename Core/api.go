@@ -97,6 +97,17 @@ type apiMessage struct {
 	PendingID   string          `json:"pendingID,omitempty"`
 	// Earlier versions of an edited message (oldest first), as far as this app saw them.
 	PreviousTexts []string `json:"previousTexts,omitempty"`
+	// People (or @everyone) tagged in the text.
+	Mentions []apiMention `json:"mentions,omitempty"`
+}
+
+// apiMention is a tag in a message's text ("@Anna"). Offset and Length count UTF-16 code
+// units, as NSString does.
+type apiMention struct {
+	Offset int `json:"offset"`
+	Length int `json:"length"`
+	// The person tagged; empty for the whole chat (@everyone).
+	UserID string `json:"userID,omitempty"`
 }
 
 // apiReactionEvent is someone else reacting to one of your messages (the "reaction" event),
