@@ -72,8 +72,9 @@ final class MessageCellView: NSTableCellView {
     private var outgoingConstraints: [NSLayoutConstraint] = []
     private var incomingAvatarLeading = NSLayoutConstraint()
     private var widthConstraint = NSLayoutConstraint()
-    private var badgeIncoming = NSLayoutConstraint()
-    private var badgeOutgoing = NSLayoutConstraint()
+    /// The tapback badge's place: on the top corner of the message's first part (see anchorBadge).
+    private var badgeX = NSLayoutConstraint()
+    private var badgeY = NSLayoutConstraint()
     /// The text's leading, trailing, top and bottom insets in its bubble.
     private var textInsets: [NSLayoutConstraint] = []
 
@@ -226,8 +227,6 @@ final class MessageCellView: NSTableCellView {
         columnBelowReply = column.topAnchor.constraint(equalTo: replyView.bottomAnchor, constant: 4)
         replyLeading = replyView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: side)
         replyTrailing = replyView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -side)
-        badgeIncoming = reactionsBadge.centerXAnchor.constraint(equalTo: bubble.trailingAnchor, constant: -2)
-        badgeOutgoing = reactionsBadge.centerXAnchor.constraint(equalTo: bubble.leadingAnchor, constant: 2)
 
         NSLayoutConstraint.activate([
             topConstraint,
@@ -237,7 +236,6 @@ final class MessageCellView: NSTableCellView {
             column.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -1),
             column.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: side),
             column.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -side),
-            reactionsBadge.centerYAnchor.constraint(equalTo: bubble.topAnchor, constant: -2),
             avatar.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             avatar.bottomAnchor.constraint(equalTo: column.bottomAnchor),
             avatar.widthAnchor.constraint(equalToConstant: 28),
@@ -247,6 +245,17 @@ final class MessageCellView: NSTableCellView {
         ])
     }
 
+    /// Puts the tapback badge on the view's top corner toward the middle of the chat (left on
+    /// your messages, right on others').
+    private func anchorBadge(to view: NSView, outgoing: Bool) {
+        NSLayoutConstraint.deactivate([badgeX, badgeY])
+        badgeX = outgoing
+            ? reactionsBadge.centerXAnchor.constraint(equalTo: view.leadingAnchor, constant: 2)
+            : reactionsBadge.centerXAnchor.constraint(equalTo: view.trailingAnchor, constant: -2)
+        badgeY = reactionsBadge.centerYAnchor.constraint(equalTo: view.topAnchor, constant: -2)
+        NSLayoutConstraint.activate([badgeX, badgeY])
+    }
+
     // MARK: - Showing a message
 
     func configure(_ message: ChatMessage, layout: Layout, store: ChatStore) {
@@ -254,8 +263,8 @@ final class MessageCellView: NSTableCellView {
         setTyping(false)
         let outgoing = message.isFromMe
 
-        NSLayoutConstraint.deactivate(incomingConstraints + outgoingConstraints + [badgeIncoming, badgeOutgoing])
-        NSLayoutConstraint.activate((outgoing ? outgoingConstraints : incomingConstraints) + [outgoing ? badgeOutgoing : badgeIncoming])
+        NSLayoutConstraint.deactivate(incomingConstraints + outgoingConstraints)
+        NSLayoutConstraint.activate(outgoing ? outgoingConstraints : incomingConstraints)
         column.alignment = outgoing ? .trailing : .leading
         configureReply(message, layout: layout, selfID: store.account?.id)
 
@@ -274,7 +283,12 @@ final class MessageCellView: NSTableCellView {
         let textColor = configureBubble(message, layout: layout, preview: preview)
 
         let emojis = message.reactions.map(\.emoji)
-        reactionsBadge.isHidden = emojis.isEmpty || bubble.isHidden
+        // On the first part: pictures, the text bubble or a link card.
+        let badgeAnchor = [attachmentsStack, bubble, linkCard].first { !$0.isHidden }
+        reactionsBadge.isHidden = emojis.isEmpty || badgeAnchor == nil
+        if let badgeAnchor {
+            anchorBadge(to: badgeAnchor, outgoing: outgoing)
+        }
         reactionsBadge.configure(emojis: emojis, highlighted: message.reactions.contains { $0.senderID == store.account?.id })
 
         // Spacing: tight within a run, looser between runs, extra room for tapbacks.
@@ -519,8 +533,8 @@ final class MessageCellView: NSTableCellView {
     func configureTyping(layout: Layout) {
         message = nil
         setTyping(true)
-        NSLayoutConstraint.deactivate(outgoingConstraints + [badgeOutgoing, replyTop, columnBelowReply, replyLeading, replyTrailing])
-        NSLayoutConstraint.activate(incomingConstraints + [topConstraint, badgeIncoming])
+        NSLayoutConstraint.deactivate(outgoingConstraints + [replyTop, columnBelowReply, replyLeading, replyTrailing])
+        NSLayoutConstraint.activate(incomingConstraints + [topConstraint])
         column.alignment = .leading
         incomingAvatarLeading.constant = layout.reserveAvatarSpace ? BubbleMetrics.avatarSideInset : BubbleMetrics.sideInset
         widthConstraint.constant = layout.maxWidth

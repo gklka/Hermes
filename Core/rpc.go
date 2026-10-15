@@ -67,6 +67,7 @@ type requestParams struct {
 	// What the app read from Messenger's web app (the web.* requests).
 	Rows     []webThreadRow `json:"rows"`
 	Messages []webMessage   `json:"messages"`
+	Reacted  []webReacted   `json:"reacted"`
 	Colors   []string       `json:"colors"`
 }
 
@@ -103,6 +104,9 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return c.importWebThreads(p.Rows), nil
 	case "web.importMessages":
 		return c.importWebMessages(p.ThreadID, p.Messages), nil
+	case "web.importReactions":
+		c.importWebReactionUpdates(p.ThreadID, p.Reacted)
+		return nil, nil
 	case "web.setThreadTheme":
 		c.setThreadTheme(p.ThreadID, p.Colors, p.Emoji)
 		return nil, nil

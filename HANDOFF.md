@@ -94,7 +94,7 @@ Share extension (ShareExtension/) ──App Group files + hermes:// URL──▶
 - `Util/`: `ImageCache`, `AvatarView`, `Formatters`, `LinkPreviews`, `ChatExport` (Markdown transcript), `SpotlightIndex`, `ShareSupport`, `DockBadge`, `ImageSize`, `Debouncer`, `ViewHelpers` (snapshots, fades, popovers, confirm alerts, `Facebook` URLs).
 - **`WebSync/`**: the hidden web view.
   - `WebSyncController.swift`: a hidden `WKWebView` with a persistent data store (UUID `6F1C2B7E-4E1A-4C55-9B7A-2D0E7F9A1C31`). It **must use a Safari user agent** (a fake Chrome one broke the PIN restore). Embedded invisibly in the chat pane so WebKit doesn't throttle it. `withExclusiveAccess`, `navigate(toPath:)`, `evaluate`.
-  - `WebChatImporter.swift`: every 10 minutes, reads the encrypted chats from the web chat list.
+  - `WebChatImporter.swift`: at launch and every 10 minutes, reads the encrypted chats the web chat list shows at first; scrolling the sidebar to its bottom reads the web list's next page (`loadMore`), as on the web.
   - `WebHistoryImporter.swift`: when an encrypted 1:1 chat opens, scrolls its web chat back and collects messages, pictures, links and reactions.
   - `WebThemeReader.swift`: an encrypted chat's theme, from the web app.
   - `WebDOMInspector.swift`: dev hooks (`defaults write <bundle ID> WebDumpEnabled -bool YES`; `webeval.js` in the data folder runs in the page).
@@ -120,7 +120,7 @@ Working:
 
 Known limitations:
 - Siri can't send: Apple's messages-schema intents never received a recipient (macOS 27.1), so they were removed.
-- The web chat list renders only about 14 rows, so only recent encrypted chats are matched.
+- Encrypted chats further down the web chat list are matched only once the sidebar is scrolled down to them.
 - History import: about 400 messages per chat; preview-quality photos; no stickers, voice or video; 1:1 chats only.
 - Opening a chat in the web view may mark it read on Messenger.
 - Each picture is sent as its own message (no albums).

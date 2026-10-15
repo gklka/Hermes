@@ -168,9 +168,13 @@ func (c *Core) importWebThreads(rows []webThreadRow) apiThreadImportResult {
 			if t := c.store.GetThread(userID); t == nil || ts-unit.Milliseconds() > t.LastActivity {
 				c.store.BumpThread(userID, ts, snippet, "")
 			}
-			// A chat without a snippet (no stored messages) gets the list's.
+			// A chat without a snippet (no stored messages) gets the list's, and one read before
+			// emoji were collected gets them.
 			if snippet != "" {
 				c.store.SetThreadSnippetIfEmpty(userID, snippet)
+				if t := c.store.GetThread(userID); t != nil && t.Snippet != snippet && withoutEmoji(t.Snippet) == withoutEmoji(snippet) {
+					c.store.SetThreadSnippet(userID, snippet, t.SnippetSenderID)
+				}
 			}
 		}
 		cs.thread(userID)
@@ -434,6 +438,31 @@ func (c *Core) importWebMessages(threadID string, messages []webMessage) apiMess
 	c.flush(cs)
 	c.log.Info().Str("thread_id", threadID).Int("received", len(messages)).Int("imported", imported).Int("unrestored", unrestored).Msg("Imported web message history")
 	return apiMessageImportResult{Imported: imported, Unrestored: unrestored}
+}
+
+// webReacted is the reactions the web app shows on a message imported before.
+type webReacted struct {
+	DOMID     string        `json:"domID"`
+	FromMe    bool          `json:"fromMe"`
+	Reactions []webReaction `json:"reactions"`
+}
+
+// importWebReactionUpdates stores the reactions shown on stored messages of a 1:1 encrypted
+// chat: ones made while the app was offline aren't delivered by the live connection later.
+func (c *Core) importWebReactionUpdates(threadID string, reacted []webReacted) {
+	cs := newChangeSet()
+	for _, r := range reacted {
+		id, _, ok := webMessageID(r.DOMID)
+		if !ok || c.store.GetMessage(id) == nil {
+			continue
+		}
+		before := fmt.Sprint(c.store.Reactions([]string{id})[id])
+		c.importWebReactions(id, threadID, r.FromMe, r.Reactions)
+		if fmt.Sprint(c.store.Reactions([]string{id})[id]) != before {
+			cs.message(id)
+		}
+	}
+	c.flush(cs)
 }
 
 func (c *Core) saveWebImage(messageID string, index int, img webImage) (string, error) {

@@ -137,6 +137,15 @@ final class WebHistoryImporter {
         let reachedStart: Bool?
         /// It scrolled back into the imported stretch (so everything newer is read).
         let overlap: Bool?
+        /// Messages imported before that show reactions.
+        let reacted: [Reacted]?
+    }
+
+    /// The reactions on a message imported before.
+    nonisolated struct Reacted: Codable {
+        let domID: String
+        let fromMe: Bool
+        let reactions: [Reaction]
     }
 
     nonisolated struct Message: Codable {
@@ -395,6 +404,10 @@ final class WebHistoryImporter {
                 "web.importMessages", ImportParams(threadID: threadID, messages: result.messages), as: ImportResult.self
             )
             CoreBridge.shared.log("WebHistoryImporter: \(threadID): collected \(result.messages.count), imported \(imported.imported), not restored \(imported.unrestored)")
+            if let reacted = result.reacted, !reacted.isEmpty {
+                struct ReactedParams: Encodable { let threadID: String; let reacted: [Reacted] }
+                try await CoreBridge.shared.call("web.importReactions", ReactedParams(threadID: threadID, reacted: reacted))
+            }
             // The core emits each stored message as an event, so open chats update by themselves.
 
             if result.error != nil {
@@ -710,18 +723,51 @@ final class WebHistoryImporter {
           return r.width >= 60 && r.height >= 60 && !i.closest('[role="toolbar"]');
         };
 
+        // Reactions: a button labelled "<count> <emoji> …" with the emoji as images.
+        const reactionsOf = el => {
+          const reactions = [];
+          for (const button of el.querySelectorAll('[role="button"][aria-label]')) {
+            const count = parseInt(button.getAttribute('aria-label'), 10);
+            if (!(count > 0) || button.closest('[role="toolbar"]')) continue;
+            const emojis = Array.from(button.querySelectorAll('img[alt]')).map(i => i.getAttribute('alt')).filter(Boolean);
+            if (emojis.length) reactions.push({ emojis, count });
+          }
+          return reactions;
+        };
+        // Which side the message hugs: all its bubbles and pictures together, since an album
+        // staggers its photos left and right (one photo's center can be on the wrong side).
+        const isFromMe = (el, logRect) => {
+          let left = Infinity, right = -Infinity;
+          for (const part of [...el.querySelectorAll('div[dir="auto"]'), ...el.querySelectorAll('img')]) {
+            const r = part.getBoundingClientRect();
+            if (r.width < 20 || part.closest('[role="toolbar"]')) continue;
+            left = Math.min(left, r.left);
+            right = Math.max(right, r.right);
+          }
+          return left === Infinity
+            ? (r => r.width > 0 && (r.left + r.width / 2) > logRect.left + logRect.width / 2)(el.getBoundingClientRect())
+            : (logRect.right - right) < (left - logRect.left);
+        };
+
         const seen = new Map();
         const skipped = new Set();
+        // Messages imported before that show reactions: they may have come while the app was
+        // offline (the live connection doesn't deliver those later).
+        const reacted = new Map();
         let oldestTs = Infinity;
         const richness = m => m.text.length + 1000 * (m.images.length + m.links.length) + 10 * m.reactions.length;
         const collect = () => {
           const logRect = log.getBoundingClientRect();
-          const mid = logRect.left + logRect.width / 2;
           for (const el of log.querySelectorAll('[data-message-id^="\(userID)@"]')) {
             const domID = el.getAttribute('data-message-id');
             const ts = tsOf(domID);
             if (ts > 0) oldestTs = Math.min(oldestTs, ts);
-            if (covered(ts)) { skipped.add(domID); continue; }
+            if (covered(ts)) {
+              skipped.add(domID);
+              const reactions = reactionsOf(el);
+              if (reactions.length && !reacted.has(domID)) reacted.set(domID, { domID, fromMe: isFromMe(el, logRect), reactions });
+              continue;
+            }
             // Shared links' cards: <a href> with a title (and description, picture) inside. Links
             // in the message text sit in its div[dir=auto]; links around a bare photo are photos.
             const cards = Array.from(el.querySelectorAll('a[href^="http"]')).filter(a =>
@@ -739,31 +785,11 @@ final class WebHistoryImporter {
             });
             const images = Array.from(el.querySelectorAll('img')).filter(i => isPicture(i) && !inCard(i))
               .map(i => ({ src: i.src, width: i.naturalWidth, height: i.naturalHeight }));
-            // Reactions: a button labelled "<count> <emoji> …" with the emoji as images.
-            const reactions = [];
-            for (const button of el.querySelectorAll('[role="button"][aria-label]')) {
-              const count = parseInt(button.getAttribute('aria-label'), 10);
-              if (!(count > 0) || button.closest('[role="toolbar"]')) continue;
-              const emojis = Array.from(button.querySelectorAll('img[alt]')).map(i => i.getAttribute('alt')).filter(Boolean);
-              if (emojis.length) reactions.push({ emojis, count });
-            }
-            const entry = { domID, ts, text: texts.join('\\n'), images, links, reactions };
+            const entry = { domID, ts, text: texts.join('\\n'), images, links, reactions: reactionsOf(el) };
             const old = seen.get(domID);
             // Keep the fullest version: pictures decrypt and cards render after the message appears.
             if (old && richness(old) >= richness(entry)) continue;
-            // Which side the message hugs: all its bubbles and pictures together, since an album
-            // staggers its photos left and right (one photo's center can be on the wrong side).
-            let left = Infinity, right = -Infinity;
-            for (const part of [...el.querySelectorAll('div[dir="auto"]'), ...el.querySelectorAll('img')]) {
-              const r = part.getBoundingClientRect();
-              if (r.width < 20 || part.closest('[role="toolbar"]')) continue;
-              left = Math.min(left, r.left);
-              right = Math.max(right, r.right);
-            }
-            const fromMe = left === Infinity
-              ? (r => r.width > 0 && (r.left + r.width / 2) > mid)(el.getBoundingClientRect())
-              : (logRect.right - right) < (left - logRect.left);
-            entry.fromMe = old ? old.fromMe : fromMe;
+            entry.fromMe = old ? old.fromMe : isFromMe(el, logRect);
             entry.imagesReady = Promise.all(images.slice(0, 6).map(encode));
             entry.linksReady = Promise.all(links.slice(0, 3).map(async l => ({ ...l, image: l.image ? await encode(l.image) : null })));
             seen.set(domID, entry);
@@ -818,7 +844,7 @@ final class WebHistoryImporter {
           const links = await m.linksReady;
           messages.push({ domID: m.domID, fromMe: m.fromMe, text: m.text, images, links, reactions: m.reactions });
         }
-        return JSON.stringify({ messages, reachedStart, overlap: overlap() });
+        return JSON.stringify({ messages, reachedStart, overlap: overlap(), reacted: Array.from(reacted.values()) });
         """
     }
 }

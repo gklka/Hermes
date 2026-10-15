@@ -183,6 +183,8 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         guard !isLoadingMore, rows.count > 10,
               visible.maxY > tableView.bounds.height - 400 else { return }
         isLoadingMore = true
+        // Encrypted chats: the web chat list's next page.
+        WebChatImporter.shared.loadMore()
         Task {
             await store.loadMoreConversations()
             try? await Task.sleep(for: .seconds(2))
