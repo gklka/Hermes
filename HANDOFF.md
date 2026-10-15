@@ -39,6 +39,8 @@ These come from the user's global `~/.claude/CLAUDE.md` plus feedback given duri
 4. Shortcuts end-to-end tests: `shortcuts run "MM Test Send"` (also `Edit`, `Unsend`, `Unread`, `Read`). They act on your chat with yourself (its thread ID is your Facebook user ID); check the result in `app.db` (`messages`, and the kv key `unread:<thread ID>`). A run can hang on a one-time "Allow" prompt, so wrap it in a timeout.
 5. The first launch shows facebook.com's login in a web view. The app then registers itself as a new E2EE device; restore encrypted chats with the PIN once ("Restore Encrypted Chats…").
 
+Releasing: set `MARKETING_VERSION` to the new version and **increment `CURRENT_PROJECT_VERSION` by one every release** (all four configurations in `project.pbxproj`: app and ShareExtension, Debug and Release). Build Release, put the app and an Applications link in `build/Hermes-<version>.dmg` (`hdiutil create … -format UDZO`), and publish it with `gh release create v<version>`. It isn't notarized (no Developer ID), so the release notes explain System Settings › Privacy & Security › Open Anyway.
+
 Signing: `Support/Signing.xcconfig` holds placeholders; the real bundle ID prefix and team go in `Support/Signing.local.xcconfig`, which isn't committed (create it on a new machine). The App Group (`<team>.<prefix>.Hermes`, shared with the share extension) is derived from them, also in the entitlements and Info.plists.
 
 ## Architecture
