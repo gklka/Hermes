@@ -321,6 +321,13 @@ final class MainSplitViewController: NSSplitViewController {
             guard let self, self.handleShortcut(event) else { return event }
             return nil
         }
+        // Three-finger swipe up/down: the chat above/below (a swipe up has a positive deltaY).
+        NSEvent.addLocalMonitorForEvents(matching: .swipe) { [weak self] event in
+            guard let self, let window = self.view.window, event.window === window, window.attachedSheet == nil,
+                  event.deltaY != 0, abs(event.deltaY) > abs(event.deltaX) else { return event }
+            self.list.selectAdjacentConversation(event.deltaY > 0 ? -1 : 1)
+            return nil
+        }
     }
 
     /// ⌘1–⌘9 pick a chat from the list; Page Up/Down, Home and End scroll the messages even

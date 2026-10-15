@@ -146,6 +146,14 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         tableView.scrollRowToVisible(index)
     }
 
+    /// Three-finger swipe up/down: the chat above (-1) or below (1) the open one.
+    func selectAdjacentConversation(_ offset: Int) {
+        let current = selectedID.flatMap { id in rows.firstIndex { $0.id == id } }
+        let index = current.map { $0 + offset } ?? 0
+        guard rows.indices.contains(index) else { return }
+        selectConversation(at: index)
+    }
+
     /// Selects a conversation programmatically (e.g. after "Open Chat").
     func select(threadID: String) {
         searchField.stringValue = ""
