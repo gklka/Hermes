@@ -126,6 +126,12 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         NotificationCenter.default.addObserver(
             self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification, object: scrollView.contentView
         )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(listedChatsChanged), name: WebChatImporter.listedChatsDidChange, object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(updateLoadingRow), name: WebHistoryImporter.activityDidChange, object: WebChatImporter.shared
+        )
         reload()
     }
 
@@ -156,11 +162,24 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
 
     private func reload() {
         let query = searchField.stringValue.trimmingCharacters(in: .whitespaces)
-        rows = store.conversations.filter {
+        var conversations = store.conversations
+        // As many chats as Messenger web's list has loaded (scrolling to the bottom loads more),
+        // and the open one; searching finds them all.
+        let listed = WebChatImporter.shared.listedChats
+        if query.isEmpty, listed > 0 {
+            let selectedIndex = selectedID.flatMap { id in conversations.firstIndex { $0.id == id } } ?? -1
+            conversations = Array(conversations.prefix(max(listed, selectedIndex + 1)))
+        }
+        rows = conversations.filter {
             // Ignoring case and accents: "peter" finds "Péter".
             filter.includes($0) && (query.isEmpty || $0.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil)
         }
+        showsLoadingRow = WebChatImporter.shared.isLoadingMoreChats && query.isEmpty
         tableView.reloadData()
+        // A list too short to scroll can't reach its bottom: load more right away, as the web does.
+        if query.isEmpty, filter == .all, listed > 0, tableView.bounds.height <= scrollView.contentView.bounds.height {
+            WebChatImporter.shared.loadMore()
+        }
         if !didAutoSelect, let first = rows.first {
             didAutoSelect = true
             if selectedID == nil {
@@ -178,12 +197,31 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         tableView.reloadData(forRowIndexes: IndexSet(integer: index), columnIndexes: IndexSet(integer: 0))
     }
 
+    @objc private func listedChatsChanged() {
+        reload()
+    }
+
+    /// A spinner row under the chats while the web list's next page loads.
+    private var showsLoadingRow = false
+
+    @objc private func updateLoadingRow() {
+        let loading = WebChatImporter.shared.isLoadingMoreChats && searchField.stringValue.isEmpty
+        guard loading != showsLoadingRow else { return }
+        showsLoadingRow = loading
+        let index = IndexSet(integer: rows.count)
+        if loading {
+            tableView.insertRows(at: index, withAnimation: .effectFade)
+        } else {
+            tableView.removeRows(at: index, withAnimation: .effectFade)
+        }
+    }
+
     @objc private func scrolled() {
         let visible = scrollView.contentView.bounds
         guard !isLoadingMore, rows.count > 10,
               visible.maxY > tableView.bounds.height - 400 else { return }
         isLoadingMore = true
-        // Encrypted chats: the web chat list's next page.
+        // The web chat list's next page: it shows more chats here too.
         WebChatImporter.shared.loadMore()
         Task {
             await store.loadMoreConversations()
@@ -310,10 +348,32 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
     // MARK: - Table
 
     func numberOfRows(in tableView: NSTableView) -> Int {
-        rows.count
+        rows.count + (showsLoadingRow ? 1 : 0)
+    }
+
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        row < rows.count ? tableView.rowHeight : 44
+    }
+
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        row < rows.count
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard row < rows.count else {
+            let spinner = NSProgressIndicator()
+            spinner.style = .spinning
+            spinner.controlSize = .small
+            spinner.translatesAutoresizingMaskIntoConstraints = false
+            spinner.startAnimation(nil)
+            let cell = NSView()
+            cell.addSubview(spinner)
+            NSLayoutConstraint.activate([
+                spinner.centerXAnchor.constraint(equalTo: cell.centerXAnchor),
+                spinner.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            ])
+            return cell
+        }
         let id = NSUserInterfaceItemIdentifier("ConversationCell")
         let cell = tableView.makeView(withIdentifier: id, owner: self) as? ConversationCellView ?? {
             let cell = ConversationCellView()
@@ -326,7 +386,7 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
     }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        ConversationRowView()
+        row < rows.count ? ConversationRowView() : NSTableRowView()
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {

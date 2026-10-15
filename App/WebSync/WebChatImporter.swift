@@ -43,6 +43,9 @@ final class WebChatImporter {
         currentRun = nil
         stage = nil
         notifyActivity()
+        listedChats = 0
+        hasReadSinceLaunch = false
+        reachedEnd = false
     }
 
     /// The import running now, if any.
@@ -66,7 +69,7 @@ final class WebChatImporter {
             case .startingWebApp: return "Starting Messenger web…"
             case .waitingForPage: return "Waiting for Messenger web to finish another task…"
             case .reading(0): return "Waiting for the chat list to appear…"
-            case .reading(let found): return "Reading the chat list: \(found) encrypted chats so far"
+            case .reading(let found): return "Reading the chat list: \(found) chats so far"
             case .matching(let done, let total): return "Finding out who's in new chats: \(done) of \(total)"
             case .saving: return "Saving the chat list…"
             }
@@ -92,6 +95,9 @@ final class WebChatImporter {
 
     /// Whether the chat list is being read now (other readers of the page wait for it).
     var isReading: Bool { stage != nil }
+    /// Whether the web list's next page is being read (the sidebar shows a spinner for it).
+    /// Changes post WebHistoryImporter.activityDidChange.
+    var isLoadingMoreChats: Bool { stage != nil && isLoadingMore }
 
     private static let activityName = "Chat List"
 
@@ -129,12 +135,33 @@ final class WebChatImporter {
 
     // MARK: - Import
 
-    /// How many encrypted chats the deepest read found (the web list loads a page at a time).
-    private var listed = 0
+    /// Posted when `listedChats` changes.
+    static let listedChatsDidChange = Notification.Name("WebChatImporterListedChatsDidChange")
+    private static let listedChatsKey = "WebListedChats"
+
+    /// How many chats (of any kind) the web list has loaded: the sidebar shows as many, like
+    /// the web app. 0 while unknown. Kept across launches until the first read after launch.
+    private(set) var listedChats = UserDefaults.standard.integer(forKey: WebChatImporter.listedChatsKey) {
+        didSet {
+            guard listedChats != oldValue else { return }
+            UserDefaults.standard.set(listedChats, forKey: Self.listedChatsKey)
+            NotificationCenter.default.post(name: Self.listedChatsDidChange, object: self)
+        }
+    }
+    /// The first read since launch: it sets `listedChats` to the web list's first page.
+    private var hasReadSinceLaunch = false
     /// The last read for more found nothing new: the web list has no more.
-    private var reachedEnd = false
+    private(set) var reachedEnd = false
     /// Whether the running read is for more chats.
     private var isLoadingMore = false
+
+    /// What the collect script returns.
+    private struct ListResult: Decodable {
+        /// The encrypted chats' rows.
+        let rows: [Row]
+        /// How many chats of any kind the list showed.
+        let total: Int
+    }
 
     /// Imports the chats the web list shows at first, or waits for the import already running
     /// (e.g. the restore window closed during one; what follows needs the list).
@@ -144,11 +171,15 @@ final class WebChatImporter {
 
     /// The chat list was scrolled to its bottom: reads the web list's next page.
     func loadMore() {
-        guard currentRun == nil, !reachedEnd, ChatStore.shared.account != nil else { return }
-        Task { await run(target: listed + 1) }
+        // Not again right away (e.g. when the web app can't be started).
+        guard currentRun == nil, !reachedEnd, ChatStore.shared.account != nil,
+              Date().timeIntervalSince(lastLoadMore) > 3 else { return }
+        lastLoadMore = Date()
+        Task { await run(target: listedChats + 1) }
     }
+    private var lastLoadMore = Date.distantPast
 
-    /// Reads the web list, scrolling it until it shows `target` encrypted chats (0: none).
+    /// Reads the web list, scrolling it until it shows `target` chats (0: what it shows at first).
     private func run(target: Int) async {
         if let currentRun {
             await currentRun.task.value
@@ -193,20 +224,25 @@ final class WebChatImporter {
                 }
             }
             // The web app sometimes redirects/re-renders right after loading; retry a few times.
-            var rows: [Row] = []
+            var list = ListResult(rows: [], total: 0)
             for attempt in 1...3 {
                 do {
-                    rows = try await web.evaluate(Self.collectScript(target: target), as: [Row].self)
+                    list = try await web.evaluate(Self.collectScript(target: target), as: ListResult.self)
                     break
                 } catch where attempt < 3 {
                     try? await Task.sleep(for: .seconds(5))
                 }
             }
             poll.cancel()
-            CoreBridge.shared.log("WebChatImporter:found \(rows.count) encrypted chats in web list")
+            let rows = list.rows
+            CoreBridge.shared.log("WebChatImporter:found \(rows.count) encrypted chats in web list (\(list.total) chats)")
             // Asked for more than it found: that's all the web list has (new chats can come later).
-            reachedEnd = target > 0 && rows.count < target
-            listed = max(listed, rows.count)
+            reachedEnd = target > 0 && list.total < target
+            if list.total > 0 {
+                // Later reads keep what was loaded (a reloaded page starts at its first page again).
+                listedChats = hasReadSinceLaunch ? max(listedChats, list.total) : list.total
+                hasReadSinceLaunch = true
+            }
             guard stillLoggedIn() else {
                 finish("Logged out while the chat list was read.", failed: true)
                 return
@@ -278,9 +314,9 @@ final class WebChatImporter {
     return JSON.stringify('');
     """
 
-    /// Waits for the chat list and returns its encrypted rows in display order (newest first).
-    /// With a target, it scrolls down (the list loads a page at a time, and drops rows scrolled
-    /// away) until it has found that many, or the list ends.
+    /// Waits for the chat list and returns its encrypted rows in display order (newest first),
+    /// and how many chats of any kind it shows. With a target, it scrolls down (the list loads a
+    /// page at a time, and drops rows scrolled away) until it has shown that many chats, or ends.
     private static func collectScript(target: Int) -> String {
     """
     const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -290,9 +326,11 @@ final class WebChatImporter {
       grid = document.querySelector('[role="grid"]');
       if (!grid || !grid.querySelector('a[href^="/messages/"]')) { grid = null; await sleep(1000); }
     }
-    if (!grid) return '[]';
+    if (!grid) return JSON.stringify({ rows: [], total: 0 });
     await sleep(1500); // let avatars and times fill in
     const rows = new Map();
+    // Every chat shown, encrypted or not.
+    const all = new Set();
     // Text with emoji, which the page draws as <img alt="😆">.
     const textOf = node => {
       let s = '';
@@ -305,6 +343,9 @@ final class WebChatImporter {
     };
     const collect = () => {
       for (const row of grid.querySelectorAll('[role="row"]')) {
+        const link = row.querySelector('a[href^="/messages/"]');
+        const chat = link && link.getAttribute('href').match(/^\\/messages\\/(?:e2ee\\/)?t\\/\\d+/);
+        if (chat) all.add(chat[0]);
         const a = row.querySelector('a[href^="/messages/e2ee/t/"]');
         if (!a) continue;
         const webID = (a.getAttribute('href').match(/\\/e2ee\\/t\\/(\\d+)/) || [])[1];
@@ -325,7 +366,7 @@ final class WebChatImporter {
         const old = rows.get(webID);
         if (!old || fullness(entry) > fullness(old)) rows.set(webID, entry);
       }
-      window.__mmChatList = { found: rows.size };
+      window.__mmChatList = { found: all.size };
     };
     collect();
     // The list's scrolling element: inside the list (the tallest one), or else around it.
@@ -335,18 +376,18 @@ final class WebChatImporter {
       if (scrolls(el) && (!scroller || el.scrollHeight > scroller.scrollHeight)) scroller = el;
     for (let el = grid; !scroller && el; el = el.parentElement)
       if (scrolls(el)) scroller = el;
-    if (scroller && rows.size < TARGET) {
+    if (scroller && all.size < TARGET) {
       const top = scroller.scrollTop;
       let quiet = 0;
-      for (let i = 0; i < 150 && quiet < 4 && rows.size < TARGET; i++) {
-        const before = rows.size, height = scroller.scrollHeight;
+      for (let i = 0; i < 150 && quiet < 4 && all.size < TARGET; i++) {
+        const before = all.size, height = scroller.scrollHeight;
         scroller.scrollTop = scroller.scrollHeight;
         await sleep(1200);
         collect();
         // Rows that came in empty fill in a moment later.
         await sleep(300);
         collect();
-        quiet = rows.size === before && scroller.scrollHeight === height ? quiet + 1 : 0;
+        quiet = all.size === before && scroller.scrollHeight === height ? quiet + 1 : 0;
       }
       // The rest of the page that brought the target in.
       scroller.scrollTop = scroller.scrollHeight;
@@ -354,7 +395,7 @@ final class WebChatImporter {
       collect();
       scroller.scrollTop = top;
     }
-    return JSON.stringify(Array.from(rows.values()));
+    return JSON.stringify({ rows: Array.from(rows.values()), total: all.size });
     """
     }
 }
