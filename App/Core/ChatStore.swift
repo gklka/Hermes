@@ -25,8 +25,12 @@ final class ChatStore {
     private(set) var connectionState: ConnectionState = .disconnected
     private(set) var account: Account?
 
-    /// Sorted by most recent activity.
+    /// The chats, sorted by most recent activity. Not message requests: they're in `requests`
+    /// (shown under the Requests filter, not counted in the Dock or offered in Shortcuts and
+    /// the Share menu). `conversation(_:)` finds both.
     private(set) var conversations: [Conversation] = []
+    /// Message requests (someone you're not connected with wrote), most recent first.
+    private(set) var requests: [Conversation] = []
     private var conversationsByID: [String: Conversation] = [:]
 
     /// Messages per thread, sorted oldest → newest. Only populated for opened threads.
@@ -100,6 +104,7 @@ final class ChatStore {
     private func forgetAccount() {
         account = nil
         conversations = []
+        requests = []
         conversationsByID = [:]
         messagesByThread = [:]
         hasMoreHistory = [:]
@@ -421,6 +426,18 @@ final class ChatStore {
         post("threads.mute", ToggleParams(threadID: threadID, enabled: muted))
     }
 
+    /// Fetches a page of a request list from Messenger (the newest, or `more`: the next one);
+    /// its chats arrive as updates.
+    func loadRequests(_ list: RequestList, more: Bool = false) async {
+        struct Params: Encodable { let requestList: String; let more: Bool }
+        try? await core.call("requests.load", Params(requestList: list.rawValue, more: more))
+    }
+
+    /// Accepts a message request: the chat moves to your chats.
+    func acceptRequest(_ threadID: String) async throws {
+        try await core.call("requests.accept", ThreadParams(threadID: threadID))
+    }
+
     func deleteThread(_ threadID: String) async throws {
         try await core.call("threads.delete", ThreadParams(threadID: threadID))
     }
@@ -622,7 +639,9 @@ final class ChatStore {
     private func flushChanges() {
         if conversationsDirty {
             conversationsDirty = false
-            conversations = conversationsByID.values.sorted { $0.lastActivity > $1.lastActivity }
+            let sorted = conversationsByID.values.sorted { $0.lastActivity > $1.lastActivity }
+            conversations = sorted.filter { !$0.isRequest }
+            requests = sorted.filter(\.isRequest)
         }
         let pending = queuedChanges
         queuedChanges = []

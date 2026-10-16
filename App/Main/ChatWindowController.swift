@@ -30,6 +30,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         item.minimumThickness = 380
         // The compose bar sits at the bottom of the split view item, as in the main window.
         item.addBottomAlignedAccessoryViewController(chat.composeAccessory)
+        item.addBottomAlignedAccessoryViewController(chat.requestAccessory)
         item.addTopAlignedAccessoryViewController(chat.searchAccessory)
         split.addSplitViewItem(item)
 

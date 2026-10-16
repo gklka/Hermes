@@ -167,7 +167,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
         let content = UNMutableNotificationContent()
         content.title = isGroup ? (conversation?.name ?? senderName) : senderName
-        content.subtitle = isGroup ? senderName : ""
+        content.subtitle = isGroup ? senderName : (conversation?.isRequest == true ? "Message request" : "")
         content.body = body
         content.sound = .default
         content.threadIdentifier = threadID

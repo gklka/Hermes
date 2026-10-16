@@ -33,6 +33,9 @@ final class WebHistoryImporter {
     private struct Job {
         let threadID: String
         var mode: Mode
+        /// Asked for by opening the chat (not in the background, e.g. after a restore): only
+        /// needed while the chat is shown.
+        var opened = true
     }
 
     /// Chats whose history the web app couldn't show (not restored there with the PIN yet).
@@ -224,6 +227,27 @@ final class WebHistoryImporter {
         enqueueFirst(Job(threadID: threadID, mode: .earlier))
     }
 
+    /// The chat isn't shown anymore (another one was opened, or its window closed): what opening
+    /// it asked for is dropped, and stopped if it's being read (it's read again next time).
+    /// Background imports go on.
+    func chatLeft(_ threadID: String) {
+        guard WebSyncController.shared.isChatShown?(threadID) != true else { return }
+        let before = queue.count
+        queue.removeAll { $0.threadID == threadID && $0.opened }
+        if let current, current.threadID == threadID, current.opened, !currentStopped {
+            currentStopped = true
+            CoreBridge.shared.log("WebHistoryImporter: \(threadID) closed, stopping its import")
+            // The collect script checks this flag and returns early.
+            Task { _ = try? await WebSyncController.shared.evaluate("window.__mmImportStop = true; return JSON.stringify(true)", as: Bool.self) }
+        } else if queue.count == before {
+            return
+        }
+        stateChanged(threadID)
+    }
+
+    /// The running import was stopped (its chat was closed): its result is thrown away.
+    private var currentStopped = false
+
     private func enqueueFirst(_ job: Job) {
         var job = job
         // Reading earlier messages also reads the new ones on the way.
@@ -264,7 +288,7 @@ final class WebHistoryImporter {
             guard generation == self.generation else { return }
             let recent = ChatStore.shared.conversations.filter { $0.isEncrypted && !$0.isGroup }.prefix(Self.recentChatCount)
             for conversation in recent where !isPending(conversation.id) {
-                queue.append(Job(threadID: conversation.id, mode: .latest))
+                queue.append(Job(threadID: conversation.id, mode: .latest, opened: false))
                 stateChanged(conversation.id)
             }
             runQueue()
@@ -281,12 +305,18 @@ final class WebHistoryImporter {
                 let job = queue.removeFirst()
                 current = job
                 currentStarted = Date()
+                currentStopped = false
                 stage = .startingWebApp
                 stateChanged(job.threadID)
                 let (outcome, summary) = await importOnce(job)
                 guard generation == self.generation else { return }
                 current = nil
-                finish(job, outcome, summary: summary)
+                if currentStopped {
+                    // Nothing changes: the chat is read again when it's opened.
+                    CoreBridge.shared.log("WebHistoryImporter: \(job.threadID) import stopped")
+                } else {
+                    finish(job, outcome, summary: summary)
+                }
                 stateChanged(job.threadID)
             }
             if generation == self.generation { isRunning = false }
@@ -341,7 +371,7 @@ final class WebHistoryImporter {
             // Opened meanwhile (imported then), or logged out.
             guard generation == self.generation, retryAt.removeValue(forKey: threadID) != nil else { return }
             if !queue.contains(where: { $0.threadID == threadID }) {
-                queue.append(Job(threadID: threadID, mode: .latest))
+                queue.append(Job(threadID: threadID, mode: .latest, opened: false))
             }
             stateChanged(threadID)
             runQueue()
@@ -375,6 +405,8 @@ final class WebHistoryImporter {
             setStage(.waitingForPage)
             let script = Self.collectScript(userID: threadID, mode: job.mode, batch: Self.batchSize, coverage: coverage)
             let result = try await web.withExclusiveAccess {
+                // Closed while it waited for the page.
+                guard !currentStopped else { throw CancellationError() }
                 setStage(.openingChat)
                 await web.navigate(toPath: "/messages/e2ee/t/\(webID)/", fresh: true)
                 setStage(.finding)
@@ -412,6 +444,8 @@ final class WebHistoryImporter {
             guard ChatStore.shared.account?.id == account else {
                 return (.failed, "Logged out while the chat was read.")
             }
+            // Stopped part way: what was read is incomplete, so none of it is kept.
+            guard !currentStopped else { return (.failed, "Stopped: the chat was closed.") }
             setStage(.saving(result.messages.count))
             struct ImportParams: Encodable { let threadID: String; let messages: [Message] }
             struct ImportResult: Decodable { let imported: Int; let unrestored: Int }
@@ -688,9 +722,14 @@ final class WebHistoryImporter {
         const covered = ts => ts >= COV_FROM && ts <= COV_TO;
         // Read by the app while this runs (the Activity window).
         const progress = p => { window.__mmImport = p; };
+        // Set by the app when the chat is closed (WebHistoryImporter.chatLeft): stop early.
+        window.__mmImportStop = false;
+        const STOPPED = JSON.stringify({ messages: [], stopped: true });
+        const stopped = () => window.__mmImportStop === true;
         progress({ phase: 'finding' });
         let log = null;
         for (let i = 0; i < 40; i++) {
+          if (stopped()) return STOPPED;
           log = document.querySelector('[role="main"] [role="log"]');
           if (log && log.querySelector('[data-message-id^="\(userID)@"]')) break;
           await sleep(500);
@@ -828,6 +867,7 @@ final class WebHistoryImporter {
         let stable = 0;
         let reachedStart = !scroller;
         for (let i = 0; i < 3000 && scroller && !enough() && !overlap(); i++) {
+          if (stopped()) return STOPPED;
           const before = seen.size + skipped.size;
           scroller.scrollTop = 0;
           await sleep(2000);
@@ -848,6 +888,7 @@ final class WebHistoryImporter {
           scroller.scrollTop = 0;
           await sleep(1000);
           for (let i = 0; i < 400 && scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 5; i++) {
+            if (stopped()) return STOPPED;
             if (MODE === 'earlier' && COV_TO >= 0 && covered(firstVisibleTs())) break;
             scroller.scrollTop += scroller.clientHeight * 0.7;
             await sleep(700);
@@ -859,6 +900,7 @@ final class WebHistoryImporter {
         }
         const messages = [];
         for (const m of seen.values()) {
+          if (stopped()) return STOPPED;
           progress({ phase: 'pictures', done: messages.length + 1, total: seen.size });
           const images = (await m.imagesReady).filter(Boolean);
           const links = await m.linksReady;

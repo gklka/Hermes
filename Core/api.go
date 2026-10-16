@@ -29,6 +29,7 @@ type apiConversation struct {
 	IsEncrypted     bool             `json:"isEncrypted"`
 	IsMuted         bool             `json:"isMuted"`
 	IsMarketplace   bool             `json:"isMarketplace"`
+	RequestList     string           `json:"requestList,omitempty"` // a message request: "mayKnow" or "spam"
 	Participants    []apiParticipant `json:"participants"`
 	// The chat's custom Messenger theme for outgoing bubbles: one CSS color, or several for a
 	// gradient (top to bottom of the visible chat). Empty for the default theme.

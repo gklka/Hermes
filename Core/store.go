@@ -226,6 +226,8 @@ const (
 	folderInbox       = "inbox"
 	folderE2EECutover = "e2ee_cutover" // the unencrypted chat an encrypted one replaced
 	folderRequests    = "pending"      // message requests
+	// Requests Messenger filtered into its Spam list.
+	folderFilteredRequests = "other"
 )
 
 type threadRow struct {
@@ -281,8 +283,9 @@ func (s *Store) GetThread(id string) *threadRow {
 	return t
 }
 
-// Visible reports whether the thread belongs in the chat list: inbox chats only, not message
-// requests, filtered ("other") or spam threads, nor the folder pseudo-threads Messenger sends.
+// Visible reports whether the thread belongs in the app: inbox chats and message requests (the
+// app lists those separately), not spam or other folders, nor the pseudo-threads Messenger
+// sends for folders.
 func (t *threadRow) Visible() bool {
 	switch t.Type {
 	case table.FOLDER, table.COMMUNITY_FOLDER:
@@ -292,7 +295,50 @@ func (t *threadRow) Visible() bool {
 	case folderInbox, folderE2EECutover, "":
 		return true
 	}
-	return false
+	return t.IsRequest()
+}
+
+// IsRequest reports whether the chat is a message request: someone you're not connected with
+// wrote to you.
+func (t *threadRow) IsRequest() bool {
+	return t.RequestList() != ""
+}
+
+// Messenger's two lists of message requests (the tabs of its Requests page).
+const (
+	requestListMayKnow = "mayKnow" // "You may know"
+	requestListSpam    = "spam"    // "Spam"
+)
+
+// RequestList is the request list the chat is in, or "" if it isn't a request.
+func (t *threadRow) RequestList() string {
+	switch t.Folder {
+	case folderRequests:
+		return requestListMayKnow
+	case folderFilteredRequests:
+		return requestListSpam
+	}
+	return ""
+}
+
+// OldestRequest is the least recent chat of a request list (its ID and last activity), among
+// the encrypted or the other chats (they're paged separately): where the list's next page
+// starts. "" if there's none.
+func (s *Store) OldestRequest(list string, encrypted bool) (string, int64) {
+	folder := folderRequests
+	if list == requestListSpam {
+		folder = folderFilteredRequests
+	}
+	kind := `thread_type NOT IN (?, ?)`
+	if encrypted {
+		kind = `thread_type IN (?, ?)`
+	}
+	var id string
+	var activity int64
+	_ = s.db.QueryRow(`SELECT id, last_activity FROM threads WHERE folder=? AND last_activity>0 AND `+kind+`
+		ORDER BY last_activity LIMIT 1`,
+		folder, table.ENCRYPTED_OVER_WA_ONE_TO_ONE, table.ENCRYPTED_OVER_WA_GROUP).Scan(&id, &activity)
+	return id, activity
 }
 
 // chatJID is the chat's address on the encrypted connection.
@@ -793,6 +839,7 @@ func (s *Store) Conversation(t *threadRow, selfID string) apiConversation {
 		IsEncrypted:     t.Type.IsWhatsApp(),
 		IsMuted:         t.MuteUntil == -1 || t.MuteUntil > time.Now().UnixMilli(),
 		IsMarketplace:   t.Type == table.MARKETPLACE,
+		RequestList:     t.RequestList(),
 		Participants:    make([]apiParticipant, 0, len(participants)),
 	}
 	if t.Snippet == stickerSnippet {

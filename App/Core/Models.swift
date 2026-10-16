@@ -27,6 +27,9 @@ struct Conversation: Codable, Identifiable, Hashable {
     var isEncrypted: Bool
     var isMuted: Bool
     var isMarketplace: Bool
+    /// For a message request (someone you're not connected with wrote; ChatStore.requests),
+    /// the list it's in.
+    var requestList: RequestList?
     var participants: [Participant]
     /// The chat's custom Messenger theme for outgoing bubbles: one color, or several for a
     /// gradient (top to bottom of the visible chat). Nil for the default theme.
@@ -35,6 +38,20 @@ struct Conversation: Codable, Identifiable, Hashable {
     var quickEmoji: String?
 
     var lastActivityDate: Date { Date(timeIntervalSince1970: TimeInterval(lastActivity) / 1000) }
+
+    var isRequest: Bool { requestList != nil }
+}
+
+/// Messenger's two lists of message requests (the tabs of its Requests page).
+enum RequestList: String, Codable, CaseIterable {
+    case mayKnow, spam
+
+    var title: String {
+        switch self {
+        case .mayKnow: "You May Know"
+        case .spam: "Spam"
+        }
+    }
 }
 
 struct Reaction: Codable, Hashable {

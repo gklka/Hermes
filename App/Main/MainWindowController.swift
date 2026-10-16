@@ -321,6 +321,7 @@ final class MainSplitViewController: NSSplitViewController {
         let content = NSSplitViewItem(viewController: chat)
         content.minimumThickness = 380
         content.addBottomAlignedAccessoryViewController(chat.composeAccessory)
+        content.addBottomAlignedAccessoryViewController(chat.requestAccessory)
         content.addTopAlignedAccessoryViewController(chat.searchAccessory)
 
         addSplitViewItem(sidebar)

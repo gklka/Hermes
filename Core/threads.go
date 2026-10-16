@@ -91,6 +91,11 @@ func (c *Core) backfillThreads(ctx context.Context) {
 		}
 	}
 	c.fillEmptyPreviews(ctx)
+	for _, list := range []string{requestListMayKnow, requestListSpam} {
+		if err := c.loadRequests(ctx, list, false); err != nil {
+			c.log.Warn().Err(err).Str("list", list).Msg("Couldn't load the message requests")
+		}
+	}
 }
 
 // fillEmptyPreviews loads the latest messages of encrypted 1:1 chats that have neither a snippet
@@ -244,6 +249,11 @@ func (c *Core) markRead(ctx context.Context, threadID string) error {
 		return err
 	}
 	now := time.Now().UnixMilli()
+	// The sender of a request doesn't learn that you opened it: read here only.
+	if t.IsRequest() {
+		c.markThreadReadLocally(threadID, now)
+		return nil
+	}
 	if t.Type.IsWhatsApp() {
 		err = c.sendE2EEReadReceipts(ctx, t)
 	} else {
@@ -390,7 +400,8 @@ func (c *Core) blockUser(ctx context.Context, userID string) error {
 
 func (c *Core) sendTyping(ctx context.Context, threadID string, typing bool) error {
 	t, err := c.thread(threadID)
-	if err != nil {
+	if err != nil || t.IsRequest() {
+		// A request's sender doesn't see you typing (you can't reply before accepting).
 		return err
 	}
 	if t.Type.IsWhatsApp() {

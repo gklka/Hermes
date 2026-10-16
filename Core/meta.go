@@ -439,7 +439,7 @@ func callFromXMA(x *table.WrappedXMA) *apiCall {
 	return call
 }
 
-func mediaAttachment(id string,attachmentType table.AttachmentType, playable, preview string, w, h int, filename, mime string) apiAttachment {
+func mediaAttachment(id string, attachmentType table.AttachmentType, playable, preview string, w, h int, filename, mime string) apiAttachment {
 	a := apiAttachment{ID: id, URL: firstNonEmpty(playable, preview), PreviewURL: preview, Width: w, Height: h, Filename: filename, MimeType: mime}
 	switch attachmentType {
 	case table.AttachmentTypeImage, table.AttachmentTypeEphemeralImage:

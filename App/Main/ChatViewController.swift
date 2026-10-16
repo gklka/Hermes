@@ -28,6 +28,8 @@ final class ChatViewController: NSViewController {
     let scrollView = NSScrollView()
     let tableView = ChatTableView()
     let compose = ComposeView()
+    /// In place of the compose bar in a message request (+Requests).
+    let requestBar = RequestActionsView()
     private let emptyLabel = NSTextField(labelWithString: "No Conversation Selected")
     var rows: [Row] = []
     private var cancellables: Set<AnyCancellable> = []
@@ -152,6 +154,7 @@ final class ChatViewController: NSViewController {
         scrollView.automaticallyAdjustsContentInsets = true
 
         compose.delegate = self
+        setUpRequestBar()
 
         emptyLabel.font = .systemFont(ofSize: 15, weight: .medium)
         emptyLabel.textColor = .tertiaryLabelColor
@@ -199,6 +202,9 @@ final class ChatViewController: NSViewController {
         Notifier.shared.isThreadVisible = { threadID in
             Self.instances.allObjects.contains { $0.threadID == threadID && $0.isOnScreen }
         }
+        WebSyncController.shared.isChatShown = { threadID in
+            Self.instances.allObjects.contains { $0.threadID == threadID }
+        }
         // Coming back to the app (its window may have stayed key) or uncovering the window: the
         // chat on screen is read now, and its notifications go.
         NotificationCenter.default.addObserver(
@@ -238,6 +244,7 @@ final class ChatViewController: NSViewController {
                 || conversation?.isEncrypted != old?.isEncrypted
                 || conversation?.bubbleColors != old?.bubbleColors
                 || conversation?.quickEmoji != old?.quickEmoji
+                || conversation?.requestList != old?.requestList
             if changed {
                 updateComposeTheme()
                 reload()
@@ -248,7 +255,9 @@ final class ChatViewController: NSViewController {
     }
 
     private func shouldRedirectTyping(_ event: NSEvent) -> Bool {
-        guard threadID != nil, let window = view.window, event.window === window, window.attachedSheet == nil else { return false }
+        // Not in a message request: there's no compose field until it's accepted.
+        guard threadID != nil, !composeAccessory.isHidden, let window = view.window, event.window === window,
+              window.attachedSheet == nil else { return false }
         if let text = window.firstResponder as? NSTextView, text.isEditable {
             return false
         }
@@ -301,12 +310,17 @@ final class ChatViewController: NSViewController {
             // Leaving the chat cancels the edit and brings back what was typed before it.
             finishEditing()
         }
-        if let current = self.threadID {
-            drafts[current] = compose.hasContent ? compose.draft : nil
+        let previous = self.threadID
+        if let previous {
+            drafts[previous] = compose.hasContent ? compose.draft : nil
             stopTyping()
         }
         self.threadID = threadID
         autoLoadedOlder = nil
+        if let previous, previous != threadID {
+            // What the web app was asked for that chat isn't needed now (unless it's open elsewhere).
+            WebHistoryImporter.shared.chatLeft(previous)
+        }
         // Find in Chat and a lingering typing bubble belong to the chat they were in.
         resetSearch()
         endTypingLinger()
@@ -349,6 +363,7 @@ final class ChatViewController: NSViewController {
     private func updateComposeTheme() {
         compose.setQuickReaction(lastConversation?.quickEmoji, tint: BubbleColors.theme(lastConversation?.bubbleColors).last)
         updateMentionCandidates()
+        updateRequestBar()
     }
 
     /// In a group chat, its other members can be tagged with @ (not in encrypted groups, whose
@@ -390,13 +405,22 @@ final class ChatViewController: NSViewController {
     private func updateEmptyState() {
         emptyLabel.isHidden = threadID != nil
         scrollView.isHidden = threadID == nil
-        composeAccessory.isHidden = threadID == nil
+        // The compose bar, or a request's bar (none without a chat).
+        updateRequestBar()
         if threadID == nil { searchAccessory.isHidden = true }
     }
 
     /// The compose bar, at the bottom of the chat's split view item; messages scroll under it
-    /// with a soft edge, like Messages.
+    /// with a soft edge, like Messages. A message request shows its Block / Delete / Accept bar
+    /// there instead.
     lazy var composeAccessory: NSSplitViewItemAccessoryViewController = Self.accessory(compose)
+
+    /// In a message request, instead of the compose bar: Block / Delete / Accept (+Requests).
+    lazy var requestAccessory: NSSplitViewItemAccessoryViewController = {
+        let accessory = Self.accessory(requestBar)
+        accessory.isHidden = true
+        return accessory
+    }()
 
     /// Find in Chat's bar, at the top of the chat's split view item (hidden until used).
     lazy var searchAccessory: NSSplitViewItemAccessoryViewController = {
@@ -442,7 +466,9 @@ final class ChatViewController: NSViewController {
         let messages = store.messages(in: threadID)
         let seenAt = Self.readPositions(in: messages, of: conversation, selfID: store.account?.id)
         var result: [Row] = []
-        if WebHistoryImporter.shared.isPending(threadID) {
+        if conversation.isRequest {
+            // No restore prompt or history loading: a request is what Messenger sent with it.
+        } else if WebHistoryImporter.shared.isPending(threadID) {
             // Queued or being imported from the web app (e.g. still downloading after a restore).
             result.append(.loading)
         } else if conversation.isEncrypted && (messages.isEmpty || WebHistoryImporter.shared.needsRestore.contains(threadID)) {

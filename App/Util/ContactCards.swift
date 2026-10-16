@@ -13,7 +13,8 @@ final class ContactCards {
     private var index: Index?
     private var loading: Task<Void, Never>?
 
-    private struct Index {
+    /// Built off the main actor (buildIndex).
+    nonisolated private struct Index {
         /// Facebook user ID → contact identifier.
         var byFacebookID: [String: String] = [:]
         /// Folded name → contact identifiers.

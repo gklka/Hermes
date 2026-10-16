@@ -36,6 +36,9 @@ final class WebThemeReader {
             }
             struct Theme: Decodable { let colors: [String]; let emoji: String }
             let theme = try await web.withExclusiveAccess {
+                // Closed while it waited for the page (clicking through chats): not needed now,
+                // it's read when the chat is opened again.
+                guard web.isChatShown?(threadID) ?? true else { throw CancellationError() }
                 await web.navigate(toPath: path)
                 return try await web.evaluate(Self.readScript(path: path), as: Theme?.self)
             }

@@ -194,6 +194,10 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
     /// Called when the PIN was entered and its prompt went away (before the window closes).
     var onRestoreFinished: (() -> Void)?
 
+    /// Whether a chat is open (in the main window or its own; set by the chat views): work done
+    /// for a chat being opened is dropped once it's no longer shown.
+    var isChatShown: ((_ threadID: String) -> Bool)?
+
     /// Closes the window once the PIN prompt has been shown and then went away (restore finished).
     /// If the prompt never shows (already restored), the window stays until the user closes it.
     private func watchForFinishedRestore() {

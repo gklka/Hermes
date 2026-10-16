@@ -139,7 +139,7 @@ func (c *Core) newSendTask(t *threadRow, out outgoing, sendType table.SendType) 
 		SendType:         sendType,
 		SyncGroup:        syncGroupMain,
 	}
-	if t.Folder == folderRequests {
+	if t.IsRequest() {
 		task.Source = table.MESSENGER_INBOX_PENDING_REQUESTS
 	}
 	return task

@@ -63,6 +63,8 @@ type requestParams struct {
 	Before       int64             `json:"before"`
 	Limit        int               `json:"limit"`
 	Cookies      map[string]string `json:"cookies"`
+	RequestList  string            `json:"requestList"`
+	More         bool              `json:"more"`
 
 	// What the app read from Messenger's web app (the web.* requests).
 	Rows     []webThreadRow `json:"rows"`
@@ -134,6 +136,11 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return nil, c.sendTyping(ctx, p.ThreadID, p.IsTyping)
 	case "threads.mute":
 		return nil, c.muteThread(ctx, p.ThreadID, p.Enabled)
+	case "requests.load":
+		// A page of a request list ("mayKnow" or "spam"); `more`: the next one.
+		return nil, c.loadRequests(ctx, p.RequestList, p.More)
+	case "requests.accept":
+		return nil, c.acceptRequest(ctx, p.ThreadID)
 	case "threads.delete":
 		return nil, c.deleteThread(ctx, p.ThreadID)
 	case "threads.leave":

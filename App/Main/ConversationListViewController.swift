@@ -3,7 +3,7 @@ import Combine
 
 enum ConversationFilter: Int, CaseIterable {
     // The raw values are stored (the chosen filter), so new cases get new ones.
-    case all = 0, messages = 1, groups = 3, marketplace = 2
+    case all = 0, messages = 1, groups = 3, marketplace = 2, requests = 4
 
     var title: String {
         switch self {
@@ -11,15 +11,19 @@ enum ConversationFilter: Int, CaseIterable {
         case .messages: "Messages"
         case .groups: "Groups"
         case .marketplace: "Marketplace"
+        case .requests: "Requests"
         }
     }
 
     func includes(_ conversation: Conversation) -> Bool {
+        // Requests only show under their own filter.
+        guard self != .requests else { return conversation.isRequest }
+        guard !conversation.isRequest else { return false }
         switch self {
-        case .all: true
-        case .messages: !conversation.isGroup && !conversation.isMarketplace
-        case .groups: conversation.isGroup && !conversation.isMarketplace
-        case .marketplace: conversation.isMarketplace
+        case .all, .requests: return true
+        case .messages: return !conversation.isGroup && !conversation.isMarketplace
+        case .groups: return conversation.isGroup && !conversation.isMarketplace
+        case .marketplace: return conversation.isMarketplace
         }
     }
 }
@@ -32,9 +36,64 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
     var filter = ConversationFilter(rawValue: UserDefaults.standard.integer(forKey: filterKey)) ?? .all {
         didSet {
             UserDefaults.standard.set(filter.rawValue, forKey: Self.filterKey)
+            updateRequestsHeader()
+            if filter == .requests {
+                requestsExhausted = []
+                Task { await store.loadRequests(requestTab) }
+            }
             reload()
             onFilterChanged?()
         }
+    }
+
+    // MARK: Message requests
+
+    /// Which request list the Requests filter shows.
+    private var requestTab: RequestList = .mayKnow {
+        didSet {
+            requestsHeader.tab = requestTab
+            if requestTab != oldValue {
+                Task { await store.loadRequests(requestTab) }
+                reload()
+            }
+        }
+    }
+
+    /// Request lists whose last page brought nothing new: they're all loaded.
+    private var requestsExhausted: Set<RequestList> = []
+
+    /// The open request list's next page (Messenger sends a few requests per page).
+    private func loadMoreRequests() {
+        guard filter == .requests, !isLoadingMore, !requestsExhausted.contains(requestTab) else { return }
+        let tab = requestTab
+        let count = { self.store.requests.count { $0.requestList == tab } }
+        let before = count()
+        isLoadingMore = true
+        Task {
+            await store.loadRequests(tab, more: true)
+            // The page's chats arrive shortly after, over the connection.
+            try? await Task.sleep(for: .seconds(2))
+            if count() == before { requestsExhausted.insert(tab) }
+            isLoadingMore = false
+            reload()
+        }
+    }
+
+    private lazy var requestsHeader: RequestsHeaderView = {
+        let header = RequestsHeaderView()
+        header.onTabChange = { [weak self] tab in self?.requestTab = tab }
+        return header
+    }()
+
+    private var endsAtSearchField: NSLayoutConstraint?
+    private var endsAtRequestsHeader: NSLayoutConstraint?
+
+    /// The Requests header shows under the search field while the list shows requests.
+    private func updateRequestsHeader() {
+        let showsRequests = filter == .requests
+        requestsHeader.isHidden = !showsRequests
+        endsAtRequestsHeader?.isActive = showsRequests
+        endsAtSearchField?.isActive = !showsRequests
     }
 
     private let store = ChatStore.shared
@@ -48,21 +107,30 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
     private var cancellables: Set<AnyCancellable> = []
     private var isLoadingMore = false
 
-    /// The search field, shown above the sidebar's list (which scrolls under it, like Messages).
+    /// The search field, shown above the sidebar's list (which scrolls under it, like Messages),
+    /// with the Requests header under it while the list shows message requests.
     lazy var searchAccessory: NSSplitViewItemAccessoryViewController = {
         searchField.placeholderString = "Search"
         searchField.delegate = self
         searchField.sendsSearchStringImmediately = true
         searchField.controlSize = .large
         searchField.translatesAutoresizingMaskIntoConstraints = false
+        requestsHeader.translatesAutoresizingMaskIntoConstraints = false
         let container = NSView()
         container.addSubview(searchField)
+        container.addSubview(requestsHeader)
+        // The bottom is the search field's, or the Requests header's while it shows.
+        endsAtSearchField = container.bottomAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8)
+        endsAtRequestsHeader = container.bottomAnchor.constraint(equalTo: requestsHeader.bottomAnchor)
         NSLayoutConstraint.activate([
             searchField.topAnchor.constraint(equalTo: container.topAnchor, constant: 4),
-            searchField.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8),
             searchField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
             searchField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+            requestsHeader.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 10),
+            requestsHeader.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            requestsHeader.trailingAnchor.constraint(equalTo: container.trailingAnchor),
         ])
+        updateRequestsHeader()
         let accessory = NSSplitViewItemAccessoryViewController()
         accessory.view = container
         accessory.automaticallyAppliesContentInsets = false
@@ -161,8 +229,13 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         searchField.stringValue = ""
         selectedID = threadID
         onSelect?(threadID)
-        if let conversation = store.conversation(threadID), !filter.includes(conversation) {
-            filter = .all
+        if let conversation = store.conversation(threadID) {
+            if let list = conversation.requestList {
+                requestTab = list
+                if filter != .requests { filter = .requests }
+            } else if !filter.includes(conversation) {
+                filter = .all
+            }
         }
         reload()
         if let index = rows.firstIndex(where: { $0.id == threadID }) {
@@ -172,23 +245,27 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
 
     private func reload() {
         let query = searchField.stringValue.trimmingCharacters(in: .whitespaces)
-        var conversations = store.conversations
+        var conversations = filter == .requests ? store.requests : store.conversations
         // As many chats as Messenger web's list has loaded (scrolling to the bottom loads more),
         // and the open one; searching finds them all.
         let listed = WebChatImporter.shared.listedChats
-        if query.isEmpty, listed > 0 {
+        if query.isEmpty, listed > 0, filter != .requests {
             let selectedIndex = selectedID.flatMap { id in conversations.firstIndex { $0.id == id } } ?? -1
             conversations = Array(conversations.prefix(max(listed, selectedIndex + 1)))
         }
         rows = conversations.filter {
             // Ignoring case and accents: "peter" finds "Péter".
-            filter.includes($0) && (query.isEmpty || $0.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil)
+            filter.includes($0) && (filter != .requests || $0.requestList == requestTab)
+                && (query.isEmpty || $0.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil)
         }
         showsLoadingRow = WebChatImporter.shared.isLoadingMoreChats && query.isEmpty
         tableView.reloadData()
         // A list too short to scroll can't reach its bottom: load more right away, as the web does.
         if query.isEmpty, filter == .all, listed > 0, tableView.bounds.height <= scrollView.contentView.bounds.height {
             WebChatImporter.shared.loadMore()
+        }
+        if query.isEmpty, filter == .requests, tableView.bounds.height <= scrollView.contentView.bounds.height {
+            loadMoreRequests()
         }
         if !didAutoSelect, let first = rows.first {
             didAutoSelect = true
@@ -228,8 +305,12 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
 
     @objc private func scrolled() {
         let visible = scrollView.contentView.bounds
-        guard !isLoadingMore, rows.count > 10,
-              visible.maxY > tableView.bounds.height - 400 else { return }
+        guard !isLoadingMore, visible.maxY > tableView.bounds.height - 400 else { return }
+        if filter == .requests {
+            loadMoreRequests()
+            return
+        }
+        guard rows.count > 10 else { return }
         isLoadingMore = true
         // The web chat list's next page: it shows more chats here too.
         WebChatImporter.shared.loadMore()
