@@ -390,8 +390,10 @@ final class WebHistoryImporter {
         do {
             struct WebIDResult: Decodable { let webID: String }
             struct Params: Encodable { let threadID: String }
+            struct PathResult: Decodable { let path: String }
             let webID = try await CoreBridge.shared.call("web.threadWebID", Params(threadID: threadID), as: WebIDResult.self).webID
-            guard !webID.isEmpty else {
+            let path = try await CoreBridge.shared.call("web.threadPath", Params(threadID: threadID), as: PathResult.self).path
+            guard !webID.isEmpty, !path.isEmpty else {
                 CoreBridge.shared.log("WebHistoryImporter: no web chat known for \(threadID)")
                 return (.needsRestore, "The chat isn't on Messenger web's chat list yet.")
             }
@@ -408,7 +410,7 @@ final class WebHistoryImporter {
                 // Closed while it waited for the page.
                 guard !currentStopped else { throw CancellationError() }
                 setStage(.openingChat)
-                await web.navigate(toPath: "/messages/e2ee/t/\(webID)/", fresh: true)
+                await web.navigate(toPath: path, fresh: true)
                 setStage(.finding)
                 // The collect script reports where it is in window.__mmImport.
                 var lastProgress: Progress?

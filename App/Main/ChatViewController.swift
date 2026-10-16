@@ -466,11 +466,11 @@ final class ChatViewController: NSViewController {
         let messages = store.messages(in: threadID)
         let seenAt = Self.readPositions(in: messages, of: conversation, selfID: store.account?.id)
         var result: [Row] = []
-        if conversation.isRequest {
-            // No restore prompt or history loading: a request is what Messenger sent with it.
-        } else if WebHistoryImporter.shared.isPending(threadID) {
+        if WebHistoryImporter.shared.isPending(threadID) {
             // Queued or being imported from the web app (e.g. still downloading after a restore).
             result.append(.loading)
+        } else if conversation.isRequest {
+            // No restore prompt or older history: a request is what Messenger sent with it.
         } else if conversation.isEncrypted && (messages.isEmpty || WebHistoryImporter.shared.needsRestore.contains(threadID)) {
             result.append(.restore)
         } else if !messages.isEmpty && (store.hasOlderMessages(threadID) || WebHistoryImporter.shared.hasEarlier(threadID)) {
@@ -501,6 +501,9 @@ final class ChatViewController: NSViewController {
 
         if let status = Self.statusRow(for: messages, seenAt: seenAt) {
             result.append(status)
+        }
+        if conversation.isRequest {
+            result.append(.caption(requestInfo(for: conversation), .center))
         }
         if !(store.typing[threadID]?.isEmpty ?? true) || isTypingLingering {
             result.append(.typing)

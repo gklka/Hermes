@@ -48,50 +48,41 @@ final class RequestsHeaderView: NSView {
     }
 }
 
-/// Instead of the compose bar in a message request: what accepting means, and Block, Delete
-/// and Accept, like Messenger's.
+/// Instead of the compose bar in a message request: Block, Delete and Accept, like Messenger's,
+/// as Liquid Glass buttons over the messages (what accepting means is the chat's last caption).
 final class RequestActionsView: NSView {
     var onBlock: (() -> Void)?
     var onDelete: (() -> Void)?
     var onAccept: (() -> Void)?
 
-    private let info = NSTextField(wrappingLabelWithString: "")
     private let blockButton = NSButton(title: "Block", target: nil, action: nil)
     private let deleteButton = NSButton(title: "Delete", target: nil, action: nil)
     private let acceptButton = NSButton(title: "Accept", target: nil, action: nil)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        info.font = .systemFont(ofSize: 12)
-        info.textColor = .secondaryLabelColor
-        info.alignment = .center
-
         for (button, action) in [(blockButton, #selector(blockClicked)), (deleteButton, #selector(deleteClicked)),
                                  (acceptButton, #selector(acceptClicked))] {
             button.target = self
             button.action = action
-            button.bezelStyle = .push
+            button.bezelStyle = .glass
+            button.borderShape = .capsule
             button.controlSize = .large
         }
         blockButton.hasDestructiveAction = true
         deleteButton.hasDestructiveAction = true
+        acceptButton.tintProminence = .primary
         acceptButton.keyEquivalent = "\r"
         let buttons = NSStackView(views: [blockButton, deleteButton, acceptButton])
         buttons.distribution = .fillEqually
         buttons.spacing = 10
-
-        let stack = NSStackView(views: [info, buttons])
-        stack.orientation = .vertical
-        stack.spacing = 12
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
+        buttons.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(buttons)
         NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 12),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -16),
-            buttons.widthAnchor.constraint(equalTo: stack.widthAnchor),
-            info.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            buttons.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            buttons.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
+            buttons.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            buttons.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
         ])
     }
 
@@ -99,10 +90,7 @@ final class RequestActionsView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     /// A group request can't be blocked (that's for people), only deleted or accepted.
-    func configure(name: String, isGroup: Bool) {
-        info.stringValue = isGroup
-            ? "If you accept, the chat moves to your chats, and its members can see when you've read their messages."
-            : "If you accept, \(name) can also call you and see info like your Active status and when you've read their messages."
+    func configure(isGroup: Bool) {
         blockButton.isHidden = isGroup
     }
 

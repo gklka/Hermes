@@ -485,12 +485,18 @@ func (c *Core) webThreadID(threadID string) string {
 }
 
 // webThreadPath is where the web app shows a chat, or "" if the encrypted chat's web ID isn't known yet.
+// Message requests live under /requests/ (the plain path redirects elsewhere).
 func (c *Core) webThreadPath(threadID string) string {
-	if t := c.store.GetThread(threadID); t != nil && t.Type.IsWhatsApp() {
+	t := c.store.GetThread(threadID)
+	requests := ""
+	if t != nil && t.IsRequest() {
+		requests = "requests/"
+	}
+	if t != nil && t.Type.IsWhatsApp() {
 		if webID := c.webThreadID(threadID); webID != "" {
-			return "/messages/e2ee/t/" + webID + "/"
+			return "/messages/e2ee/" + requests + "t/" + webID + "/"
 		}
 		return ""
 	}
-	return fmt.Sprintf("/messages/t/%d/", c.fbThreadKey(threadID))
+	return fmt.Sprintf("/messages/%st/%d/", requests, c.fbThreadKey(threadID))
 }

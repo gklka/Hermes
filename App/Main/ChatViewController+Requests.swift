@@ -19,8 +19,15 @@ extension ChatViewController {
         composeAccessory.isHidden = threadID == nil || isRequest
         requestAccessory.isHidden = !isRequest
         if let conversation, isRequest {
-            requestBar.configure(name: senderName(of: conversation), isGroup: conversation.isGroup)
+            requestBar.configure(isGroup: conversation.isGroup)
         }
+    }
+
+    /// Under a request's messages: what accepting it means.
+    func requestInfo(for conversation: Conversation) -> String {
+        conversation.isGroup
+            ? "If you accept, the chat moves to your chats, and its members can see when you've read their messages."
+            : "If you accept, \(senderName(of: conversation)) can also call you and see info like your Active status and when you've read their messages."
     }
 
     /// The person who wrote (a 1:1 request's other participant).

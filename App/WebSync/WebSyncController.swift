@@ -273,6 +273,10 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
     /// `fresh`: if the page is already there, it's loaded again (a chat scrolled through by an
     /// earlier reader can stop loading older messages).
     func navigate(toPath path: String, fresh: Bool = false) async {
+        if path.contains("/requests/t/") {
+            await openRequest(path, fresh: fresh)
+            return
+        }
         let trimmed = { (p: String) in p.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
         if let current = webView.url?.path, trimmed(current) == trimmed(path) {
             guard fresh else { return }
@@ -292,6 +296,44 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
         hasLoaded = false
         webView.load(URLRequest(url: URL(string: "https://www.facebook.com\(path)")!))
         await withCheckedContinuation { loadWaiters.append($0) }
+    }
+
+    /// Messenger web opens a message request only from its Requests list: the request's own
+    /// address redirects to another chat until the list has loaded it. The request is under
+    /// one of the list's tabs (You May Know, Spam: the last ones, tried first).
+    private func openRequest(_ path: String, fresh: Bool) async {
+        if fresh || webView.url == nil {
+            hasLoaded = false
+            webView.load(URLRequest(url: URL(string: "https://www.facebook.com/messages/requests/")!))
+            await withCheckedContinuation { loadWaiters.append($0) }
+        }
+        let script = """
+        const sleep = ms => new Promise(r => setTimeout(r, ms));
+        const find = () => document.querySelector('a[href="\(path)"]');
+        if (!location.pathname.startsWith('/messages/requests')) {
+          history.pushState({}, '', '/messages/requests/');
+          dispatchEvent(new PopStateEvent('popstate'));
+        }
+        const tabs = () => Array.from(document.querySelectorAll('[role="tab"]'));
+        for (let i = 0; i < 30 && !tabs().length; i++) await sleep(500);
+        // Right after the page loads, a tab's list can take a while to fill.
+        let link = null;
+        for (let i = 0; i < 10 && !(link = find()); i++) await sleep(500);
+        const count = tabs().length;
+        for (let t = count - 1; t >= 0 && !link; t--) {
+          const tab = tabs()[t];
+          if (!tab) continue;
+          tab.click();
+          for (let i = 0; i < 24 && !(link = find()); i++) await sleep(500);
+        }
+        if (!link) return JSON.stringify(false);
+        link.click();
+        for (let i = 0; i < 20 && location.pathname !== '\(path)'; i++) await sleep(500);
+        return JSON.stringify(true);
+        """
+        if (try? await evaluate(script, as: Bool.self)) != true {
+            CoreBridge.shared.log("WebSync: \(path) isn't on Messenger web's Requests list")
+        }
     }
 
     /// Bump to wipe the web view's stored data once (e.g. after changing how it identifies itself).
