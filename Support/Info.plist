@@ -25,5 +25,10 @@
 	<!-- Show Contact Card: finding the person of a chat among your contacts (ContactCards). -->
 	<key>NSContactsUsageDescription</key>
 	<string>Hermes finds the people you chat with in your contacts to show their contact cards.</string>
+	<!-- Audio and video calls (CallManager). -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Hermes uses the microphone for Messenger calls.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Hermes uses the camera for Messenger video calls.</string>
 </dict>
 </plist>

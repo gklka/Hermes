@@ -86,6 +86,17 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         window.title = conversation?.name ?? "Messenger"
         window.subtitle = Self.subtitle(for: conversation)
         infoToolbarItem?.isHidden = conversation?.isGroup != true
+        callToolbarItems.forEach { $0.isHidden = conversation == nil }
+    }
+
+    @objc func startAudioCall(_ sender: Any?) {
+        guard let conversation = split.selectedConversation else { return }
+        CallManager.shared.startCall(threadID: conversation.id, video: false)
+    }
+
+    @objc func startVideoCall(_ sender: Any?) {
+        guard let conversation = split.selectedConversation else { return }
+        CallManager.shared.startCall(threadID: conversation.id, video: true)
     }
 
     /// The info button: the group chat's members.
@@ -185,7 +196,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
             let unread = (split.selectedConversation?.unreadCount ?? 0) > 0
             menuItem.title = unread ? "Mark as Read" : "Mark as Unread"
             return split.selectedConversation != nil
-        case #selector(sendLike(_:)), #selector(editMessage(_:)), #selector(findInChat(_:)), #selector(exportChat(_:)), #selector(refreshChat(_:)):
+        case #selector(sendLike(_:)), #selector(editMessage(_:)), #selector(findInChat(_:)), #selector(exportChat(_:)), #selector(refreshChat(_:)),
+             #selector(startAudioCall(_:)), #selector(startVideoCall(_:)):
             return split.selectedConversation != nil
         default:
             break
@@ -214,9 +226,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
     private weak var filterItem: NSMenuToolbarItem?
     private weak var newMessageToolbarItem: NSToolbarItem?
     private weak var infoToolbarItem: NSToolbarItem?
+    private var callToolbarItems: [NSToolbarItem] = []
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .flexibleSpace, Self.filterItemID, Self.newMessageItem, .sidebarTrackingSeparator, .flexibleSpace, Self.infoItem]
+        [.toggleSidebar, .flexibleSpace, Self.filterItemID, Self.newMessageItem, .sidebarTrackingSeparator, .flexibleSpace,
+         CallManager.audioCallItem, CallManager.videoCallItem, Self.infoItem]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -261,6 +275,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
             item.action = #selector(showMembers(_:))
             item.isHidden = split.selectedConversation?.isGroup != true
             infoToolbarItem = item
+            return item
+        case CallManager.audioCallItem, CallManager.videoCallItem:
+            let item = CallManager.toolbarItem(itemIdentifier, target: self)
+            item.isHidden = split.selectedConversation == nil
+            callToolbarItems.append(item)
             return item
         default:
             return nil

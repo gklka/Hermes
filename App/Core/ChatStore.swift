@@ -220,9 +220,14 @@ final class ChatStore {
 
     /// The chat on facebook.com; Messenger's inbox for an encrypted chat whose web ID isn't known yet.
     func webURL(for threadID: String) async -> URL? {
+        Facebook.url(await webPath(for: threadID) ?? "/messages/")
+    }
+
+    /// The chat's path on facebook.com ("/messages/t/123/"); nil for an encrypted chat whose web ID isn't known yet.
+    func webPath(for threadID: String) async -> String? {
         struct Result: Decodable { let path: String }
         let path = (try? await core.call("web.threadPath", ThreadParams(threadID: threadID), as: Result.self).path) ?? ""
-        return Facebook.url(path.isEmpty ? "/messages/" : path)
+        return path.isEmpty ? nil : path
     }
 
     // MARK: - Search

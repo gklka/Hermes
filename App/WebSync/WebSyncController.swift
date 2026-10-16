@@ -25,7 +25,10 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
         if UserDefaults.standard.bool(forKey: "WebNetLog") {
             config.userContentController.addUserScript(WebDOMInspector.networkLogScript)
         }
+        CallManager.install(in: config)
         webView = InvisibleWhenTransparentWebView(frame: NSRect(x: 0, y: 0, width: 1100, height: 800), configuration: config)
+        // Calls open in popups, shown in call windows.
+        webView.uiDelegate = CallManager.shared
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1100, height: 800),

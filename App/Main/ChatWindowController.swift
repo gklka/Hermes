@@ -136,7 +136,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.headerItem, .flexibleSpace, Self.infoItem]
+        [Self.headerItem, .flexibleSpace, CallManager.audioCallItem, CallManager.videoCallItem, Self.infoItem]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -155,6 +155,9 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             item.isHidden = conversation?.isGroup != true
             infoToolbarItem = item
             return item
+        }
+        if itemIdentifier == CallManager.audioCallItem || itemIdentifier == CallManager.videoCallItem {
+            return CallManager.toolbarItem(itemIdentifier, target: self)
         }
         guard itemIdentifier == Self.headerItem else { return nil }
         let item = NSToolbarItem(itemIdentifier: itemIdentifier)
@@ -216,6 +219,14 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     @objc func toggleUnread(_ sender: Any?) {
         guard let conversation else { return }
         ChatStore.shared.toggleRead(conversation)
+    }
+
+    @objc func startAudioCall(_ sender: Any?) {
+        CallManager.shared.startCall(threadID: threadID, video: false)
+    }
+
+    @objc func startVideoCall(_ sender: Any?) {
+        CallManager.shared.startCall(threadID: threadID, video: true)
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
