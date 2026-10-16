@@ -436,6 +436,11 @@ final class ChatStore {
     /// Accepts a message request: the chat moves to your chats.
     func acceptRequest(_ threadID: String) async throws {
         try await core.call("requests.accept", ThreadParams(threadID: threadID))
+        // One of your chats now, right away (the core's update comes after), so selecting it
+        // shows it in the chat list.
+        conversationsByID[threadID]?.requestList = nil
+        resortConversations()
+        flushChanges()
     }
 
     func deleteThread(_ threadID: String) async throws {
