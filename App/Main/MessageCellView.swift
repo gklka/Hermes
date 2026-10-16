@@ -521,6 +521,9 @@ final class MessageCellView: NSTableCellView {
         return attachmentsStack.isHidden ? self : attachmentsStack
     }
 
+    /// The sender's avatar (group chats), for showing their contact card next to it.
+    var avatarView: NSView? { avatar.isHidden ? nil : avatar }
+
     /// The message (or typing bubble) arriving: the bubble and what belongs to it zoom in.
     func animateArrival() {
         column.animateAppearance()

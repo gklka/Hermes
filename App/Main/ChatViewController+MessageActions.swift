@@ -285,20 +285,31 @@ extension ChatViewController: MessageCellDelegate {
     private struct Sender {
         let id: String
         let name: String
+        /// The message whose avatar was clicked (its cell anchors the contact card).
+        let messageID: String
     }
 
     func messageCell(_ cell: MessageCellView, menuForSenderOf message: ChatMessage) -> NSMenu? {
         guard !message.isFromMe else { return nil }
-        let sender = Sender(id: message.senderID, name: store.participant(message.senderID, in: message.threadID)?.name ?? "Unknown")
+        let sender = Sender(id: message.senderID, name: store.participant(message.senderID, in: message.threadID)?.name ?? "Unknown",
+                            messageID: message.id)
         let menu = NSMenu()
-        func add(_ title: String, symbol: String, action: Selector) {
+        @discardableResult
+        func add(_ title: String, symbol: String, action: Selector) -> NSMenuItem {
             let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
             item.target = self
             item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
             item.representedObject = sender
+            return item
         }
         add("Message", symbol: "message", action: #selector(messageSender(_:)))
         add("View Profile", symbol: "person.crop.circle", action: #selector(viewSenderProfile(_:)))
+        // Enabled when the person is among the contacts (or before access was asked for).
+        let contacts = ContactCards.shared
+        let card = add("Show Contact Card", symbol: "person.text.rectangle", action: #selector(showSenderContactCard(_:)))
+        if !contacts.canAsk, contacts.match(userID: sender.id, name: sender.name) == nil {
+            card.action = nil
+        }
         menu.addItem(.separator())
         add("Block…", symbol: "person.crop.circle.badge.xmark", action: #selector(blockSender(_:)))
         return menu
@@ -320,6 +331,20 @@ extension ChatViewController: MessageCellDelegate {
     @objc private func viewSenderProfile(_ sender: NSMenuItem) {
         guard let person = sender.representedObject as? Sender, let url = Facebook.profileURL(of: person.id) else { return }
         NSWorkspace.shared.open(url)
+    }
+
+    /// Their card from the Contacts app, next to the clicked avatar.
+    @objc private func showSenderContactCard(_ sender: NSMenuItem) {
+        guard let person = sender.representedObject as? Sender else { return }
+        Task {
+            guard let identifier = await ContactCards.shared.findMatch(userID: person.id, name: person.name) else {
+                NSSound.beep()
+                return
+            }
+            let cell = visibleCells(MessageCellView.self).first { $0.cell.message?.id == person.messageID }?.cell
+            guard let anchor = cell?.avatarView ?? cell else { return }
+            ContactCards.shared.showCard(identifier, relativeTo: anchor.bounds, of: anchor)
+        }
     }
 
     @objc private func blockSender(_ sender: NSMenuItem) {

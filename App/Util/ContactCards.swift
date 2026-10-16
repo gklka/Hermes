@@ -2,7 +2,7 @@ import AppKit
 import Contacts
 import ContactsUI
 
-/// Show Contact Card: finds the person of a 1:1 chat among the Mac's contacts and shows their
+/// Show Contact Card: finds the person of a 1:1 chat (or a group chat sender) among the Mac's contacts and shows their
 /// card. A Facebook link on the card (a Facebook profile, or a facebook.com URL with their user
 /// ID) matches; otherwise their name does, if exactly one contact has it.
 final class ContactCards {
