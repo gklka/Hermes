@@ -22,5 +22,8 @@
 			</array>
 		</dict>
 	</array>
+	<!-- Show Contact Card: finding the person of a chat among your contacts (ContactCards). -->
+	<key>NSContactsUsageDescription</key>
+	<string>Hermes finds the people you chat with in your contacts to show their contact cards.</string>
 </dict>
 </plist>
