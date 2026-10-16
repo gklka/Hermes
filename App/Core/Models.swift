@@ -51,6 +51,8 @@ struct ReplyPreview: Codable, Hashable {
 struct Attachment: Codable, Hashable {
     enum Kind: String, Codable {
         case image, gif, video, audio, sticker, file, link
+        /// A call in the chat (the message's sender called); see `call`.
+        case call
     }
 
     let id: String
@@ -63,6 +65,21 @@ struct Attachment: Codable, Hashable {
     var filename: String?
     var mimeType: String?
     var title: String?
+    var call: Call?
+
+    struct Call: Codable, Hashable {
+        enum Outcome: String, Codable {
+            /// Ringing or going on.
+            case started, ended, missed
+        }
+
+        let isVideo: Bool
+        let outcome: Outcome
+        /// Seconds, when known (encrypted chats).
+        var duration: Int?
+        /// Messenger's own wording of the duration ("9 perc"), in regular chats.
+        var durationText: String?
+    }
 }
 
 extension Attachment.Kind {
@@ -76,6 +93,7 @@ extension Attachment.Kind {
         case .audio: "Voice Message"
         case .file: "File"
         case .link: "Link"
+        case .call: "Call"
         }
     }
 }

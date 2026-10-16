@@ -88,7 +88,52 @@ func OpenStore(path string) (*Store, error) {
 	}
 	// Columns added since: these fail harmlessly once they exist.
 	_, _ = db.Exec(`ALTER TABLE messages ADD COLUMN mentions TEXT NOT NULL DEFAULT '[]'`)
-	return &Store{db: db}, nil
+	s := &Store{db: db}
+	s.convertCallLogLinks()
+	return s, nil
+}
+
+// convertCallLogLinks turns call log cards stored as links (before calls had their own kind)
+// into calls, once. Only their localized title is known: "video" in it means a video call
+// ("Video call", "Videohívás"), "missed" or "Nem fogadott" a missed one. Fetched again, they get
+// the exact details (callFromXMA).
+func (s *Store) convertCallLogLinks() {
+	const done = "migration.callLogLinks"
+	if s.Get(done) != "" {
+		return
+	}
+	rows, err := s.db.Query(`SELECT id, attachments FROM messages WHERE attachments LIKE '%"id":"cl.%'`)
+	if err != nil {
+		return
+	}
+	updates := map[string]string{}
+	for rows.Next() {
+		var id, raw string
+		var attachments []storedAttachment
+		if rows.Scan(&id, &raw) != nil || json.Unmarshal([]byte(raw), &attachments) != nil {
+			continue
+		}
+		for i, a := range attachments {
+			if a.Kind != kindLink || !strings.HasPrefix(a.ID, "cl.") {
+				continue
+			}
+			title := strings.ToLower(a.Title)
+			call := &apiCall{IsVideo: strings.Contains(title, "video"), Outcome: callEnded}
+			if strings.Contains(title, "missed") || strings.Contains(title, "nem fogadott") {
+				call.Outcome = callMissed
+			}
+			attachments[i].Kind = kindCall
+			attachments[i].Call = call
+		}
+		if data, err := json.Marshal(attachments); err == nil {
+			updates[id] = string(data)
+		}
+	}
+	rows.Close()
+	for id, data := range updates {
+		_, _ = s.db.Exec(`UPDATE messages SET attachments=? WHERE id=?`, data, id)
+	}
+	s.Set(done, "1")
 }
 
 // Wipe deletes all account data (used on logout).

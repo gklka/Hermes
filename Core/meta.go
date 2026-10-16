@@ -3,6 +3,7 @@ package main
 import (
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 
 	"go.mau.fi/mautrix-meta/pkg/messagix/socket"
@@ -396,6 +397,10 @@ func (c *Core) storeFBMessage(m *table.WrappedMessage, cs *changeSet) {
 		}
 	}
 	for _, x := range m.XMAAttachments {
+		if call := callFromXMA(x); call != nil {
+			add(apiAttachment{ID: x.AttachmentFbid, Kind: kindCall, Title: x.TitleText, Call: call})
+			continue
+		}
 		add(apiAttachment{
 			ID: x.AttachmentFbid, Kind: kindLink, URL: x.ActionUrl, PreviewURL: x.PreviewUrl,
 			Width: int(x.PreviewWidth), Height: int(x.PreviewHeight), Title: firstNonEmpty(x.TitleText, x.SubtitleText),
@@ -418,7 +423,23 @@ func (c *Core) storeFBMessage(m *table.WrappedMessage, cs *changeSet) {
 	}
 }
 
-func mediaAttachment(id string, attachmentType table.AttachmentType, playable, preview string, w, h int, filename, mime string) apiAttachment {
+// callFromXMA reads a call log card ("Audio call · 9 min", with Call Back): its button's type
+// is "xma_rtc_<outcome>_<audio|video>" (e.g. xma_rtc_ended_audio, xma_rtc_missed_video).
+func callFromXMA(x *table.WrappedXMA) *apiCall {
+	if x.CTA == nil || !strings.HasPrefix(x.CTA.Type_, "xma_rtc_") {
+		return nil
+	}
+	kind := x.CTA.Type_
+	call := &apiCall{IsVideo: strings.HasSuffix(kind, "_video"), Outcome: callEnded}
+	if strings.Contains(kind, "missed") {
+		call.Outcome = callMissed
+	} else {
+		call.DurationText = x.SubtitleText
+	}
+	return call
+}
+
+func mediaAttachment(id string,attachmentType table.AttachmentType, playable, preview string, w, h int, filename, mime string) apiAttachment {
 	a := apiAttachment{ID: id, URL: firstNonEmpty(playable, preview), PreviewURL: preview, Width: w, Height: h, Filename: filename, MimeType: mime}
 	switch attachmentType {
 	case table.AttachmentTypeImage, table.AttachmentTypeEphemeralImage:

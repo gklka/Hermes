@@ -269,6 +269,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         case .sticker: return "Sent a sticker"
         case .file: return "Sent a file"
         case .link: return first.url ?? "Sent a link"
+        case .call: return first.call.map { CallText.title(of: $0, outgoing: message.isFromMe) } ?? "Call"
         }
     }
 

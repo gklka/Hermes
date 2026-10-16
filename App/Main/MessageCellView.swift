@@ -345,6 +345,10 @@ final class MessageCellView: NSTableCellView {
                 view.removeFromSuperview()
             }
             for attachment in shown {
+                if attachment.kind == .call, let call = attachment.call {
+                    attachmentsStack.addArrangedSubview(CallCardView(call: call, message: message))
+                    continue
+                }
                 let view = AttachmentView(attachment: attachment, message: message, maxWidth: key.maxWidth)
                 view.onOpen = { [weak self] in
                     guard let self, let message = self.message else { return }

@@ -313,7 +313,8 @@ func (c *Core) forgetAccount() {
 // MARK: - Connection
 
 func (c *Core) newClient(ck *cookies.Cookies) *messagix.Client {
-	return messagix.NewClient(ck, c.log.With().Str("component", "messagix").Logger(), &messagix.Config{
+	log := c.log.With().Str("component", "messagix").Logger().Hook(callNotificationHook{c})
+	return messagix.NewClient(ck, log, &messagix.Config{
 		ClientSettings: exhttp.SensibleClientSettings,
 	})
 }

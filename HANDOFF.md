@@ -102,6 +102,7 @@ Share extension (ShareExtension/) ──App Group files + hermes:// URL──▶
   - `WebDOMInspector.swift`: dev hooks (`defaults write <bundle ID> WebDumpEnabled -bool YES`; `webeval.js` in the data folder runs in the page).
 - **`Calls/`**: audio and video calls through the hidden web view (Meta's calling has no open implementation).
   - `CallManager.swift`: outgoing calls click the web chat header's call button (found by its SVG icon path, since labels are localized); the page opens a blank popup (`createWebViewWith`), which becomes a `CallWindowController`. Popups are only accepted when a call expects one. Grants mic/camera to call pages on facebook.com. Incoming calls: a page script wraps the `/ws/rpsignaling` WebSocket (otherwise only 1-byte keepalives); a real frame starts watching for a new dialog, whose buttons are mirrored in `IncomingCallPanel` (red = decline, green = answer). Logs `Calls:` lines (frames, the dialog, or a page snapshot when no dialog showed up). Outgoing calls work (2026-10-16); incoming ones are untested.
+  - `CallCardView.swift`: a call in the chat (attachment kind `call`), like Messenger's card with Call Back. The core makes them from regular chats' call log cards (CTA type `xma_rtc_<ended|missed>_<audio|video>`, `callFromXMA`) and, for encrypted chats, from whatsmeow's unhandled `fb:call` notifications, picked out of its log by a zerolog hook (`Core/calls.go`).
 - `Shared/`: `ShareHandoff` (how the extension and the app talk), `RoundAvatar`. `ShareExtension/`: the Share menu's chat picker.
 
 ### Data on disk

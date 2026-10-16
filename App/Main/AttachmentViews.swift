@@ -168,6 +168,9 @@ final class AttachmentView: NSView, NSDraggingSource {
                 subtitle: attachment.url.flatMap { URL(string: $0)?.host() },
                 maxWidth: maxWidth
             )
+        case .call:
+            // Shown by CallCardView; this is a fallback.
+            setUpPill(symbol: "phone", title: attachment.title ?? attachment.kind.label, subtitle: nil, maxWidth: maxWidth)
         }
 
         addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(clicked)))
@@ -372,7 +375,7 @@ final class AttachmentFilePromise: NSFilePromiseProvider, NSFilePromiseProviderD
         case .gif: return .gif
         case .video: return .mpeg4Movie
         case .audio: return .mpeg4Audio
-        case .file, .link: return .data
+        case .file, .link, .call: return .data
         }
     }
 

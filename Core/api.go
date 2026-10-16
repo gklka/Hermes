@@ -59,19 +59,38 @@ const (
 	kindSticker = "sticker"
 	kindFile    = "file"
 	kindLink    = "link"
+	// A call in the chat (its sender is the caller); details in apiAttachment.Call.
+	kindCall = "call"
 )
 
 type apiAttachment struct {
-	ID         string `json:"id"`
-	Kind       string `json:"kind"`
-	URL        string `json:"url,omitempty"`
-	PreviewURL string `json:"previewURL,omitempty"`
-	LocalPath  string `json:"localPath,omitempty"`
-	Width      int    `json:"width,omitempty"`
-	Height     int    `json:"height,omitempty"`
-	Filename   string `json:"filename,omitempty"`
-	MimeType   string `json:"mimeType,omitempty"`
-	Title      string `json:"title,omitempty"`
+	ID         string   `json:"id"`
+	Kind       string   `json:"kind"`
+	URL        string   `json:"url,omitempty"`
+	PreviewURL string   `json:"previewURL,omitempty"`
+	LocalPath  string   `json:"localPath,omitempty"`
+	Width      int      `json:"width,omitempty"`
+	Height     int      `json:"height,omitempty"`
+	Filename   string   `json:"filename,omitempty"`
+	MimeType   string   `json:"mimeType,omitempty"`
+	Title      string   `json:"title,omitempty"`
+	Call       *apiCall `json:"call,omitempty"`
+}
+
+// Call outcomes.
+const (
+	callStarted = "started" // still ringing or going on
+	callEnded   = "ended"
+	callMissed  = "missed"
+)
+
+type apiCall struct {
+	IsVideo bool   `json:"isVideo"`
+	Outcome string `json:"outcome"`
+	// Seconds, when known (encrypted chats).
+	Duration int `json:"duration,omitempty"`
+	// Messenger's own wording of the duration ("9 perc"), in regular chats.
+	DurationText string `json:"durationText,omitempty"`
 }
 
 // Message statuses. ("failed" is set by the app, when a send request fails.)
