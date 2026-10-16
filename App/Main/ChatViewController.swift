@@ -81,6 +81,9 @@ final class ChatViewController: NSViewController {
     var isLoadingOlder = false
     /// Loads in a row (at the top) that brought nothing older, to stop asking by itself.
     var olderLoadsWithoutNews = 0
+    /// The chat whose older messages were asked for because the spinner showed without
+    /// scrolling (a short chat can't scroll); once per chat shown, so it can't repeat forever.
+    var autoLoadedOlder: String?
     /// A message to scroll to and select once it's loaded (from a clicked notification, a
     /// Spotlight result or a Find in Chat result).
     var pendingReveal: String?
@@ -303,6 +306,7 @@ final class ChatViewController: NSViewController {
             stopTyping()
         }
         self.threadID = threadID
+        autoLoadedOlder = nil
         // Find in Chat and a lingering typing bubble belong to the chat they were in.
         resetSearch()
         endTypingLinger()
@@ -634,6 +638,19 @@ final class ChatViewController: NSViewController {
         alignGradients()
         if sameChat, !moved.isEmpty {
             slideReaders(moved, from: readerFramesBefore)
+        }
+        // The spinner at the top is on screen without scrolling (the chat is short): no scroll
+        // will ask for what's older, so it's asked for now.
+        let importer = WebHistoryImporter.shared
+        if case .loading = rows.first, let threadID, autoLoadedOlder != threadID, !importer.isPending(threadID),
+           scrollView.contentView.bounds.minY < 200 {
+            if store.reachedHistoryStart(threadID), importer.hasEarlier(threadID) {
+                autoLoadedOlder = threadID
+                importer.loadEarlier(threadID: threadID)
+            } else if !isLoadingOlder {
+                autoLoadedOlder = threadID
+                DispatchQueue.main.async { [weak self] in self?.scrolled() }
+            }
         }
     }
 }

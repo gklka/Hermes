@@ -433,13 +433,15 @@ final class WebHistoryImporter {
                 return (isRestoring ? .moreMayCome : .needsRestore, summary)
             }
             // Loading older messages can stall on the page and look like the chat's start; it
-            // isn't if an older encrypted message is stored (the page shows all of those).
+            // isn't if an older encrypted message is stored (the page shows all of those). Stored
+            // times are whole seconds and the page's come from message IDs, so the same message
+            // can differ by up to a few seconds.
             var reachedStart = result.reachedStart == true
             if reachedStart {
                 struct Oldest: Decodable { let timestamp: Int64 }
                 let oldestStored = try await CoreBridge.shared.call("web.oldestEncrypted", Params(threadID: threadID), as: Oldest.self).timestamp
                 let oldestRead = result.messages.compactMap { Self.timestamp(ofDOMID: $0.domID) }.min() ?? coverage?.oldest ?? .max
-                if oldestStored > 0, oldestStored < min(oldestRead, coverage?.oldest ?? .max) {
+                if oldestStored > 0, oldestStored < min(oldestRead, coverage?.oldest ?? .max) - 5000 {
                     CoreBridge.shared.log("WebHistoryImporter: \(threadID): loading stalled, not the chat's start")
                     reachedStart = false
                 }
