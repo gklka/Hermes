@@ -62,16 +62,20 @@ final class ContactCards {
         return match(userID: userID, name: name)
     }
 
-    /// The contact's card in a popover next to `rect` of `view`.
+    /// The contact's card in a popover next to `rect` of `view`, with a button opening it in Contacts.
     func showCard(_ identifier: String, relativeTo rect: NSRect, of view: NSView) {
         let keys = [CNContactViewController.descriptorForRequiredKeys()]
         guard let contact = try? store.unifiedContact(withIdentifier: identifier, keysToFetch: keys) else { return }
-        let controller = CNContactViewController()
-        controller.contact = contact
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentViewController = controller
-        popover.contentSize = NSSize(width: 360, height: 460)
+        popover.contentViewController = CardViewController(contact: contact) { [weak popover] in
+            popover?.close()
+            // Contacts opens the card for an addressbook:// link with its identifier.
+            if let url = URL(string: "addressbook://\(identifier)") {
+                NSWorkspace.shared.open(url)
+            }
+        }
+        popover.contentSize = NSSize(width: 360, height: 520)
         popover.show(relativeTo: rect, of: view, preferredEdge: .maxX)
     }
 
@@ -132,5 +136,49 @@ final class ContactCards {
     nonisolated private static func fold(_ name: String) -> String {
         name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
             .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+}
+
+/// The system's contact card under an Open with Contacts button, like Mail's.
+private final class CardViewController: NSViewController {
+    private let card = CNContactViewController()
+    private let onOpen: () -> Void
+
+    init(contact: CNContact, onOpen: @escaping () -> Void) {
+        self.onOpen = onOpen
+        super.init(nibName: nil, bundle: nil)
+        card.contact = contact
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        let container = NSView()
+        addChild(card)
+        let button = NSButton(title: "Open with Contacts", target: self, action: #selector(open))
+        button.bezelStyle = .push
+        button.controlSize = .large
+        // The card in a rounded inset below the button.
+        card.view.wantsLayer = true
+        card.view.layer?.cornerRadius = 18
+        card.view.layer?.masksToBounds = true
+        for view in [card.view, button] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            container.addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            button.topAnchor.constraint(equalTo: container.topAnchor, constant: 8),
+            button.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+            card.view.topAnchor.constraint(equalTo: button.bottomAnchor, constant: 8),
+            card.view.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
+            card.view.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+            card.view.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -8),
+        ])
+        view = container
+    }
+
+    @objc private func open() {
+        onOpen()
     }
 }
