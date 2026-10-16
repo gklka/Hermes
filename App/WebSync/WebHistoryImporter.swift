@@ -379,16 +379,31 @@ final class WebHistoryImporter {
                 await web.navigate(toPath: "/messages/e2ee/t/\(webID)/", fresh: true)
                 setStage(.finding)
                 // The collect script reports where it is in window.__mmImport.
+                var lastProgress: Progress?
+                var lastChange = Date()
                 let poll = Task {
                     while !Task.isCancelled {
                         try? await Task.sleep(for: .milliseconds(500))
                         guard let progress = try? await web.evaluate("return JSON.stringify(window.__mmImport || {})", as: Progress.self),
                               !Task.isCancelled else { continue }
+                        if progress != lastProgress {
+                            lastProgress = progress
+                            lastChange = Date()
+                        }
                         apply(progress, mode: job.mode, hasCoverage: coverage != nil)
                     }
                 }
                 defer { poll.cancel() }
-                return try await web.evaluate(script, as: Result.self)
+                do {
+                    // No progress for a while: the script is stuck (or its page was replaced).
+                    return try await web.evaluate(script, as: Result.self) {
+                        Date().timeIntervalSince(lastChange) > Self.stallTimeout
+                    }
+                } catch {
+                    CoreBridge.shared.log("WebHistoryImporter: \(threadID): \(error.localizedDescription); reloading the page")
+                    await web.reloadPage()
+                    throw error
+                }
             }
             if let error = result.error {
                 CoreBridge.shared.log("WebHistoryImporter: \(threadID): \(error)")
@@ -489,7 +504,10 @@ final class WebHistoryImporter {
     }
 
     /// The collect script's progress report.
-    nonisolated private struct Progress: Decodable {
+    /// Seconds without progress after which reading a chat is given up.
+    private static let stallTimeout: TimeInterval = 120
+
+    nonisolated private struct Progress: Decodable, Equatable {
         let phase: String?
         /// Messages read (not imported before).
         let fresh: Int?

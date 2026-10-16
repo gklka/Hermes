@@ -311,6 +311,33 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
         return try JSONDecoder().decode(T.self, from: Data(json.utf8))
     }
 
+    /// Like evaluate, but gives up (throws) once `giveUp` says so (checked every second). A
+    /// script whose page was replaced while it ran never returns.
+    func evaluate<T: Decodable>(_ script: String, as type: T.Type, giveUpWhen giveUp: @escaping () -> Bool) async throws -> T {
+        let once = ResumeOnce<T>()
+        return try await withCheckedThrowingContinuation { continuation in
+            once.continuation = continuation
+            Task {
+                do { once.finish(.success(try await self.evaluate(script, as: type))) } catch { once.finish(.failure(error)) }
+            }
+            Task {
+                while once.continuation != nil {
+                    try? await Task.sleep(for: .seconds(1))
+                    if once.continuation != nil, giveUp() {
+                        once.finish(.failure(CoreBridge.CoreError(message: "Messenger web stopped answering")))
+                    }
+                }
+            }
+        }
+    }
+
+    /// Loads Messenger again (after a script got stuck), waiting until it's loaded.
+    func reloadPage() async {
+        hasLoaded = false
+        webView.load(URLRequest(url: Self.messagesURL))
+        await withCheckedContinuation { loadWaiters.append($0) }
+    }
+
     // MARK: - WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -321,6 +348,16 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
             waiters.forEach { $0.resume() }
         }
         WebDOMInspector.pageDidLoad(self)
+    }
+}
+
+/// A continuation resumed by whichever finishes first (evaluate(_:as:giveUpWhen:)).
+private final class ResumeOnce<T> {
+    var continuation: CheckedContinuation<T, Error>?
+
+    func finish(_ result: Result<T, Error>) {
+        continuation?.resume(with: result)
+        continuation = nil
     }
 }
 
