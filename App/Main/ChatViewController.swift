@@ -13,6 +13,8 @@ final class ChatViewController: NSViewController {
     enum Row: Hashable {
         case separator(String)
         case caption(String, CaptionCellView.Placement)
+        /// A poll, under its system message ("… created a poll"), on its creator's side.
+        case pollCard(ChatMessage, Poll)
         /// "Not Delivered" under a failed message; clicking offers to resend or delete it.
         case notDelivered(ChatMessage)
         case restore
@@ -77,6 +79,12 @@ final class ChatViewController: NSViewController {
     /// The cell animating from typing to the message. Reloads (e.g. the read receipt right
     /// after) get this same cell for its row until it's done; a new cell would cut it short.
     var transitioning: (key: String, cell: MessageCellView, until: Date)?
+
+    // MARK: State of polls (PollViews)
+
+    /// Each poll's bubbles (by message), kept across reloads so changes to them animate (the
+    /// table makes new cells on every reload).
+    var pollViews: [String: PollBubblesView] = [:]
 
     // MARK: State of scrolling (+Scrolling)
 
@@ -311,6 +319,11 @@ final class ChatViewController: NSViewController {
             finishEditing()
         }
         let previous = self.threadID
+        if previous != threadID {
+            // A poll being made belongs to its chat.
+            compose.endPoll()
+            pollViews = [:]
+        }
         if let previous {
             drafts[previous] = compose.hasContent ? compose.draft : nil
             stopTyping()
@@ -478,7 +491,19 @@ final class ChatViewController: NSViewController {
             result.append(.loading)
         }
 
+        // Each poll's latest change (system messages about a poll, other than where it was made).
+        var latestPollChanges: [String: String] = [:]
+        for message in messages where message.isSystem {
+            if let poll = message.attachments.compactMap(\.poll).first, poll.options.isEmpty {
+                latestPollChanges[poll.id] = message.id
+            }
+        }
         for (index, message) in messages.enumerated() {
+            // Of a poll's changes ("… voted for …"), only the latest shows, like on Messenger's web app.
+            if message.isSystem, let poll = message.attachments.compactMap(\.poll).first, poll.options.isEmpty,
+               latestPollChanges[poll.id] != message.id {
+                continue
+            }
             let previous = index > 0 ? messages[index - 1] : nil
             let next = index + 1 < messages.count ? messages[index + 1] : nil
             let startsSection = previous.map { message.timestamp - $0.timestamp > Self.sectionGap } ?? true
@@ -486,7 +511,12 @@ final class ChatViewController: NSViewController {
                 result.append(.separator(Formatters.separator(message.date)))
             }
             if message.isSystem {
+                let polls = message.attachments.compactMap(\.poll)
                 result.append(.caption(message.text, .center))
+                // "… created a poll": the poll under it.
+                if let poll = polls.first(where: { !$0.options.isEmpty }) {
+                    result.append(.pollCard(message, poll))
+                }
                 continue
             }
             result.append(messageRow(
@@ -728,6 +758,30 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
             let cell = reuse("Caption", sizing: sizing) { CaptionCellView() }
             cell.configure(text, placement: placement, maxWidth: bubbleMaxWidth)
             cell.onClick = nil
+            return cell
+        case .pollCard(let message, let poll):
+            let cell = reuse("PollCard", sizing: sizing) { PollCardCellView() }
+            let theme = BubbleColors.theme(store.conversation(message.threadID)?.bubbleColors)
+            let color = message.isFromMe ? theme.first ?? BubbleColors.outgoing : BubbleColors.incoming
+            let bubbles: PollBubblesView
+            if !sizing, let shown = pollViews[message.id], shown.fits(outgoing: message.isFromMe, maxWidth: bubbleMaxWidth, questionColor: color) {
+                shown.update(poll, animated: true)
+                bubbles = shown
+            } else {
+                bubbles = PollBubblesView(poll: poll, outgoing: message.isFromMe, maxWidth: bubbleMaxWidth, questionColor: color)
+                if !sizing { pollViews[message.id] = bubbles }
+            }
+            // You as the chat's members list has you (with your picture; the account may not have it).
+            bubbles.me = store.account.map { account in
+                store.conversation(message.threadID)?.participants.first { $0.id == account.id }
+                    ?? Participant(id: account.id, name: account.name, avatarURL: account.avatarURL)
+            }
+            bubbles.onVote = { [weak self, weak bubbles] selected in
+                guard let self, let bubbles else { return }
+                self.sendPollVote(selected, in: poll, threadID: message.threadID, from: bubbles)
+            }
+            bubbles.onAddChoice = { [weak self] in self?.compose.startAddingChoices(to: poll) }
+            cell.host(bubbles, outgoing: message.isFromMe)
             return cell
         case .notDelivered(let message):
             let cell = reuse("Caption", sizing: sizing) { CaptionCellView() }

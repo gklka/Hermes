@@ -270,6 +270,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         case .file: return "Sent a file"
         case .link: return first.url ?? "Sent a link"
         case .call: return first.call.map { CallText.title(of: $0, outgoing: message.isFromMe) } ?? "Call"
+        case .poll: return first.poll?.question.map { "📊 " + $0 } ?? "Created a poll"
         }
     }
 

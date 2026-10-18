@@ -349,6 +349,10 @@ final class MessageCellView: NSTableCellView {
                     attachmentsStack.addArrangedSubview(CallCardView(call: call, message: message))
                     continue
                 }
+                // Polls are on system messages, in their own rows.
+                if attachment.kind == .poll {
+                    continue
+                }
                 let view = AttachmentView(attachment: attachment, message: message, maxWidth: key.maxWidth)
                 view.onOpen = { [weak self] in
                     guard let self, let message = self.message else { return }

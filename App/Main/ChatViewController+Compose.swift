@@ -45,6 +45,42 @@ extension ChatViewController: ComposeViewDelegate {
         compose.hideReply()
     }
 
+    func composeViewAttachFiles(_ view: ComposeView) {
+        attachFiles()
+    }
+
+    func composeViewCanCreatePoll(_ view: ComposeView) -> Bool {
+        threadID.map { store.canCreatePoll(in: $0) } ?? false
+    }
+
+    func composeView(_ view: ComposeView, createPoll question: String, options: [String]) {
+        guard let threadID else { return }
+        Task { [weak self] in
+            do {
+                try await ChatStore.shared.createPoll(in: threadID, question: question, options: options)
+            } catch {
+                self?.showPollError("The poll couldn't be created", error)
+            }
+        }
+    }
+
+    /// Added choices aren't voted for (your votes stay as they were); the comment goes as a message.
+    func composeView(_ view: ComposeView, addChoices choices: [String], to poll: Poll, comment: String) {
+        guard let threadID else { return }
+        let selected = poll.options.filter { $0.voted == true }.map(\.id)
+        let added = choices.map { NewPollOption(text: $0, voted: false) }
+        Task { [weak self] in
+            do {
+                try await ChatStore.shared.vote(in: poll.id, threadID: threadID, selected: selected, added: added)
+                if !comment.isEmpty {
+                    ChatStore.shared.send(text: comment, mentions: [], attachments: [], in: threadID, replyTo: nil)
+                }
+            } catch {
+                self?.showPollError("The choices couldn't be added", error)
+            }
+        }
+    }
+
     func stopTyping() {
         typingStopTimer?.invalidate()
         typingStopTimer = nil

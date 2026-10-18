@@ -40,7 +40,7 @@ func (c *Core) HandleRequest(data []byte) {
 		emitResponse(req.ID, result, err)
 	}
 	switch req.Method {
-	case "messages.send", "messages.sendMedia", "messages.react", "messages.unsend", "messages.edit":
+	case "messages.send", "messages.sendMedia", "messages.react", "messages.unsend", "messages.edit", "polls.create", "polls.vote":
 		c.sendQueue <- run
 	default:
 		go run()
@@ -49,22 +49,26 @@ func (c *Core) HandleRequest(data []byte) {
 
 // requestParams are every request's parameters; each request uses the ones it needs.
 type requestParams struct {
-	ThreadID     string            `json:"threadID"`
-	UserID       string            `json:"userID"`
-	MessageID    string            `json:"messageID"`
-	AttachmentID string            `json:"attachmentID"`
-	Text         string            `json:"text"`
-	ReplyTo      string            `json:"replyTo"`
-	Mentions     []apiMention      `json:"mentions"`
-	Emoji        string            `json:"emoji"`
-	Path         string            `json:"path"`
-	IsTyping     bool              `json:"isTyping"`
-	Enabled      bool              `json:"enabled"`
-	Before       int64             `json:"before"`
-	Limit        int               `json:"limit"`
-	Cookies      map[string]string `json:"cookies"`
-	RequestList  string            `json:"requestList"`
-	More         bool              `json:"more"`
+	ThreadID     string             `json:"threadID"`
+	UserID       string             `json:"userID"`
+	MessageID    string             `json:"messageID"`
+	AttachmentID string             `json:"attachmentID"`
+	Text         string             `json:"text"`
+	ReplyTo      string             `json:"replyTo"`
+	Mentions     []apiMention       `json:"mentions"`
+	Emoji        string             `json:"emoji"`
+	Path         string             `json:"path"`
+	IsTyping     bool               `json:"isTyping"`
+	Enabled      bool               `json:"enabled"`
+	Before       int64              `json:"before"`
+	Limit        int                `json:"limit"`
+	Cookies      map[string]string  `json:"cookies"`
+	RequestList  string             `json:"requestList"`
+	More         bool               `json:"more"`
+	PollID       string             `json:"pollID"`
+	Options      []string           `json:"options"`
+	Selected     []string           `json:"selected"`
+	Added        []apiNewPollOption `json:"added"`
 
 	// What the app read from Messenger's web app (the web.* requests).
 	Rows     []webThreadRow `json:"rows"`
@@ -176,6 +180,12 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return nil, c.unsend(ctx, p.ThreadID, p.MessageID)
 	case "messages.edit":
 		return nil, c.editMessage(ctx, p.ThreadID, p.MessageID, p.Text)
+	case "polls.create":
+		// `text` is the question.
+		return nil, c.createPoll(ctx, p.ThreadID, p.Text, p.Options)
+	case "polls.vote":
+		// `selected`: every option voted for; `added`: new options.
+		return nil, c.votePoll(ctx, p.ThreadID, p.PollID, p.Selected, p.Added)
 	case "media.download":
 		path, err := c.downloadMedia(ctx, p.MessageID, p.AttachmentID)
 		if err != nil {

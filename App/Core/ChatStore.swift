@@ -433,6 +433,26 @@ final class ChatStore {
         try? await core.call("requests.load", Params(requestList: list.rawValue, more: more))
     }
 
+    // MARK: Polls
+
+    /// Polls can be created in group chats that aren't encrypted, like on Messenger's web app.
+    func canCreatePoll(in threadID: String) -> Bool {
+        guard let conversation = conversation(threadID) else { return false }
+        return conversation.isGroup && !conversation.isEncrypted && !conversation.isRequest
+    }
+
+    func createPoll(in threadID: String, question: String, options: [String]) async throws {
+        struct Params: Encodable { let threadID: String; let text: String; let options: [String] }
+        try await core.call("polls.create", Params(threadID: threadID, text: question, options: options))
+    }
+
+    /// Votes in a poll, or adds choices to it: `selected` is every option voted for (not only
+    /// the changes); `added` are new options.
+    func vote(in pollID: String, threadID: String, selected: [String], added: [NewPollOption]) async throws {
+        struct Params: Encodable { let threadID: String; let pollID: String; let selected: [String]; let added: [NewPollOption] }
+        try await core.call("polls.vote", Params(threadID: threadID, pollID: pollID, selected: selected, added: added))
+    }
+
     /// Accepts a message request: the chat moves to your chats.
     func acceptRequest(_ threadID: String) async throws {
         try await core.call("requests.accept", ThreadParams(threadID: threadID))

@@ -75,6 +75,21 @@ CREATE TABLE IF NOT EXISTS reactions (
 	emoji      TEXT NOT NULL,
 	PRIMARY KEY (message_id, sender_id)
 );
+CREATE TABLE IF NOT EXISTS poll_options (
+	poll_id     TEXT NOT NULL,
+	option_id   TEXT NOT NULL,
+	text        TEXT NOT NULL DEFAULT '',
+	voting_ts   INTEGER NOT NULL DEFAULT 0,
+	creation_ts INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (poll_id, option_id)
+);
+CREATE TABLE IF NOT EXISTS poll_votes (
+	poll_id   TEXT NOT NULL,
+	option_id TEXT NOT NULL,
+	voter_id  TEXT NOT NULL,
+	timestamp INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY (poll_id, option_id, voter_id)
+);
 `
 
 func OpenStore(path string) (*Store, error) {
@@ -138,7 +153,7 @@ func (s *Store) convertCallLogLinks() {
 
 // Wipe deletes all account data (used on logout).
 func (s *Store) Wipe() error {
-	for _, tbl := range []string{"kv", "contacts", "threads", "participants", "messages", "reactions"} {
+	for _, tbl := range []string{"kv", "contacts", "threads", "participants", "messages", "reactions", "poll_options", "poll_votes"} {
 		if _, err := s.db.Exec(`DELETE FROM ` + tbl); err != nil {
 			return err
 		}
@@ -165,6 +180,8 @@ const (
 	kvUnread      = "unread:"      // chat → when it was marked unread here (ms)
 	kvEdits       = "edits:"       // message → its texts before edits (JSON, oldest first)
 	kvThemeColors = "themecolors:" // theme ID → its colors, or "default"
+	kvPollCard    = "pollcard:"    // poll → the message showing it (where it was created)
+	kvPollVoters  = "pollvoters:"  // poll → the newest card its voters were taken from (ms)
 )
 
 func (s *Store) Get(key string) string {
@@ -933,6 +950,21 @@ func (s *Store) APIMessages(rows []*messageRow, selfID string) []apiMessage {
 	out := make([]apiMessage, len(rows))
 	for i, m := range rows {
 		out[i] = m.toAPI(selfID, reactions[m.ID])
+		// A poll's card shows its votes as synced (Messenger's card only has the options it had
+		// then, three at most). Every change to a poll comes with a new card; only the latest is
+		// shown, the others are links to the poll.
+		for j, a := range out[i].Attachments {
+			if a.Kind != kindPoll || a.Poll == nil || a.Poll.ID == "" {
+				continue
+			}
+			poll := *a.Poll
+			if s.Get(kvPollCard+poll.ID) == m.ID {
+				s.completePoll(m.ThreadID, &poll, selfID)
+			} else {
+				poll = apiPoll{ID: poll.ID, Question: poll.Question, Options: []apiPollOption{}}
+			}
+			out[i].Attachments[j].Poll = &poll
+		}
 		if m.IsEdited {
 			out[i].PreviousTexts = s.PreviousTexts(m.ID)
 		}

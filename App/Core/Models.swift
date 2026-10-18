@@ -70,6 +70,9 @@ struct Attachment: Codable, Hashable {
         case image, gif, video, audio, sticker, file, link
         /// A call in the chat (the message's sender called); see `call`.
         case call
+        /// A poll (see `poll`), on the system message saying it was created. Messages about
+        /// changes to it have one too, without options (only the first message shows the poll).
+        case poll
     }
 
     let id: String
@@ -83,6 +86,7 @@ struct Attachment: Codable, Hashable {
     var mimeType: String?
     var title: String?
     var call: Call?
+    var poll: Poll?
 
     struct Call: Codable, Hashable {
         enum Outcome: String, Codable {
@@ -99,6 +103,40 @@ struct Attachment: Codable, Hashable {
     }
 }
 
+/// A group chat's poll (apiPoll).
+struct Poll: Codable, Hashable {
+    let id: String
+    var question: String?
+    /// In the order they were added. The card only knows the first three until the votes are synced; then
+    /// `moreCount` is how many more there are.
+    var options: [Option]
+    var moreCount: Int?
+    /// Messenger's own wording of the card's button ("Vote", "Change vote"), for when the votes
+    /// aren't known here.
+    var buttonTitle: String?
+    /// The votes are known here (the options have IDs, counts and voters).
+    var isComplete: Bool?
+
+    struct Option: Codable, Hashable {
+        let id: String
+        var text: String
+        var voteCount: Int
+        /// The share of the chat's members who voted for it.
+        var percent: Int
+        var voted: Bool?
+        /// Who voted for it; the card may only have their pictures.
+        var voters: [Participant]
+    }
+
+    var hasVoted: Bool { options.contains { $0.voted == true } }
+}
+
+/// An option added while voting (apiNewPollOption), and whether you vote for it.
+struct NewPollOption: Codable, Hashable {
+    let text: String
+    let voted: Bool
+}
+
 extension Attachment.Kind {
     /// What an attachment of this kind is called, where it has no name of its own.
     var label: String {
@@ -111,6 +149,7 @@ extension Attachment.Kind {
         case .file: "File"
         case .link: "Link"
         case .call: "Call"
+        case .poll: "Poll"
         }
     }
 }

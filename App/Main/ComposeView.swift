@@ -5,6 +5,13 @@ protocol ComposeViewDelegate: AnyObject {
     func composeView(_ view: ComposeView, send text: String, mentions: [Mention], attachments: [URL])
     func composeViewTextDidChange(_ view: ComposeView)
     func composeViewCancelReply(_ view: ComposeView)
+    /// The + button's menu: Attach File… and (where polls can be made) Create Poll….
+    func composeViewAttachFiles(_ view: ComposeView)
+    func composeViewCanCreatePoll(_ view: ComposeView) -> Bool
+    /// A poll made in the field: its choices, and the question typed under them.
+    func composeView(_ view: ComposeView, createPoll question: String, options: [String])
+    /// Choices added to a sent poll, and a message typed with them (may be empty).
+    func composeView(_ view: ComposeView, addChoices choices: [String], to poll: Poll, comment: String)
 }
 
 /// The compose text view: pasting or dropping images/files stages them inline (via
@@ -153,7 +160,9 @@ final class ComposeLinkAttachment: NSTextAttachment {
     }
 }
 
-/// Bottom input bar: [ growing text field ] [👍], with an optional "Replying to…" banner.
+/// Bottom input bar: [+] [ growing text field ] [👍], with an optional "Replying to…" banner.
+/// The + button's menu attaches files or creates a poll; a poll is made in the field, like in
+/// Messages (its choices above the text, which is the question).
 /// Images and files are staged inline in the field, like in Messages, and sent with Return.
 /// The button on the right sends the chat's quick reaction, or the message while there is one.
 final class ComposeView: NSView, NSTextViewDelegate {
@@ -167,6 +176,15 @@ final class ComposeView: NSView, NSTextViewDelegate {
     private let placeholder = NSTextField(labelWithString: "Message")
     private let buttonGlass = NSGlassEffectView()
     private let actionButton = NSButton()
+    private let plusGlass = NSGlassEffectView()
+    /// Opens the menu with Attach File… and Create Poll….
+    private let plusButton = NSButton()
+    /// While making a poll (or adding choices to one): its choices, above the text.
+    private let pollPanel = ComposePollPanel()
+    private let pollSeparator = NSBox()
+    private var textTopToField = NSLayoutConstraint()
+    private var textTopToPoll = NSLayoutConstraint()
+    var isMakingPoll: Bool { !pollPanel.isHidden }
     /// The chat's custom quick reaction emoji; nil for the default like (👍).
     private var quickEmoji: String?
     private var tint: NSColor = BubbleColors.outgoing
@@ -239,6 +257,24 @@ final class ComposeView: NSView, NSTextViewDelegate {
         fieldGlass.contentView = field
         buttonGlass.cornerRadius = Self.minTextHeight / 2
         buttonGlass.contentView = actionButton
+        plusGlass.cornerRadius = Self.minTextHeight / 2
+        plusGlass.contentView = plusButton
+
+        plusButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "More")
+        plusButton.symbolConfiguration = .init(pointSize: 15, weight: .semibold)
+        plusButton.isBordered = false
+        plusButton.bezelStyle = .regularSquare
+        plusButton.contentTintColor = tint
+        plusButton.target = self
+        plusButton.action = #selector(plusClicked)
+        plusButton.toolTip = "Attach a file or create a poll"
+
+        pollPanel.isHidden = true
+        pollPanel.onChange = { [weak self] in self?.updateActionButton() }
+        pollPanel.onClose = { [weak self] in self?.endPoll() }
+        pollPanel.onFinishChoices = { [weak self] in self?.focus() }
+        pollSeparator.boxType = .separator
+        pollSeparator.isHidden = true
 
         placeholder.textColor = .placeholderTextColor
         placeholder.font = .systemFont(ofSize: 14)
@@ -263,16 +299,19 @@ final class ComposeView: NSView, NSTextViewDelegate {
         }
         replyBanner.isHidden = true
 
-        for view in [replyBanner, fieldGlass, buttonGlass] as [NSView] {
+        for view in [replyBanner, plusGlass, fieldGlass, buttonGlass] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
         field.translatesAutoresizingMaskIntoConstraints = false
         actionButton.translatesAutoresizingMaskIntoConstraints = false
-        for view in [scrollView, placeholder] as [NSView] {
+        plusButton.translatesAutoresizingMaskIntoConstraints = false
+        for view in [pollPanel, pollSeparator, scrollView, placeholder] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             field.addSubview(view)
         }
+        textTopToField = scrollView.topAnchor.constraint(equalTo: field.topAnchor)
+        textTopToPoll = scrollView.topAnchor.constraint(equalTo: pollSeparator.bottomAnchor, constant: 2)
 
         textHeight = scrollView.heightAnchor.constraint(equalToConstant: Self.minTextHeight)
         bannerCollapsed = replyBanner.heightAnchor.constraint(equalToConstant: 0)
@@ -289,7 +328,16 @@ final class ComposeView: NSView, NSTextViewDelegate {
 
             fieldGlass.topAnchor.constraint(equalTo: replyBanner.bottomAnchor, constant: 8),
             fieldGlass.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
-            fieldGlass.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            plusGlass.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            plusGlass.bottomAnchor.constraint(equalTo: fieldGlass.bottomAnchor),
+            plusGlass.widthAnchor.constraint(equalToConstant: Self.minTextHeight),
+            plusGlass.heightAnchor.constraint(equalToConstant: Self.minTextHeight),
+            plusButton.topAnchor.constraint(equalTo: plusGlass.topAnchor),
+            plusButton.bottomAnchor.constraint(equalTo: plusGlass.bottomAnchor),
+            plusButton.leadingAnchor.constraint(equalTo: plusGlass.leadingAnchor),
+            plusButton.trailingAnchor.constraint(equalTo: plusGlass.trailingAnchor),
+
+            fieldGlass.leadingAnchor.constraint(equalTo: plusGlass.trailingAnchor, constant: 8),
             fieldGlass.trailingAnchor.constraint(equalTo: buttonGlass.leadingAnchor, constant: -8),
             field.topAnchor.constraint(equalTo: fieldGlass.topAnchor),
             field.bottomAnchor.constraint(equalTo: fieldGlass.bottomAnchor),
@@ -307,12 +355,19 @@ final class ComposeView: NSView, NSTextViewDelegate {
 
             scrollView.leadingAnchor.constraint(equalTo: field.leadingAnchor, constant: 4),
             scrollView.trailingAnchor.constraint(equalTo: field.trailingAnchor, constant: -4),
-            scrollView.topAnchor.constraint(equalTo: field.topAnchor),
+            textTopToField,
             scrollView.bottomAnchor.constraint(equalTo: field.bottomAnchor),
             textHeight,
 
+            pollPanel.topAnchor.constraint(equalTo: field.topAnchor, constant: 8),
+            pollPanel.leadingAnchor.constraint(equalTo: field.leadingAnchor, constant: 8),
+            pollPanel.trailingAnchor.constraint(equalTo: field.trailingAnchor, constant: -8),
+            pollSeparator.topAnchor.constraint(equalTo: pollPanel.bottomAnchor, constant: 8),
+            pollSeparator.leadingAnchor.constraint(equalTo: field.leadingAnchor, constant: 18),
+            pollSeparator.trailingAnchor.constraint(equalTo: field.trailingAnchor, constant: -18),
+
             placeholder.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor, constant: 11),
-            placeholder.centerYAnchor.constraint(equalTo: field.centerYAnchor),
+            placeholder.centerYAnchor.constraint(equalTo: scrollView.centerYAnchor),
         ])
     }
 
@@ -447,6 +502,91 @@ final class ComposeView: NSView, NSTextViewDelegate {
         window?.makeFirstResponder(textView)
     }
 
+    @objc private func plusClicked() {
+        let menu = NSMenu()
+        let attach = menu.addItem(withTitle: "Attach File…", action: #selector(attachClicked), keyEquivalent: "")
+        attach.image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: nil)
+        attach.target = self
+        if delegate?.composeViewCanCreatePoll(self) == true {
+            let poll = menu.addItem(withTitle: "Create Poll…", action: #selector(createPollClicked), keyEquivalent: "")
+            poll.image = NSImage(systemSymbolName: "chart.bar.xaxis", accessibilityDescription: nil)
+            poll.target = self
+        }
+        // Above the button, like the composer's other popups.
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: plusButton.bounds.height + 6), in: plusButton)
+    }
+
+    @objc private func attachClicked() {
+        delegate?.composeViewAttachFiles(self)
+    }
+
+    @objc private func createPollClicked() {
+        startPoll()
+    }
+
+    // MARK: - Polls
+
+    /// Create Poll: choices appear above the text, which becomes the question.
+    func startPoll() {
+        showPollPanel(.create, placeholder: "Ask a question")
+        pollPanel.focusFirstChoice()
+    }
+
+    /// A sent poll's Add Choice: its options above, and a new choice to type.
+    func startAddingChoices(to poll: Poll) {
+        showPollPanel(.addChoices(poll), placeholder: "Add comment or Send")
+        pollPanel.focusFirstChoice()
+    }
+
+    private func showPollPanel(_ mode: ComposePollPanel.Mode, placeholder text: String) {
+        pollPanel.start(mode)
+        pollPanel.isHidden = false
+        pollSeparator.isHidden = false
+        textTopToField.isActive = false
+        textTopToPoll.isActive = true
+        placeholder.stringValue = text
+        updateActionButton()
+    }
+
+    /// Back to a message (✕, Escape, or the poll was sent).
+    func endPoll() {
+        guard isMakingPoll else { return }
+        pollPanel.isHidden = true
+        pollSeparator.isHidden = true
+        textTopToPoll.isActive = false
+        textTopToField.isActive = true
+        placeholder.stringValue = "Message"
+        updateActionButton()
+        focus()
+    }
+
+    /// A new poll needs a question and two different choices; added choices need one.
+    private var canSendPoll: Bool {
+        guard pollPanel.canSend else { return false }
+        if case .create = pollPanel.mode {
+            return !composed().text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return true
+    }
+
+    private func sendPoll() {
+        guard canSendPoll else {
+            NSSound.beep()
+            return
+        }
+        let text = composed().text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let choices = pollPanel.choices
+        let mode = pollPanel.mode
+        self.text = ""
+        endPoll()
+        switch mode {
+        case .create:
+            delegate?.composeView(self, createPoll: text, options: choices)
+        case .addChoices(let poll):
+            delegate?.composeView(self, addChoices: choices, to: poll, comment: text)
+        }
+    }
+
     /// The chat's quick reaction (nil: the default like) and theme color for the button, the
     /// cursor and selected text.
     func setQuickReaction(_ emoji: String?, tint: NSColor?) {
@@ -454,6 +594,7 @@ final class ComposeView: NSView, NSTextViewDelegate {
         self.tint = tint ?? BubbleColors.outgoing
         textView.insertionPointColor = self.tint
         textView.selectedTextAttributes = [.backgroundColor: self.tint.withAlphaComponent(0.35)]
+        plusButton.contentTintColor = self.tint
         updateActionButton()
     }
 
@@ -461,7 +602,15 @@ final class ComposeView: NSView, NSTextViewDelegate {
     private func updateActionButton() {
         actionButton.title = ""
         actionButton.image = nil
-        if hasContent {
+        actionButton.isEnabled = true
+        if isMakingPoll {
+            let ready = canSendPoll
+            actionButton.image = NSImage(systemSymbolName: "arrow.up.circle.fill", accessibilityDescription: "Send Poll")
+            actionButton.symbolConfiguration = .init(pointSize: 22, weight: .regular)
+            actionButton.contentTintColor = ready ? PollColors.accent : .tertiaryLabelColor
+            actionButton.isEnabled = ready
+            actionButton.toolTip = "Send Poll"
+        } else if hasContent {
             actionButton.image = NSImage(systemSymbolName: "arrow.up.circle.fill", accessibilityDescription: "Send")
             actionButton.symbolConfiguration = .init(pointSize: 22, weight: .regular)
             actionButton.contentTintColor = tint
@@ -503,7 +652,7 @@ final class ComposeView: NSView, NSTextViewDelegate {
     // MARK: - Actions
 
     @objc private func actionButtonClicked() {
-        if hasContent {
+        if isMakingPoll || hasContent {
             send()
         } else {
             sendQuickReaction()
@@ -521,6 +670,10 @@ final class ComposeView: NSView, NSTextViewDelegate {
     }
 
     private func send() {
+        if isMakingPoll {
+            sendPoll()
+            return
+        }
         var attachments: [URL] = []
         let storage = textView.attributedString()
         storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: storage.length)) { value, _, _ in
@@ -788,6 +941,13 @@ final class ComposeView: NSView, NSTextViewDelegate {
             }
         }
         switch commandSelector {
+        // Making a poll: Tab goes around its choices and the question.
+        case #selector(NSResponder.insertTab(_:)) where isMakingPoll:
+            pollPanel.focusFirstChoice()
+            return true
+        case #selector(NSResponder.insertBacktab(_:)) where isMakingPoll:
+            pollPanel.focusLastChoice()
+            return true
         case #selector(NSResponder.insertNewline(_:)):
             let flags = NSApp.currentEvent?.modifierFlags ?? []
             if flags.contains(.shift) || flags.contains(.option) {
@@ -797,7 +957,11 @@ final class ComposeView: NSView, NSTextViewDelegate {
             }
             return true
         case #selector(NSResponder.cancelOperation(_:)):
-            delegate?.composeViewCancelReply(self)
+            if isMakingPoll {
+                endPoll()
+            } else {
+                delegate?.composeViewCancelReply(self)
+            }
             return true
         default:
             return false

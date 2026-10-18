@@ -62,6 +62,9 @@ const (
 	kindLink    = "link"
 	// A call in the chat (its sender is the caller); details in apiAttachment.Call.
 	kindCall = "call"
+	// A poll (apiAttachment.Poll), on the system message saying it was created. Messages about
+	// changes to it have one too, without options (only the first message shows the poll).
+	kindPoll = "poll"
 )
 
 type apiAttachment struct {
@@ -76,6 +79,39 @@ type apiAttachment struct {
 	MimeType   string   `json:"mimeType,omitempty"`
 	Title      string   `json:"title,omitempty"`
 	Call       *apiCall `json:"call,omitempty"`
+	Poll       *apiPoll `json:"poll,omitempty"`
+}
+
+// apiPoll is a group chat's poll.
+type apiPoll struct {
+	ID       string `json:"id"`
+	Question string `json:"question,omitempty"`
+	// In the order they were added. The card only knows the first three until the votes are synced; then
+	// MoreCount is how many more there are.
+	Options   []apiPollOption `json:"options"`
+	MoreCount int             `json:"moreCount,omitempty"`
+	// Messenger's own wording of the card's button ("Vote", or "Change vote" once you voted),
+	// for when the votes aren't known here.
+	ButtonTitle string `json:"buttonTitle,omitempty"`
+	// Whether the votes are known here (the options have IDs, counts and voters).
+	IsComplete bool `json:"isComplete,omitempty"`
+}
+
+type apiPollOption struct {
+	ID        string `json:"id"`
+	Text      string `json:"text"`
+	VoteCount int    `json:"voteCount"`
+	// The share of the chat's members who voted for it.
+	Percent int  `json:"percent"`
+	Voted   bool `json:"voted,omitempty"`
+	// Who voted for it; the card may only have their pictures.
+	Voters []apiParticipant `json:"voters"`
+}
+
+// apiNewPollOption is an option added while voting, and whether you vote for it.
+type apiNewPollOption struct {
+	Text  string `json:"text"`
+	Voted bool   `json:"voted"`
 }
 
 // Call outcomes.

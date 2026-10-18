@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,6 +89,7 @@ func (c *Core) handleTable(tbl *table.LSTable) {
 	cs := newChangeSet()
 	c.handleThreadTables(tbl, cs)
 	c.handleMessageTables(tbl, cs)
+	c.handlePollTables(tbl, cs)
 	c.handleReadTables(tbl, cs)
 
 	for _, t := range tbl.LSUpdateTypingIndicator {
@@ -401,6 +403,13 @@ func (c *Core) storeFBMessage(m *table.WrappedMessage, cs *changeSet) {
 			add(apiAttachment{ID: x.AttachmentFbid, Kind: kindCall, Title: x.TitleText, Call: call})
 			continue
 		}
+		if poll := pollFromXMA(x); poll != nil {
+			c.log.Debug().Any("xma", x).Msg("Poll card")
+			c.setPollCard(poll.ID, row.ID, row.Timestamp, cs)
+			c.setCardVoters(poll.ID, x, cs)
+			add(apiAttachment{ID: firstNonEmpty(x.AttachmentFbid, "poll-"+poll.ID), Kind: kindPoll, Title: poll.Question, Poll: poll})
+			continue
+		}
 		add(apiAttachment{
 			ID: x.AttachmentFbid, Kind: kindLink, URL: x.ActionUrl, PreviewURL: x.PreviewUrl,
 			Width: int(x.PreviewWidth), Height: int(x.PreviewHeight), Title: firstNonEmpty(x.TitleText, x.SubtitleText),
@@ -410,6 +419,15 @@ func (c *Core) storeFBMessage(m *table.WrappedMessage, cs *changeSet) {
 	if existing := c.store.GetMessage(row.ID); existing != nil {
 		// Keep downloaded files and the edited flag.
 		row.IsEdited = existing.IsEdited
+		// Messenger sends some messages again without their poll card (in history pages): keep it.
+		if !hasPollCard(row.Attachments) && hasPollCard(existing.Attachments) {
+			row.Attachments = slices.DeleteFunc(row.Attachments, func(a storedAttachment) bool { return a.Kind == kindPoll })
+			for _, a := range existing.Attachments {
+				if a.Kind == kindPoll {
+					row.Attachments = append(row.Attachments, a)
+				}
+			}
+		}
 		for i := range row.Attachments {
 			if old := existing.attachment(row.Attachments[i].ID); old != nil {
 				row.Attachments[i].LocalPath = old.LocalPath
