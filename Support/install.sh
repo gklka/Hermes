@@ -25,6 +25,12 @@ for copy in build/DerivedData/Build/Products/*/Hermes.app; do
     "$LSREGISTER" -u "$copy" 2>/dev/null || true
 done
 "$LSREGISTER" -f /Applications/Hermes.app
-open /Applications/Hermes.app
+# QUIET=1 relaunches in the background without stealing focus (for development, so a relaunch
+# doesn't interrupt what you're doing on the machine).
+if [ -n "$QUIET" ]; then
+    open -g /Applications/Hermes.app --args -QuietLaunch YES
+else
+    open /Applications/Hermes.app
+fi
 # Siri keeps the app's old actions until its daemon restarts (launchd starts it again).
 killall intelligenceflowd 2>/dev/null || true

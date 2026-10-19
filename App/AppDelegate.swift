@@ -9,6 +9,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables: Set<AnyCancellable> = []
     private var didLoadConversations = false
 
+    /// Set by the `-QuietLaunch YES` launch argument: show the app's windows without stealing
+    /// focus (so a background relaunch, e.g. during development, doesn't interrupt your work).
+    static let quietLaunch = UserDefaults.standard.bool(forKey: "QuietLaunch")
+
+    /// Shows a window controller's window — quietly (ordered in, not made key, app not activated)
+    /// on a quiet launch, so it doesn't take focus; normally otherwise.
+    private func present(_ controller: NSWindowController?) {
+        if Self.quietLaunch, let window = controller?.window {
+            window.orderFront(nil)
+        } else {
+            controller?.showWindow(nil)
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = MainMenu.build()
 
@@ -157,16 +171,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        loginWindowController?.showWindow(nil)
+        present(loginWindowController)
         loginWindowController?.window?.center()
-        NSApp.activate()
+        if !Self.quietLaunch { NSApp.activate() }
     }
 
     private func showMain() {
         if mainWindowController == nil {
             mainWindowController = MainWindowController()
         }
-        mainWindowController?.showWindow(nil)
+        present(mainWindowController)
     }
 
     /// Brings the main window forward with the chat (scrolled to the message) open.
