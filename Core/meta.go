@@ -90,6 +90,7 @@ func (c *Core) handleTable(tbl *table.LSTable) {
 	c.handleThreadTables(tbl, cs)
 	c.handleMessageTables(tbl, cs)
 	c.handlePollTables(tbl, cs)
+	c.handleOrphanPollCards(tbl, cs)
 	c.handleReadTables(tbl, cs)
 
 	for _, t := range tbl.LSUpdateTypingIndicator {
@@ -406,6 +407,9 @@ func (c *Core) storeFBMessage(m *table.WrappedMessage, cs *changeSet) {
 		if poll := pollFromXMA(x); poll != nil {
 			c.log.Debug().Any("xma", x).Msg("Poll card")
 			c.setPollCard(poll.ID, row.ID, row.Timestamp, cs)
+			if poll.Question != "" {
+				c.store.Set(kvPollQ+poll.ID, poll.Question)
+			}
 			c.setCardVoters(poll.ID, x, cs)
 			add(apiAttachment{ID: firstNonEmpty(x.AttachmentFbid, "poll-"+poll.ID), Kind: kindPoll, Title: poll.Question, Poll: poll})
 			continue

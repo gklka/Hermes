@@ -75,6 +75,23 @@ type requestParams struct {
 	Messages []webMessage   `json:"messages"`
 	Reacted  []webReacted   `json:"reacted"`
 	Colors   []string       `json:"colors"`
+	Polls    []webPoll      `json:"polls"`
+}
+
+// webPoll is a poll scraped from Messenger's web app (its inline card), to show polls the core
+// can't rebuild from history. MessageID is the card's message (it anchors the poll).
+type webPoll struct {
+	MessageID string          `json:"messageID"`
+	Question  string          `json:"question"`
+	Options   []webPollOption `json:"options"`
+	MoreCount int             `json:"moreCount"`
+}
+
+type webPollOption struct {
+	Text      string `json:"text"`
+	VoteCount int    `json:"voteCount"`
+	Percent   int    `json:"percent"`
+	Voted     bool   `json:"voted"`
 }
 
 func (c *Core) dispatch(req rpcRequest) (any, error) {
@@ -132,6 +149,11 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return c.openDirectThread(p.UserID)
 	case "threads.resync":
 		return nil, c.resyncThread(p.ThreadID)
+	case "threads.fetchExtras":
+		go c.fetchThreadExtras(p.ThreadID)
+		return nil, nil
+	case "polls.importScraped":
+		return nil, c.importScrapedPolls(p.ThreadID, p.Polls)
 	case "threads.markRead":
 		return nil, c.markRead(ctx, p.ThreadID)
 	case "threads.setUnread":

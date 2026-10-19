@@ -154,6 +154,35 @@ func (c *Core) resyncThread(threadID string) error {
 	return nil
 }
 
+// fetchThreadExtras asks Messenger for a thread's extra data beyond its messages, which brings
+// back its active polls (their options and votes). Polls aren't included in history pages, so
+// this is the only way to restore a poll the app didn't see created. Regular chats only; the
+// response's poll tables arrive asynchronously and are handled like any other event.
+func (c *Core) fetchThreadExtras(threadID string) {
+	t := c.store.GetThread(threadID)
+	if t == nil || t.Type.IsWhatsApp() {
+		return
+	}
+	key, err := strconv.ParseInt(threadID, 10, 64)
+	if err != nil {
+		return
+	}
+	cli := c.client()
+	if cli == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	resp, err := cli.ExecuteTasks(ctx, &socket.FetchAdditionalThreadData{ThreadKey: key})
+	if err != nil {
+		c.log.Warn().Err(err).Str("thread_id", threadID).Msg("Fetch additional thread data failed")
+		return
+	}
+	if resp != nil {
+		c.handleTable(resp)
+	}
+}
+
 // createDirectChat creates the 1:1 chat with someone on Messenger (its Facebook thread and the
 // encrypted chat), as Messenger's own apps do when you message someone new.
 func (c *Core) createDirectChat(userID string) {

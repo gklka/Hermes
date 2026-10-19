@@ -182,6 +182,8 @@ const (
 	kvThemeColors = "themecolors:" // theme ID → its colors, or "default"
 	kvPollCard    = "pollcard:"    // poll → the message showing it (where it was created)
 	kvPollVoters  = "pollvoters:"  // poll → the newest card its voters were taken from (ms)
+	kvPollQ       = "pollq:"       // poll → its question
+	kvPollScraped = "pollscraped:" // message → a poll (JSON) scraped from the web app's card
 )
 
 func (s *Store) Get(key string) string {
@@ -947,16 +949,19 @@ func (s *Store) APIMessages(rows []*messageRow, selfID string) []apiMessage {
 		ids[i] = m.ID
 	}
 	reactions := s.Reactions(ids)
+	cardMessages := s.pollCardMessages() // message ID → the poll whose card it is
 	out := make([]apiMessage, len(rows))
 	for i, m := range rows {
 		out[i] = m.toAPI(selfID, reactions[m.ID])
 		// A poll's card shows its votes as synced (Messenger's card only has the options it had
 		// then, three at most). Every change to a poll comes with a new card; only the latest is
 		// shown, the others are links to the poll.
+		hasPoll := false
 		for j, a := range out[i].Attachments {
 			if a.Kind != kindPoll || a.Poll == nil || a.Poll.ID == "" {
 				continue
 			}
+			hasPoll = true
 			poll := *a.Poll
 			if s.Get(kvPollCard+poll.ID) == m.ID {
 				s.completePoll(m.ThreadID, &poll, selfID)
@@ -964,6 +969,32 @@ func (s *Store) APIMessages(rows []*messageRow, selfID string) []apiMessage {
 				poll = apiPoll{ID: poll.ID, Question: poll.Question, Options: []apiPollOption{}}
 			}
 			out[i].Attachments[j].Poll = &poll
+		}
+		// A poll scraped from the web app's card (web.importPolls), shown on its card message.
+		if !hasPoll {
+			if raw := s.Get(kvPollScraped + m.ID); raw != "" {
+				var poll apiPoll
+				if json.Unmarshal([]byte(raw), &poll) == nil {
+					out[i].Attachments = append(out[i].Attachments, apiAttachment{
+						ID: "poll-" + m.ID, Kind: kindPoll, Title: poll.Question, Poll: &poll,
+					})
+					hasPoll = true
+				}
+			}
+		}
+		// Restored polls have no card attachment on the message, only the poll→message mapping:
+		// show the poll from the mapping and the stored options.
+		if pollID := cardMessages[m.ID]; !hasPoll && pollID != "" {
+			question := s.Get(kvPollQ + pollID)
+			if question == "" {
+				// The card sits on the "created a poll: „…”" message; take the question from it.
+				question = quotedText(m.Text)
+			}
+			poll := apiPoll{ID: pollID, Question: question, Options: []apiPollOption{}}
+			s.completePoll(m.ThreadID, &poll, selfID)
+			out[i].Attachments = append(out[i].Attachments, apiAttachment{
+				ID: "poll-" + pollID, Kind: kindPoll, Title: poll.Question, Poll: &poll,
+			})
 		}
 		if m.IsEdited {
 			out[i].PreviousTexts = s.PreviousTexts(m.ID)

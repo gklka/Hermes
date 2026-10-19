@@ -163,6 +163,22 @@ final class ChatStore {
     func openThread(_ threadID: String) async {
         guard messagesByThread[threadID] == nil else { return }
         await loadPage(threadID, before: nil)
+        fetchThreadExtras(threadID)
+    }
+
+    /// Threads this session has already asked Messenger for extra data (active polls).
+    private var fetchedExtras: Set<String> = []
+
+    /// Pulls a group chat's active polls (not in history pages), once per chat per session, after
+    /// its messages are loaded so a poll can anchor to one. The polls arrive as later events.
+    private func fetchThreadExtras(_ threadID: String) {
+        // Groups only (polls live in groups); proceed when the conversation isn't loaded yet.
+        let conv = conversationsByID[threadID]
+        guard conv == nil || (conv!.isGroup && !conv!.isEncrypted),
+              fetchedExtras.insert(threadID).inserted else { return }
+        Task { try? await core.call("threads.fetchExtras", ThreadParams(threadID: threadID)) }
+        // Also read the thread's polls from the web app (full cards the core can't rebuild).
+        WebPollImporter.shared.importOnce(threadID: threadID)
     }
 
     /// Conversation › Refresh: throws away the chat's stored messages and loads them again from
@@ -181,6 +197,9 @@ final class ChatStore {
         if conversationsByID[threadID]?.isEncrypted == true {
             WebHistoryImporter.shared.reimport(threadID: threadID)
         }
+        fetchedExtras.remove(threadID)
+        WebPollImporter.shared.reset(threadID: threadID)
+        fetchThreadExtras(threadID)
     }
 
     private var themesRefreshed: Set<String> = []

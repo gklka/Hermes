@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/url"
 	"slices"
@@ -130,6 +131,30 @@ func hasPollCard(attachments []storedAttachment) bool {
 	})
 }
 
+// quotedText returns what's between the first opening and last closing quotation mark in s, for
+// pulling a poll's question out of the "created a poll: „…”" system message in any language.
+func quotedText(s string) string {
+	const openers = "„“\"«「『'‘"
+	const closers = "”“\"»」』'’"
+	runes := []rune(s)
+	start := -1
+	for i, r := range runes {
+		if strings.ContainsRune(openers, r) {
+			start = i + 1
+			break
+		}
+	}
+	if start < 0 {
+		return ""
+	}
+	for i := len(runes) - 1; i >= start; i-- {
+		if strings.ContainsRune(closers, runes[i]) {
+			return strings.TrimSpace(string(runes[start:i]))
+		}
+	}
+	return ""
+}
+
 // leadingNumber is the first number in s ("2 more options" → 2), or 0.
 func leadingNumber(s string) int {
 	start := strings.IndexFunc(s, func(r rune) bool { return r >= '0' && r <= '9' })
@@ -156,7 +181,14 @@ func (c *Core) handlePollTables(tbl *table.LSTable, cs *changeSet) {
 	// The polls that changed.
 	changed := map[string]bool{}
 	for _, p := range tbl.LSAddPollForThread {
-		changed[id64(p.PollID)] = true
+		pollID := id64(p.PollID)
+		changed[pollID] = true
+		// Restored polls (FetchAdditionalThreadData) arrive without an XMA card: anchor them to
+		// the message of their latest update, if it's one we have and the card isn't set yet.
+		if p.LastUpdateMessageID != "" && c.store.Get(kvPollCard+pollID) == "" &&
+			c.store.GetMessage(p.LastUpdateMessageID) != nil {
+			c.setPollCard(pollID, p.LastUpdateMessageID, p.LastUpdateMessageTimestampMS, cs)
+		}
 	}
 	for _, o := range options {
 		pollID := id64(o.PollID)
@@ -175,6 +207,87 @@ func (c *Core) handlePollTables(tbl *table.LSTable, cs *changeSet) {
 	}
 }
 
+// handleOrphanPollCards restores polls whose card arrives as attachment rows attached to a
+// message that isn't (re)inserted in the same table — the shape the poll-detail fetch and the
+// thread sync use. messagix only wraps an XMA onto a message upserted in the same table, so
+// these are otherwise dropped. For each, the card is rebuilt and stored like a live one.
+func (c *Core) handleOrphanPollCards(tbl *table.LSTable, cs *changeSet) {
+	if len(tbl.LSInsertXmaAttachment) == 0 {
+		return
+	}
+	// Messages (re)inserted in this table are handled by storeFBMessage; skip their XMAs here.
+	inTable := map[string]bool{}
+	for _, m := range tbl.LSUpsertMessage {
+		inTable[m.MessageId] = true
+	}
+	for _, m := range tbl.LSInsertMessage {
+		inTable[m.MessageId] = true
+	}
+	ctaMap := map[string]*table.LSInsertAttachmentCta{}
+	for _, cta := range tbl.LSInsertAttachmentCta {
+		ctaMap[cta.AttachmentFbid] = cta
+	}
+	for _, xma := range tbl.LSInsertXmaAttachment {
+		if xma.MessageId == "" || inTable[xma.MessageId] {
+			continue
+		}
+		wx := &table.WrappedXMA{LSInsertXmaAttachment: xma, CTA: ctaMap[xma.AttachmentFbid]}
+		poll := pollFromXMA(wx)
+		if poll == nil {
+			continue
+		}
+		// The card hangs off a message already in this thread; without it there's nothing to show on.
+		if c.store.GetMessage(xma.MessageId) == nil {
+			continue
+		}
+		c.setPollCard(poll.ID, xma.MessageId, xma.TimestampMs, cs)
+		if poll.Question != "" {
+			c.store.Set(kvPollQ+poll.ID, poll.Question)
+		}
+		// Keep the card's options (it shows up to three) so the poll renders without the vote tables.
+		for i, option := range poll.Options {
+			if option.ID != "" && option.Text != "" {
+				c.store.PutPollOption(poll.ID, option.ID, option.Text, 0, int64(i+1))
+			}
+		}
+		c.setCardVoters(poll.ID, wx, cs)
+		cs.message(xma.MessageId)
+	}
+}
+
+// importScrapedPolls stores polls scraped from Messenger's web app (their inline cards), keyed
+// by the card's message, for threads whose polls the core can't rebuild from history. Each is
+// shown on its card message (store.APIMessages). Anchors to a message the chat already has.
+func (c *Core) importScrapedPolls(threadID string, polls []webPoll) error {
+	cs := newChangeSet()
+	stored := 0
+	for _, p := range polls {
+		if p.MessageID == "" || c.store.GetMessage(p.MessageID) == nil {
+			continue
+		}
+		stored++
+		poll := apiPoll{
+			ID: "scraped-" + p.MessageID, Question: p.Question, MoreCount: p.MoreCount,
+			IsComplete: true, Options: []apiPollOption{},
+		}
+		for i, o := range p.Options {
+			poll.Options = append(poll.Options, apiPollOption{
+				ID: strconv.Itoa(i), Text: o.Text, VoteCount: o.VoteCount, Percent: o.Percent,
+				Voted: o.Voted, Voters: []apiParticipant{},
+			})
+		}
+		js, err := json.Marshal(poll)
+		if err != nil {
+			continue
+		}
+		c.store.Set(kvPollScraped+p.MessageID, string(js))
+		cs.message(p.MessageID)
+	}
+	c.log.Info().Int("received", len(polls)).Int("stored", stored).Str("thread", threadID).Msg("Imported scraped polls")
+	c.flush(cs)
+	return nil
+}
+
 // setPollCard makes the message the one showing the poll, if it's its first (where it was
 // created; changes to it come with new cards, which aren't shown).
 func (c *Core) setPollCard(pollID, messageID string, timestamp int64, cs *changeSet) {
@@ -191,6 +304,24 @@ func (c *Core) setPollCard(pollID, messageID string, timestamp int64, cs *change
 		}
 	}
 	c.store.Set(kvPollCard+pollID, messageID)
+}
+
+// pollCardMessages maps each poll's card message ID to the poll ID, for showing a poll on its
+// card message even when the message itself has no stored poll attachment (restored polls).
+func (s *Store) pollCardMessages() map[string]string {
+	rows, err := s.db.Query(`SELECT key, value FROM kv WHERE key LIKE ?`, kvPollCard+"%")
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var key, messageID string
+		if rows.Scan(&key, &messageID) == nil && messageID != "" {
+			out[messageID] = strings.TrimPrefix(key, kvPollCard)
+		}
+	}
+	return out
 }
 
 // pollChanged shows the poll's new votes and options.
