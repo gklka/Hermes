@@ -12,6 +12,7 @@ final class LinkPreviews {
     struct Preview {
         var url: URL?
         var title: String
+        var subtitle: String?
         var site: String?
         var image: NSImage?
         /// The picture's size, known before it's loaded for Messenger's cards.
@@ -43,10 +44,12 @@ final class LinkPreviews {
             loading.imageSize = Self.webImageSize
             return loading
         case .card(let card):
-            let site = card.url.flatMap { Self.site($0) }
+            // Prefer where the share says it's from ("Instagram", a page) over the raw host.
+            let site = card.source ?? card.url.flatMap { Self.site($0) }
             return Preview(
                 url: card.url,
                 title: card.title ?? site ?? "Link",
+                subtitle: card.subtitle,
                 site: site,
                 image: card.imageURL.flatMap { ImageCache.shared.cached($0) },
                 imageSize: card.imageSize
@@ -170,6 +173,8 @@ final class LinkPreviews {
     struct Card {
         let url: URL?
         let title: String?
+        var subtitle: String?
+        var source: String?
         let imageURL: URL?
         let imageSize: CGSize?
     }
@@ -204,7 +209,9 @@ final class LinkPreviews {
         if let width = attachment.width, let height = attachment.height, width > 0, height > 0 {
             imageSize = CGSize(width: width, height: height)
         }
-        return .card(Card(url: cardURL, title: title, imageURL: imageURL, imageSize: imageSize))
+        let subtitle = attachment.subtitle.flatMap { $0.isEmpty ? nil : $0 }
+        let source = attachment.source.flatMap { $0.isEmpty ? nil : $0 }
+        return .card(Card(url: cardURL, title: title, subtitle: subtitle, source: source, imageURL: imageURL, imageSize: imageSize))
     }
 
     private static let facebookDomains = [

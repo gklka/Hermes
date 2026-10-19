@@ -114,8 +114,15 @@ func (c *Core) handleFBMessage(evt *events.FBMessage) {
 		content := msg.GetPayload().GetContent()
 		if x := content.GetExtendedContentMessage(); x != nil {
 			row.Text = x.GetMessageText()
-			if title := x.GetTitleText(); title != "" {
-				link := storedAttachment{apiAttachment: apiAttachment{ID: row.ID + "-xma", Kind: kindLink, Title: title}}
+			if title := firstNonEmpty(x.GetTitleText(), x.GetSubtitleText()); title != "" {
+				subtitle := x.GetOverlayDescription()
+				if subtitle == "" && x.GetTitleText() != "" {
+					subtitle = x.GetSubtitleText() // not already used as the title
+				}
+				link := storedAttachment{apiAttachment: apiAttachment{
+					ID: row.ID + "-xma", Kind: kindLink, Title: title,
+					Subtitle: subtitle, Source: x.GetTargetUsername(),
+				}}
 				if ctas := x.GetCtas(); len(ctas) > 0 {
 					link.URL = firstNonEmpty(ctas[0].GetActionURL(), ctas[0].GetNativeURL())
 				}

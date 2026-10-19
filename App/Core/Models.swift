@@ -85,6 +85,9 @@ struct Attachment: Codable, Hashable {
     var filename: String?
     var mimeType: String?
     var title: String?
+    /// A shared post/reel/story card's description line and where it's from (e.g. "Instagram").
+    var subtitle: String?
+    var source: String?
     var call: Call?
     var poll: Poll?
 

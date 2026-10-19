@@ -415,9 +415,20 @@ func (c *Core) storeFBMessage(m *table.WrappedMessage, cs *changeSet) {
 			add(apiAttachment{ID: firstNonEmpty(x.AttachmentFbid, "poll-"+poll.ID), Kind: kindPoll, Title: poll.Question, Poll: poll})
 			continue
 		}
+		// A shared post, reel, story, song or link: a card with the preview Messenger ships in the
+		// XMA (title, a description line, where it's from), since these aren't fetchable web pages.
+		title := firstNonEmpty(x.TitleText, x.SubtitleText)
+		subtitle := x.DescriptionText
+		if subtitle == "" && x.TitleText != "" {
+			subtitle = x.SubtitleText // not already used as the title
+		}
 		add(apiAttachment{
-			ID: x.AttachmentFbid, Kind: kindLink, URL: x.ActionUrl, PreviewURL: x.PreviewUrl,
-			Width: int(x.PreviewWidth), Height: int(x.PreviewHeight), Title: firstNonEmpty(x.TitleText, x.SubtitleText),
+			ID: x.AttachmentFbid, Kind: kindLink, URL: x.ActionUrl,
+			PreviewURL: firstNonEmpty(x.PreviewUrl, x.ImageUrl),
+			Width:      int(x.PreviewWidth), Height: int(x.PreviewHeight),
+			Title:    title,
+			Subtitle: subtitle,
+			Source:   firstNonEmpty(x.SourceText, x.AttributionAppName),
 		})
 	}
 

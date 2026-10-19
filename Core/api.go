@@ -68,18 +68,22 @@ const (
 )
 
 type apiAttachment struct {
-	ID         string   `json:"id"`
-	Kind       string   `json:"kind"`
-	URL        string   `json:"url,omitempty"`
-	PreviewURL string   `json:"previewURL,omitempty"`
-	LocalPath  string   `json:"localPath,omitempty"`
-	Width      int      `json:"width,omitempty"`
-	Height     int      `json:"height,omitempty"`
-	Filename   string   `json:"filename,omitempty"`
-	MimeType   string   `json:"mimeType,omitempty"`
-	Title      string   `json:"title,omitempty"`
-	Call       *apiCall `json:"call,omitempty"`
-	Poll       *apiPoll `json:"poll,omitempty"`
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	URL        string `json:"url,omitempty"`
+	PreviewURL string `json:"previewURL,omitempty"`
+	LocalPath  string `json:"localPath,omitempty"`
+	Width      int    `json:"width,omitempty"`
+	Height     int    `json:"height,omitempty"`
+	Filename   string `json:"filename,omitempty"`
+	MimeType   string `json:"mimeType,omitempty"`
+	Title      string `json:"title,omitempty"`
+	// Subtitle and Source enrich a link card from a shared post/reel/story (an XMA): the
+	// description line, and where it's from ("Instagram", a page name) shown instead of the host.
+	Subtitle string   `json:"subtitle,omitempty"`
+	Source   string   `json:"source,omitempty"`
+	Call     *apiCall `json:"call,omitempty"`
+	Poll     *apiPoll `json:"poll,omitempty"`
 }
 
 // apiPoll is a group chat's poll.

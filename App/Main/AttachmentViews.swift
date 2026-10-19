@@ -33,6 +33,7 @@ final class LinkCardView: NSView, NSDraggingSource {
     private var mouseDownPoint: NSPoint?
     private let picture = NSView()
     private let titleLabel = NSTextField(wrappingLabelWithString: "")
+    private let subtitleLabel = NSTextField(wrappingLabelWithString: "")
     private let siteLabel = NSTextField(labelWithString: "")
     private var widthConstraint = NSLayoutConstraint()
     private var pictureHeight = NSLayoutConstraint()
@@ -50,11 +51,15 @@ final class LinkCardView: NSView, NSDraggingSource {
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.maximumNumberOfLines = 3
         titleLabel.lineBreakMode = .byTruncatingTail
+        subtitleLabel.font = .systemFont(ofSize: 12)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.maximumNumberOfLines = 2
+        subtitleLabel.lineBreakMode = .byTruncatingTail
         siteLabel.font = .systemFont(ofSize: 11)
         siteLabel.textColor = .secondaryLabelColor
         siteLabel.lineBreakMode = .byTruncatingTail
 
-        for view in [picture, titleLabel, siteLabel] {
+        for view in [picture, titleLabel, subtitleLabel, siteLabel] {
             view.translatesAutoresizingMaskIntoConstraints = false
             addSubview(view)
         }
@@ -68,7 +73,10 @@ final class LinkCardView: NSView, NSDraggingSource {
             picture.trailingAnchor.constraint(equalTo: trailingAnchor),
             titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            siteLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            subtitleLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
+            siteLabel.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 2),
             siteLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             siteLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
             siteLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9),
@@ -86,6 +94,8 @@ final class LinkCardView: NSView, NSDraggingSource {
         widthConstraint.constant = width
         titleLabel.preferredMaxLayoutWidth = width - 24
         titleLabel.stringValue = preview.title
+        subtitleLabel.stringValue = preview.subtitle ?? ""
+        subtitleLabel.isHidden = preview.subtitle?.isEmpty ?? true
         siteLabel.stringValue = preview.site ?? ""
         siteLabel.isHidden = preview.site == nil
         picture.layer?.contents = preview.image
