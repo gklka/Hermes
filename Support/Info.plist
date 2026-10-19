@@ -30,5 +30,13 @@
 	<string>Hermes uses the microphone for Messenger calls.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Hermes uses the camera for Messenger video calls.</string>
+	<!-- Updates (Sparkle): the latest GitHub release's appcast.xml (Support/release-appcast.sh).
+	     Its private key is in the login Keychain of the machine that made it (generate_keys). -->
+	<key>SUFeedURL</key>
+	<string>https://github.com/gklka/Hermes/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>psMth31tnZptpHYG1FSSJPD/sdHMmisNWLAStBth+pE=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
 </dict>
 </plist>

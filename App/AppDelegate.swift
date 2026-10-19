@@ -1,9 +1,13 @@
 import AppKit
 import Combine
 import CoreSpotlight
+import Sparkle
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = ChatStore.shared
+    /// Updates from the GitHub releases (Info.plist's SUFeedURL), checked daily and from
+    /// Hermes › Check for Updates….
+    private let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
     private var mainWindowController: MainWindowController?
     private var loginWindowController: LoginWindowController?
     private var cancellables: Set<AnyCancellable> = []
@@ -196,6 +200,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func toggleActivity(_ sender: Any?) {
         ActivityWindowController.shared.toggle()
+    }
+
+    /// Hermes › Check for Updates….
+    @objc func checkForUpdates(_ sender: Any?) {
+        updater.checkForUpdates(sender)
     }
 
     /// Asks first: logging out deletes the account's chats from this Mac.
