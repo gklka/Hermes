@@ -172,7 +172,8 @@ final class CallManager: NSObject, WKUIDelegate, WKScriptMessageHandler {
             .filter { !$0.name.isEmpty && call.text.contains($0.name) }
             .max { ($0.isGroup ? 0 : 1, $0.name.count) < ($1.isGroup ? 0 : 1, $1.name.count) }
         let name = conversation?.name ?? lines.first ?? "Messenger"
-        let detail = lines.filter { $0 != name }.joined(separator: " · ")
+        // Not the name again (also not a part of it, like the first name, or a line with it).
+        let detail = lines.filter { !name.contains($0) && !$0.contains(name) }.joined(separator: " · ")
         incomingPanel?.close()
         let panel = IncomingCallPanel(name: name, detail: detail, conversation: conversation, imageURL: call.image,
                                       buttons: call.buttons) { [weak self] button in

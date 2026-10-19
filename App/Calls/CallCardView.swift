@@ -8,11 +8,14 @@ enum CallText {
         return call.outcome == .missed && !outgoing ? "Missed \(kind)" : kind
     }
 
-    /// The call's length, "No Answer", or nothing while it's going on.
-    static func detail(of call: Attachment.Call, outgoing: Bool) -> String? {
+    /// The call's length; for a missed or unanswered one when it was ("No Answer · 14:32");
+    /// nothing while it's going on.
+    static func detail(of call: Attachment.Call, outgoing: Bool, at date: Date) -> String? {
         switch call.outcome {
         case .started: return nil
-        case .missed: return outgoing ? "No Answer" : nil
+        case .missed:
+            let time = Formatters.messageTime(date)
+            return outgoing ? "No Answer · \(time)" : time
         case .ended:
             if let text = call.durationText, !text.isEmpty { return text }
             guard let seconds = call.duration, seconds > 0 else { return nil }
@@ -63,7 +66,7 @@ final class CallCardView: NSView {
 
         let titleLabel = NSTextField(labelWithString: CallText.title(of: call, outgoing: outgoing))
         titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
-        let detail = CallText.detail(of: call, outgoing: outgoing)
+        let detail = CallText.detail(of: call, outgoing: outgoing, at: message.date)
         let detailLabel = NSTextField(labelWithString: detail ?? "")
         detailLabel.font = .systemFont(ofSize: 12)
         detailLabel.textColor = .secondaryLabelColor
