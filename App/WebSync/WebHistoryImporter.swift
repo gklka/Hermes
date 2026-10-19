@@ -132,6 +132,14 @@ final class WebHistoryImporter {
         saved.coverage[threadID] != nil && !saved.reachedStart.contains(threadID)
     }
 
+    /// The web app is still reading the chat's history (or has more of it): the server's
+    /// history, only the chat's unencrypted past, waits until it's read back to the start, so
+    /// the chat shows its latest messages first and goes back in order. (Never read, e.g.
+    /// without the PIN restore, the server's history is all there is.)
+    func holdsServerHistory(_ threadID: String) -> Bool {
+        isPending(threadID) || hasEarlier(threadID)
+    }
+
     // What the collect script returns (decoded off the main actor).
     nonisolated private struct Result: Decodable {
         let messages: [Message]
@@ -247,6 +255,19 @@ final class WebHistoryImporter {
 
     /// The running import was stopped (its chat was closed): its result is thrown away.
     private var currentStopped = false
+    /// The running import is the chat's first read (nothing imported yet: opened for the first
+    /// time, or after Refresh).
+    private var currentIsFirstRead = false
+
+    /// How far a chat's first read is (0…1; nil when none is going on), for the chat's progress
+    /// bar. Queued, it's at the start.
+    func firstReadProgress(_ threadID: String) -> Double? {
+        if let current, current.threadID == threadID {
+            return currentIsFirstRead ? stage.overall : nil
+        }
+        let queued = queue.contains { $0.threadID == threadID && $0.mode == .latest }
+        return queued && saved.coverage[threadID] == nil ? 0 : nil
+    }
 
     private func enqueueFirst(_ job: Job) {
         var job = job
@@ -306,6 +327,7 @@ final class WebHistoryImporter {
                 current = job
                 currentStarted = Date()
                 currentStopped = false
+                currentIsFirstRead = job.mode == .latest && saved.coverage[job.threadID] == nil
                 stage = .startingWebApp
                 stateChanged(job.threadID)
                 let (outcome, summary) = await importOnce(job)
@@ -607,6 +629,20 @@ final class WebHistoryImporter {
             case .rendering(_, let read): return "Reading \(read) messages in full (pictures, links, reactions)"
             case .pictures(let done, let total): return "Copying pictures: message \(done) of \(total)"
             case .saving(let count): return "Saving \(count) messages…"
+            }
+        }
+
+        /// How far the whole import is (0…1), roughly: opening the chat, scrolling back (most of
+        /// it), reading in full, copying pictures, saving.
+        var overall: Double {
+            switch self {
+            case .startingWebApp, .waitingForPage: return 0.02
+            case .openingChat: return 0.05
+            case .finding: return 0.08
+            case .scrollingBack: return 0.1 + 0.55 * (progress ?? 0)
+            case .rendering(let fraction, _): return 0.65 + 0.2 * min(1, fraction)
+            case .pictures: return 0.85 + 0.12 * (progress ?? 0)
+            case .saving: return 0.98
             }
         }
 

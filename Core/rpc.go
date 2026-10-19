@@ -61,6 +61,7 @@ type requestParams struct {
 	IsTyping     bool               `json:"isTyping"`
 	Enabled      bool               `json:"enabled"`
 	Before       int64              `json:"before"`
+	NoServer     bool               `json:"noServer"`
 	Limit        int                `json:"limit"`
 	Cookies      map[string]string  `json:"cookies"`
 	RequestList  string             `json:"requestList"`
@@ -165,7 +166,8 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 
 	// Messages
 	case "messages.list":
-		return c.listMessages(p.ThreadID, p.Before, p.Limit), nil
+		// `noServer`: only what's stored (no history fetched from Messenger now).
+		return c.listMessages(p.ThreadID, p.Before, p.Limit, p.NoServer), nil
 	case "messages.stored":
 		// The newest stored messages, without fetching history (for the Spotlight index).
 		return c.messagesPage(c.store.ListMessages(p.ThreadID, p.Before, p.Limit), false), nil

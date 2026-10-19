@@ -15,14 +15,15 @@ import (
 
 // listMessages returns a page of stored messages older than `before` (0: the newest). When the
 // store runs out, older history is fetched from Messenger in the background; it arrives as
-// message events.
-func (c *Core) listMessages(threadID string, before int64, limit int) apiMessagesPage {
+// message events. `noServer`: not now (an encrypted chat whose newer history the web app is
+// still reading; its server history is only its unencrypted past, older than all that).
+func (c *Core) listMessages(threadID string, before int64, limit int, noServer bool) apiMessagesPage {
 	if limit <= 0 {
 		limit = 50
 	}
 	rows := c.store.ListMessages(threadID, before, limit)
 	canBackfill := c.canFetchOlder(threadID)
-	if len(rows) < limit && canBackfill {
+	if len(rows) < limit && canBackfill && !noServer {
 		refTs, refID := before, ""
 		if len(rows) > 0 {
 			refTs, refID = rows[0].Timestamp, rows[0].ID

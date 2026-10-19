@@ -64,6 +64,12 @@ extension ChatViewController {
         guard let threadID, !isLoadingOlder, searchResults == nil, scrollView.contentView.bounds.minY < 200, !rows.isEmpty else { return }
         isLoadingOlder = true
         let count = store.messages(in: threadID).count
+        // An encrypted chat goes back through the web app's history first (the server only has
+        // its unencrypted past, older than all of it).
+        let importer = WebHistoryImporter.shared
+        if store.conversation(threadID)?.isEncrypted == true, importer.hasEarlier(threadID) {
+            importer.loadEarlier(threadID: threadID)
+        }
         Task {
             let started = await store.loadOlderMessages(threadID)
             if !started, store.reachedHistoryStart(threadID) {

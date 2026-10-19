@@ -191,10 +191,12 @@ final class ChatStore {
         messagesByThread[threadID] = []
         hasMoreHistory[threadID] = nil
         notify(.messages(threadID: threadID))
-        await loadPage(threadID, before: nil)
+        // First, so the page below doesn't fetch the server's history (an encrypted chat's
+        // unencrypted past) before the web app has read the latest.
         if conversationsByID[threadID]?.isEncrypted == true {
             WebHistoryImporter.shared.reimport(threadID: threadID)
         }
+        await loadPage(threadID, before: nil)
         fetchedExtras.remove(threadID)
         fetchThreadExtras(threadID)
     }
@@ -274,12 +276,15 @@ final class ChatStore {
     }
 
     private func loadPage(_ threadID: String, before: Int64?) async {
-        struct Params: Encodable { let threadID: String; let before: Int64?; let limit: Int }
+        struct Params: Encodable { let threadID: String; let before: Int64?; let limit: Int; let noServer: Bool }
         loadingHistory.insert(threadID)
         defer { loadingHistory.remove(threadID) }
+        // An encrypted chat's server history is its unencrypted past: not before the web app has
+        // read the newer, encrypted history back to its start.
+        let noServer = conversationsByID[threadID]?.isEncrypted == true && WebHistoryImporter.shared.holdsServerHistory(threadID)
         do {
             let page = try await core.call(
-                "messages.list", Params(threadID: threadID, before: before, limit: 50), as: MessagesPage.self
+                "messages.list", Params(threadID: threadID, before: before, limit: 50, noServer: noServer), as: MessagesPage.self
             )
             hasMoreHistory[threadID] = page.hasMore
             var existing = messagesByThread[threadID] ?? []

@@ -33,6 +33,9 @@ final class ChatViewController: NSViewController {
     /// In place of the compose bar in a message request (+Requests).
     let requestBar = RequestActionsView()
     private let emptyLabel = NSTextField(labelWithString: "No Conversation Selected")
+    /// How far an encrypted chat's first read from the web app is (opened for the first time,
+    /// or after Refresh), on the toolbar's bottom edge.
+    private let progressLine = ChatProgressLine()
     var rows: [Row] = []
     private var cancellables: Set<AnyCancellable> = []
     private var lastConversation: Conversation?
@@ -168,11 +171,16 @@ final class ChatViewController: NSViewController {
         emptyLabel.textColor = .tertiaryLabelColor
 
         // The compose bar is a split view accessory (see composeAccessory); messages scroll under it.
-        for view in [scrollView, animationOverlay, emptyLabel] as [NSView] {
+        for view in [scrollView, animationOverlay, emptyLabel, progressLine] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             root.addSubview(view)
         }
         NSLayoutConstraint.activate([
+            // On the toolbar's bottom edge.
+            progressLine.topAnchor.constraint(equalTo: root.safeAreaLayoutGuide.topAnchor),
+            progressLine.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            progressLine.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            progressLine.heightAnchor.constraint(equalToConstant: 1),
             scrollView.topAnchor.constraint(equalTo: root.topAnchor),
             scrollView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
@@ -202,6 +210,9 @@ final class ChatViewController: NSViewController {
         WebHistoryImporter.shared.onStateChange = { threadID in
             for chat in Self.instances.allObjects where chat.threadID == threadID { chat.reload() }
         }
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(updateProgressLine), name: WebHistoryImporter.activityDidChange, object: WebHistoryImporter.shared
+        )
         NotificationCenter.default.addObserver(
             self, selector: #selector(restoreWindowClosed), name: NSWindow.willCloseNotification, object: WebSyncController.shared.window
         )
@@ -355,17 +366,22 @@ final class ChatViewController: NSViewController {
         Notifier.shared.clear(threadID: threadID)
         compose.focus()
         store.refreshTheme(threadID)
+        let encrypted = store.conversation(threadID)?.isEncrypted == true
+        if encrypted {
+            // Queued at once (the Activity window shows it), even while another chat is being
+            // read; and before the first page, which then doesn't fetch the server's history
+            // (the unencrypted past) ahead of the latest messages.
+            WebHistoryImporter.shared.importHistory(threadID: threadID)
+        }
         Task {
             await store.openThread(threadID)
             if self.threadID == threadID {
                 reload(scrollToBottom: true)
                 markReadIfVisible()
             }
-            if store.conversation(threadID)?.isEncrypted == true {
-                // Queued at once (the Activity window shows it), even while another chat is
-                // being read. An encrypted chat's theme changed while the app wasn't running
-                // only shows in the web app; reading it waits its turn for the page too.
-                WebHistoryImporter.shared.importHistory(threadID: threadID)
+            if encrypted {
+                // A theme changed while the app wasn't running only shows in the web app;
+                // reading it waits its turn for the page too.
                 await WebThemeReader.shared.refresh(threadID: threadID)
             }
         }
@@ -377,6 +393,13 @@ final class ChatViewController: NSViewController {
         compose.setQuickReaction(lastConversation?.quickEmoji, tint: BubbleColors.theme(lastConversation?.bubbleColors).last)
         updateMentionCandidates()
         updateRequestBar()
+        updateProgressLine()
+    }
+
+    /// The first read's progress in the chat's tint (the compose bar's).
+    @objc private func updateProgressLine() {
+        progressLine.color = BubbleColors.theme(lastConversation?.bubbleColors).last ?? BubbleColors.outgoing
+        progressLine.setProgress(threadID.flatMap { WebHistoryImporter.shared.firstReadProgress($0) }, chat: threadID)
     }
 
     /// In a group chat, its other members can be tagged with @ (not in encrypted groups, whose

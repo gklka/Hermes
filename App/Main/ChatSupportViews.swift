@@ -16,6 +16,89 @@ final class PassthroughView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
+/// A 1 pt progress bar (like Safari's page loading), in the chat's tint. It only moves forward
+/// during one load, fills up and fades out when it's done, and starts over for another chat.
+final class ChatProgressLine: NSView {
+    var color: NSColor = BubbleColors.outgoing {
+        didSet { applyColor() }
+    }
+    private let fill = CALayer()
+    private var fraction: CGFloat = 0
+    private var showing = false
+    private var chat: String?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.addSublayer(fill)
+        alphaValue = 0
+        applyColor()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// `progress`: how far the load is (0…1); nil when there's none.
+    func setProgress(_ progress: Double?, chat: String?) {
+        if chat != self.chat {
+            // Another chat: its own load, from where it is, without animating.
+            self.chat = chat
+            showing = progress != nil
+            fraction = CGFloat(progress ?? 0)
+            alphaValue = showing ? 1 : 0
+            layoutFill(animated: false)
+            return
+        }
+        if let progress {
+            if !showing {
+                showing = true
+                fraction = 0
+                layoutFill(animated: false)
+                alphaValue = 1
+            }
+            // Never back: stages may report a little less than before.
+            fraction = max(fraction, CGFloat(progress))
+            layoutFill(animated: true)
+        } else if showing {
+            showing = false
+            fraction = 1
+            layoutFill(animated: true)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.4
+                context.allowsImplicitAnimation = true
+                animator().alphaValue = 0
+            }
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        layoutFill(animated: false)
+    }
+
+    private func layoutFill(animated: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(!animated)
+        CATransaction.setAnimationDuration(0.35)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        fill.frame = CGRect(x: 0, y: 0, width: bounds.width * min(1, max(0, fraction)), height: bounds.height)
+        CATransaction.commit()
+    }
+
+    private func applyColor() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            self.fill.backgroundColor = self.color.cgColor
+        }
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColor()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 /// Accepts files and images dragged anywhere onto the conversation; they're staged in the
 /// compose field.
 final class DropTargetView: NSView {
