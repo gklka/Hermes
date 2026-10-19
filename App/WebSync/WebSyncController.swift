@@ -26,7 +26,9 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
             config.userContentController.addUserScript(WebDOMInspector.networkLogScript)
         }
         CallManager.install(in: config)
+        WebCapture.install(in: config)
         webView = InvisibleWhenTransparentWebView(frame: NSRect(x: 0, y: 0, width: 1100, height: 800), configuration: config)
+        webView.isInspectable = WebCapture.isEnabled
         // Calls open in popups, shown in call windows.
         webView.uiDelegate = CallManager.shared
 
