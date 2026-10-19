@@ -91,6 +91,7 @@ func (c *Core) handleTable(tbl *table.LSTable) {
 	c.handleMessageTables(tbl, cs)
 	c.handlePollTables(tbl, cs)
 	c.handleOrphanPollCards(tbl, cs)
+	c.handlePollReferences(tbl, cs)
 	c.handleReadTables(tbl, cs)
 
 	for _, t := range tbl.LSUpdateTypingIndicator {

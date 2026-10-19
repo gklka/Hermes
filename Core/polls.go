@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.mau.fi/mautrix-meta/pkg/messagix/socket"
@@ -183,6 +183,8 @@ func (c *Core) handlePollTables(tbl *table.LSTable, cs *changeSet) {
 	for _, p := range tbl.LSAddPollForThread {
 		pollID := id64(p.PollID)
 		changed[pollID] = true
+		// A poll referenced for the thread but without its options: fetch its full details by ID.
+		c.fetchPollDetails(p.ThreadKey, p.PollID)
 		// Restored polls (FetchAdditionalThreadData) arrive without an XMA card: anchor them to
 		// the message of their latest update, if it's one we have and the card isn't set yet.
 		if p.LastUpdateMessageID != "" && c.store.Get(kvPollCard+pollID) == "" &&
@@ -204,6 +206,27 @@ func (c *Core) handlePollTables(tbl *table.LSTable, cs *changeSet) {
 	}
 	for pollID := range changed {
 		c.pollChanged(pollID, cs)
+	}
+}
+
+// handlePollReferences discovers polls referenced by a thread (their card CTAs on messages) and
+// makes them show and be votable: it anchors each poll to a message it's on, and fetches its full
+// details (options with real IDs, votes) by ID when the core doesn't have them yet.
+func (c *Core) handlePollReferences(tbl *table.LSTable, cs *changeSet) {
+	for _, cta := range tbl.LSInsertAttachmentCta {
+		if !strings.HasPrefix(cta.Type_, "xma_poll") || cta.AttachmentFbid == "" {
+			continue
+		}
+		pollID, err := strconv.ParseInt(cta.AttachmentFbid, 10, 64)
+		if err != nil {
+			continue
+		}
+		if cta.MessageId != "" {
+			if m := c.store.GetMessage(cta.MessageId); m != nil {
+				c.setPollCard(cta.AttachmentFbid, cta.MessageId, m.Timestamp, cs)
+			}
+		}
+		c.fetchPollDetails(cta.ThreadKey, pollID)
 	}
 }
 
@@ -255,37 +278,52 @@ func (c *Core) handleOrphanPollCards(tbl *table.LSTable, cs *changeSet) {
 	}
 }
 
-// importScrapedPolls stores polls scraped from Messenger's web app (their inline cards), keyed
-// by the card's message, for threads whose polls the core can't rebuild from history. Each is
-// shown on its card message (store.APIMessages). Anchors to a message the chat already has.
-func (c *Core) importScrapedPolls(threadID string, polls []webPoll) error {
-	cs := newChangeSet()
-	stored := 0
-	for _, p := range polls {
-		if p.MessageID == "" || c.store.GetMessage(p.MessageID) == nil {
-			continue
-		}
-		stored++
-		poll := apiPoll{
-			ID: "scraped-" + p.MessageID, Question: p.Question, MoreCount: p.MoreCount,
-			IsComplete: true, Options: []apiPollOption{},
-		}
-		for i, o := range p.Options {
-			poll.Options = append(poll.Options, apiPollOption{
-				ID: strconv.Itoa(i), Text: o.Text, VoteCount: o.VoteCount, Percent: o.Percent,
-				Voted: o.Voted, Voters: []apiParticipant{},
-			})
-		}
-		js, err := json.Marshal(poll)
-		if err != nil {
-			continue
-		}
-		c.store.Set(kvPollScraped+p.MessageID, string(js))
-		cs.message(p.MessageID)
+// pollPointQueryTask: the web app's poll_point_query (label 170), fetches a poll's state by ID.
+type pollPointQueryTask struct {
+	ThreadKey int64 `json:"thread_key"`
+	PollID    int64 `json:"poll_id"`
+	SyncGroup int64 `json:"sync_group"`
+	IsCmPoll  int   `json:"is_cm_poll"`
+}
+
+func (t *pollPointQueryTask) GetLabel() string { return "170" }
+
+func (t *pollPointQueryTask) Create() (any, string) { return t, "poll_point_query" }
+
+// pollFetching guards against re-fetching a poll's details while a fetch is in flight.
+var pollFetching sync.Map
+
+// fetchPollDetails pulls a poll's full state (options with real IDs, votes) by ID — the web
+// app's poll_point_query — when the core doesn't already have it. This is how a poll created
+// before the app saw it (or before poll support) gets its real data, natively. Its result is
+// handled like any table (options and votes stored, so the poll shows and can be voted on).
+func (c *Core) fetchPollDetails(threadKey, pollID int64) {
+	if pollID == 0 || threadKey == 0 {
+		return
 	}
-	c.log.Info().Int("received", len(polls)).Int("stored", stored).Str("thread", threadID).Msg("Imported scraped polls")
-	c.flush(cs)
-	return nil
+	if len(c.store.pollOptions(id64(pollID))) > 0 {
+		return // already have it
+	}
+	if _, inFlight := pollFetching.LoadOrStore(pollID, true); inFlight {
+		return
+	}
+	go func() {
+		defer pollFetching.Delete(pollID)
+		cli := c.client()
+		if cli == nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		resp, err := cli.ExecuteTasks(ctx, &pollPointQueryTask{ThreadKey: threadKey, PollID: pollID, SyncGroup: 1})
+		if err != nil {
+			c.log.Warn().Err(err).Int64("poll", pollID).Msg("Fetch poll details failed")
+			return
+		}
+		if resp != nil {
+			c.handleTable(resp)
+		}
+	}()
 }
 
 // setPollCard makes the message the one showing the poll, if it's its first (where it was

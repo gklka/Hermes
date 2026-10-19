@@ -183,7 +183,6 @@ const (
 	kvPollCard    = "pollcard:"    // poll → the message showing it (where it was created)
 	kvPollVoters  = "pollvoters:"  // poll → the newest card its voters were taken from (ms)
 	kvPollQ       = "pollq:"       // poll → its question
-	kvPollScraped = "pollscraped:" // message → a poll (JSON) scraped from the web app's card
 )
 
 func (s *Store) Get(key string) string {
@@ -970,20 +969,8 @@ func (s *Store) APIMessages(rows []*messageRow, selfID string) []apiMessage {
 			}
 			out[i].Attachments[j].Poll = &poll
 		}
-		// A poll scraped from the web app's card (web.importPolls), shown on its card message.
-		if !hasPoll {
-			if raw := s.Get(kvPollScraped + m.ID); raw != "" {
-				var poll apiPoll
-				if json.Unmarshal([]byte(raw), &poll) == nil {
-					out[i].Attachments = append(out[i].Attachments, apiAttachment{
-						ID: "poll-" + m.ID, Kind: kindPoll, Title: poll.Question, Poll: &poll,
-					})
-					hasPoll = true
-				}
-			}
-		}
-		// Restored polls have no card attachment on the message, only the poll→message mapping:
-		// show the poll from the mapping and the stored options.
+		// A poll fetched by its ID (poll_point_query) has no card attachment on the message, only
+		// the poll→message mapping: show it from the mapping and the stored options and votes.
 		if pollID := cardMessages[m.ID]; !hasPoll && pollID != "" {
 			question := s.Get(kvPollQ + pollID)
 			if question == "" {
@@ -995,6 +982,7 @@ func (s *Store) APIMessages(rows []*messageRow, selfID string) []apiMessage {
 			out[i].Attachments = append(out[i].Attachments, apiAttachment{
 				ID: "poll-" + pollID, Kind: kindPoll, Title: poll.Question, Poll: &poll,
 			})
+			hasPoll = true
 		}
 		if m.IsEdited {
 			out[i].PreviousTexts = s.PreviousTexts(m.ID)

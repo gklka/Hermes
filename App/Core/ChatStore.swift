@@ -177,8 +177,6 @@ final class ChatStore {
         guard conv == nil || (conv!.isGroup && !conv!.isEncrypted),
               fetchedExtras.insert(threadID).inserted else { return }
         Task { try? await core.call("threads.fetchExtras", ThreadParams(threadID: threadID)) }
-        // Also read the thread's polls from the web app (full cards the core can't rebuild).
-        WebPollImporter.shared.importOnce(threadID: threadID)
     }
 
     /// Conversation › Refresh: throws away the chat's stored messages and loads them again from
@@ -198,7 +196,6 @@ final class ChatStore {
             WebHistoryImporter.shared.reimport(threadID: threadID)
         }
         fetchedExtras.remove(threadID)
-        WebPollImporter.shared.reset(threadID: threadID)
         fetchThreadExtras(threadID)
     }
 
