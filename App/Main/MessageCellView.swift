@@ -353,6 +353,10 @@ final class MessageCellView: NSTableCellView {
                 if attachment.kind == .poll {
                     continue
                 }
+                if attachment.kind == .location, let location = attachment.location {
+                    attachmentsStack.addArrangedSubview(LocationCardView(location: location, maxWidth: key.maxWidth))
+                    continue
+                }
                 let view = AttachmentView(attachment: attachment, message: message, maxWidth: key.maxWidth)
                 view.onOpen = { [weak self] in
                     guard let self, let message = self.message else { return }

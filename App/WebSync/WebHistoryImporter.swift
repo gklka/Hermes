@@ -833,7 +833,19 @@ final class WebHistoryImporter {
             // in the message text sit in its div[dir=auto]; links around a bare photo are photos.
             const cards = Array.from(el.querySelectorAll('a[href^="http"]')).filter(a =>
               !a.closest('[role="toolbar"]') && !a.closest('div[dir="auto"]') && a.querySelector('span[dir="auto"]'));
-            const inCard = node => cards.some(a => a.contains(node));
+            // A shared location is a map picture wrapped in a link to Maps, with no caption — so
+            // it isn't a card. Keep the link (its coordinates) rather than scraping a bare photo.
+            const isMapHref = u => /maps\\.app\\.goo\\.gl|maps\\.google|google\\.[a-z.]+\\/maps|\\/maps\\/|[?&](?:q|ll|center|query|daddr|destination)=[-\\d]/i.test(u || '');
+            const mapAnchors = Array.from(el.querySelectorAll('a[href^="http"]')).filter(a =>
+              !a.closest('[role="toolbar"]') && !a.closest('div[dir="auto"]') && isMapHref(a.href) &&
+              Array.from(a.querySelectorAll('img')).some(isPicture));
+            // A pinned location has no link: it's a button wrapping a map picture and an address.
+            // Open it in Maps by that address (there are no coordinates in the page).
+            const placeButtons = Array.from(el.querySelectorAll('[role="button"]')).filter(b =>
+              !b.closest('[role="toolbar"]') && Array.from(b.querySelectorAll('img')).some(isPicture) &&
+              b.querySelector('span[dir="auto"], div[dir="auto"]'));
+            const inCard = node => cards.some(a => a.contains(node)) || mapAnchors.some(a => a.contains(node)) ||
+              placeButtons.some(b => b.contains(node));
             // The text (big single emoji included): each outermost div[dir=auto].
             const texts = Array.from(el.querySelectorAll('div[dir="auto"]'))
               .filter(t => !t.closest('[role="toolbar"]') && !inCard(t) && !t.parentElement.closest('div[dir="auto"]'))
@@ -843,7 +855,19 @@ final class WebHistoryImporter {
               const img = Array.from(a.querySelectorAll('img')).find(isPicture);
               return { url: a.href, title: spans[0] || '', description: spans[1] || '',
                        image: img ? { src: img.src, width: img.naturalWidth, height: img.naturalHeight } : null };
-            });
+            }).concat(mapAnchors.map(a => {
+              const img = Array.from(a.querySelectorAll('img')).find(isPicture);
+              return { url: a.href, title: (a.getAttribute('aria-label') || '').trim(), description: '',
+                       image: img ? { src: img.src, width: img.naturalWidth, height: img.naturalHeight } : null };
+            })).concat(placeButtons.map(b => {
+              // The address is the longest of the card's text lines (the other is a label).
+              const lines = Array.from(b.querySelectorAll('span[dir="auto"], div[dir="auto"]'))
+                .map(t => t.innerText.trim()).filter(Boolean).sort((x, y) => y.length - x.length);
+              const address = lines[0] || '';
+              const img = Array.from(b.querySelectorAll('img')).find(isPicture);
+              return address ? { url: 'http://maps.apple.com/?q=' + encodeURIComponent(address), title: address,
+                       description: '', image: img ? { src: img.src, width: img.naturalWidth, height: img.naturalHeight } : null } : null;
+            }).filter(Boolean));
             const images = Array.from(el.querySelectorAll('img')).filter(i => isPicture(i) && !inCard(i))
               .map(i => ({ src: i.src, width: i.naturalWidth, height: i.naturalHeight }));
             const entry = { domID, ts, text: texts.join('\\n'), images, links, reactions: reactionsOf(el) };

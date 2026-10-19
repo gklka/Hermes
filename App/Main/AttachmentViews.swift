@@ -1,4 +1,5 @@
 import AppKit
+import MapKit
 import UniformTypeIdentifiers
 
 /// Dragging a link out of a message: other apps get the URL, Finder makes a .webloc named after
@@ -144,6 +145,117 @@ final class LinkCardView: NSView, NSDraggingSource {
     }
 }
 
+/// A shared location: a map snapshot with a pin, the place's name and address below. Clicking
+/// opens it in Maps. The map picture is rendered off the main thread, then faded in.
+final class LocationCardView: NSView {
+    private let location: Attachment.Location
+    private let mapImage = NSImageView()
+    private let titleLabel = NSTextField(wrappingLabelWithString: "")
+    private let subtitleLabel = NSTextField(labelWithString: "")
+    private var snapshotter: MKMapSnapshotter?
+
+    init(location: Attachment.Location, maxWidth: CGFloat) {
+        self.location = location
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 16
+        layer?.masksToBounds = true
+
+        let width = min(300, maxWidth)
+        let mapHeight: CGFloat = 150
+        mapImage.wantsLayer = true
+        mapImage.imageScaling = .scaleProportionallyUpOrDown
+        mapImage.layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
+
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.maximumNumberOfLines = 2
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.stringValue = title
+        subtitleLabel.font = .systemFont(ofSize: 11)
+        subtitleLabel.textColor = .secondaryLabelColor
+        subtitleLabel.lineBreakMode = .byTruncatingTail
+        let subtitle = location.address.flatMap { $0.isEmpty ? nil : $0 } ?? coordinateText
+        subtitleLabel.stringValue = subtitle
+
+        for view in [mapImage, titleLabel, subtitleLabel] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(view)
+        }
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: width),
+            mapImage.topAnchor.constraint(equalTo: topAnchor),
+            mapImage.leadingAnchor.constraint(equalTo: leadingAnchor),
+            mapImage.trailingAnchor.constraint(equalTo: trailingAnchor),
+            mapImage.heightAnchor.constraint(equalToConstant: mapHeight),
+            titleLabel.topAnchor.constraint(equalTo: mapImage.bottomAnchor, constant: 8),
+            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            subtitleLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
+            subtitleLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9),
+        ])
+
+        addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openInMaps)))
+        renderMap(width: width, height: mapHeight)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func updateLayer() { layer?.backgroundColor = BubbleColors.incoming.cgColor }
+    override var wantsUpdateLayer: Bool { true }
+
+    private var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: location.latitude, longitude: location.longitude)
+    }
+
+    private var title: String {
+        if let name = location.name, !name.isEmpty { return name }
+        return (location.live ?? false) ? "Live Location" : "Shared Location"
+    }
+
+    private var coordinateText: String {
+        String(format: "%.5f, %.5f", location.latitude, location.longitude)
+    }
+
+    private func renderMap(width: CGFloat, height: CGFloat) {
+        let options = MKMapSnapshotter.Options()
+        options.region = MKCoordinateRegion(center: coordinate, latitudinalMeters: 800, longitudinalMeters: 800)
+        options.size = CGSize(width: width, height: height)
+        let snapshotter = MKMapSnapshotter(options: options)
+        self.snapshotter = snapshotter
+        snapshotter.start(with: .main) { [weak self] snapshot, _ in
+            guard let self, let snapshot else { return }
+            self.mapImage.image = Self.pinned(snapshot, at: self.coordinate)
+        }
+    }
+
+    /// The snapshot with a pin drawn at the coordinate.
+    private static func pinned(_ snapshot: MKMapSnapshotter.Snapshot, at coordinate: CLLocationCoordinate2D) -> NSImage {
+        let image = snapshot.image
+        guard let pin = NSImage(systemSymbolName: "mappin.circle.fill", accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 30, weight: .bold)
+                .applying(.init(paletteColors: [.white, .systemRed]))) else { return image }
+        let composed = NSImage(size: image.size)
+        composed.lockFocus()
+        image.draw(at: .zero, from: .zero, operation: .copy, fraction: 1)
+        let point = snapshot.point(for: coordinate)
+        let size = pin.size
+        // The snapshot's points are top-left origin; AppKit drawing is bottom-left.
+        pin.draw(at: NSPoint(x: point.x - size.width / 2, y: image.size.height - point.y - size.height / 2),
+                 from: .zero, operation: .sourceOver, fraction: 1)
+        composed.unlockFocus()
+        return composed
+    }
+
+    @objc private func openInMaps() {
+        let item = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
+        item.name = location.name.flatMap { $0.isEmpty ? nil : $0 } ?? "Shared Location"
+        item.openInMaps(launchOptions: nil)
+    }
+}
+
 /// Image / video / file / link attachment. Can be dragged out to Finder or other apps.
 final class AttachmentView: NSView, NSDraggingSource {
     var onOpen: (() -> Void)?
@@ -184,6 +296,9 @@ final class AttachmentView: NSView, NSDraggingSource {
         case .poll:
             // Shown by PollBubblesView; this is a fallback.
             setUpPill(symbol: "chart.bar.xaxis", title: attachment.title ?? attachment.kind.label, subtitle: nil, maxWidth: maxWidth)
+        case .location:
+            // Shown by LocationCardView; this is a fallback.
+            setUpPill(symbol: "mappin.circle.fill", title: attachment.location?.name ?? attachment.kind.label, subtitle: nil, maxWidth: maxWidth)
         }
 
         addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(clicked)))
@@ -388,7 +503,7 @@ final class AttachmentFilePromise: NSFilePromiseProvider, NSFilePromiseProviderD
         case .gif: return .gif
         case .video: return .mpeg4Movie
         case .audio: return .mpeg4Audio
-        case .file, .link, .call, .poll: return .data
+        case .file, .link, .call, .poll, .location: return .data
         }
     }
 

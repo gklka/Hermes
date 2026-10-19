@@ -952,6 +952,8 @@ func (s *Store) APIMessages(rows []*messageRow, selfID string) []apiMessage {
 	out := make([]apiMessage, len(rows))
 	for i, m := range rows {
 		out[i] = m.toAPI(selfID, reactions[m.ID])
+		// A shared place shows as a map that opens in Maps, not a web link or image.
+		classifyLocationAttachments(out[i].Attachments)
 		// A poll's card shows its votes as synced (Messenger's card only has the options it had
 		// then, three at most). Every change to a poll comes with a new card; only the latest is
 		// shown, the others are links to the poll.

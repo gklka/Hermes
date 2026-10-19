@@ -73,6 +73,8 @@ struct Attachment: Codable, Hashable {
         /// A poll (see `poll`), on the system message saying it was created. Messages about
         /// changes to it have one too, without options (only the first message shows the poll).
         case poll
+        /// A shared location (see `location`): a point on a map, maybe live.
+        case location
     }
 
     let id: String
@@ -90,6 +92,15 @@ struct Attachment: Codable, Hashable {
     var source: String?
     var call: Call?
     var poll: Poll?
+    var location: Location?
+
+    struct Location: Codable, Hashable {
+        let latitude: Double
+        let longitude: Double
+        var name: String?
+        var address: String?
+        var live: Bool?
+    }
 
     struct Call: Codable, Hashable {
         enum Outcome: String, Codable {
@@ -153,6 +164,7 @@ extension Attachment.Kind {
         case .link: "Link"
         case .call: "Call"
         case .poll: "Poll"
+        case .location: "Location"
         }
     }
 }

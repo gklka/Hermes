@@ -125,6 +125,11 @@ func (c *Core) handleFBMessage(evt *events.FBMessage) {
 				}}
 				if ctas := x.GetCtas(); len(ctas) > 0 {
 					link.URL = firstNonEmpty(ctas[0].GetActionURL(), ctas[0].GetNativeURL())
+					// A card whose action is handled inside Messenger (e.g. viewing a live location,
+					// which has no link or fixed coordinates): open the conversation there.
+					if link.URL == "" {
+						link.URL = "https://www.facebook.com/messages/t/" + threadID
+					}
 				}
 				row.Attachments = append(row.Attachments, link)
 			}
@@ -215,10 +220,35 @@ func fillConsumerContent(row *messageRow, content *waConsumerApplication.Consume
 		row.Text = "View-once media, open it in the Messenger app"
 		row.IsSystem = true
 	case content.GetLocationMessage() != nil:
-		row.Text = "📍 " + firstNonEmpty(content.GetLocationMessage().GetAddress(), "Shared a location")
+		lm := content.GetLocationMessage()
+		if !addLocation(row, attachmentID(), lm.GetLocation(), lm.GetAddress(), false) {
+			row.Text = "📍 " + firstNonEmpty(lm.GetAddress(), "Shared a location")
+		}
+	case content.GetLiveLocationMessage() != nil:
+		llm := content.GetLiveLocationMessage()
+		if !addLocation(row, attachmentID(), llm.GetLocation(), llm.GetCaption().GetText(), true) {
+			row.Text = "📍 Shared live location"
+		}
 	default:
 		return false
 	}
+	return true
+}
+
+// addLocation adds a shared-location card; returns false (so the caller can fall back to text) when
+// there are no real coordinates. `note` is the address (static) or caption (live).
+func addLocation(row *messageRow, id string, loc *waConsumerApplication.ConsumerApplication_Location, note string, live bool) bool {
+	if loc == nil {
+		return false
+	}
+	lat, lng := loc.GetDegreesLatitude(), loc.GetDegreesLongitude()
+	if lat == 0 && lng == 0 {
+		return false
+	}
+	row.Attachments = append(row.Attachments, storedAttachment{apiAttachment: apiAttachment{
+		ID: id, Kind: kindLocation,
+		Location: &apiLocation{Latitude: lat, Longitude: lng, Name: loc.GetName(), Address: note, Live: live},
+	}})
 	return true
 }
 

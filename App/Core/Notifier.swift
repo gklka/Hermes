@@ -271,6 +271,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         case .link: return first.url ?? "Sent a link"
         case .call: return first.call.map { CallText.title(of: $0, outgoing: message.isFromMe) } ?? "Call"
         case .poll: return first.poll?.question.map { "📊 " + $0 } ?? "Created a poll"
+        case .location: return "📍 " + (first.location?.name.flatMap { $0.isEmpty ? nil : $0 } ?? "Shared a location")
         }
     }
 

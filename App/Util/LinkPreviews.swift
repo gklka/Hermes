@@ -199,7 +199,9 @@ final class LinkPreviews {
         }
         guard let attachment = attachments.first(where: { $0.kind == .link }) else { return nil }
         let cardURL = attachment.url.flatMap(URL.init(string:)).map { unwrapRedirect($0) }.flatMap { isWeb($0) ? $0 : nil } ?? textURL
-        if let cardURL, !isFacebook(cardURL) {
+        // A shared place links to Maps and carries its own map picture: show that (and open Maps on
+        // click), rather than letting LinkPresentation fetch a preview for the Maps URL.
+        if let cardURL, !isFacebook(cardURL), !isMaps(cardURL) {
             return .web(cardURL)
         }
         let title = attachment.title.flatMap { $0.isEmpty ? nil : $0 }
@@ -221,6 +223,12 @@ final class LinkPreviews {
     private static func isFacebook(_ url: URL) -> Bool {
         guard let host = url.host()?.lowercased() else { return false }
         return facebookDomains.contains { host == $0 || host.hasSuffix("." + $0) }
+    }
+
+    /// A Maps URL (a shared place): its card is shown from the message, not fetched by Apple.
+    private static func isMaps(_ url: URL) -> Bool {
+        let host = url.host()?.lowercased() ?? ""
+        return host.contains("maps.") || host.hasSuffix("goo.gl") || url.path.contains("/maps")
     }
 
     /// True when the message's text is just a link (then only the preview is shown).

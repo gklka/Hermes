@@ -65,6 +65,8 @@ const (
 	// A poll (apiAttachment.Poll), on the system message saying it was created. Messages about
 	// changes to it have one too, without options (only the first message shows the poll).
 	kindPoll = "poll"
+	// A shared location (apiAttachment.Location): a point on a map, maybe live.
+	kindLocation = "location"
 )
 
 type apiAttachment struct {
@@ -80,10 +82,20 @@ type apiAttachment struct {
 	Title      string `json:"title,omitempty"`
 	// Subtitle and Source enrich a link card from a shared post/reel/story (an XMA): the
 	// description line, and where it's from ("Instagram", a page name) shown instead of the host.
-	Subtitle string   `json:"subtitle,omitempty"`
-	Source   string   `json:"source,omitempty"`
-	Call     *apiCall `json:"call,omitempty"`
-	Poll     *apiPoll `json:"poll,omitempty"`
+	Subtitle string       `json:"subtitle,omitempty"`
+	Source   string       `json:"source,omitempty"`
+	Call     *apiCall     `json:"call,omitempty"`
+	Poll     *apiPoll     `json:"poll,omitempty"`
+	Location *apiLocation `json:"location,omitempty"`
+}
+
+// apiLocation is a shared point on a map.
+type apiLocation struct {
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+	Name      string  `json:"name,omitempty"`
+	Address   string  `json:"address,omitempty"`
+	Live      bool    `json:"live,omitempty"`
 }
 
 // apiPoll is a group chat's poll.
