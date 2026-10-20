@@ -555,7 +555,8 @@ final class MessageCellView: NSTableCellView {
 
     /// The typing indicator: just the incoming bubble with the dots, where the next message
     /// will be (the layout's avatar space keeps it aligned with the chat's messages).
-    func configureTyping(layout: Layout) {
+    /// `typers` (group chats only) names who's typing, shown with the first one's picture.
+    func configureTyping(layout: Layout, typers: [Participant] = []) {
         message = nil
         setTyping(true)
         NSLayoutConstraint.deactivate(outgoingConstraints + [replyTop, columnBelowReply, replyLeading, replyTrailing])
@@ -564,9 +565,18 @@ final class MessageCellView: NSTableCellView {
         incomingAvatarLeading.constant = layout.reserveAvatarSpace ? BubbleMetrics.avatarSideInset : BubbleMetrics.sideInset
         widthConstraint.constant = layout.maxWidth
         topConstraint.constant = 8
-        for view in [senderLabel, replyView, replyConnector, attachmentsStack, linkCard, reactionsBadge, avatar,
+        for view in [replyView, replyConnector, attachmentsStack, linkCard, reactionsBadge,
                      editedRow, historyStack, failedIcon] as [NSView] {
             view.isHidden = true
+        }
+        // In a group, show who's typing (their name, and the first one's picture).
+        let showTypers = !typers.isEmpty
+        senderLabel.isHidden = !showTypers
+        senderLabel.stringValue = typers.map(\.name).joined(separator: ", ")
+        avatar.isHidden = !showTypers
+        if let first = typers.first {
+            avatar.configure(name: first.name, url: first.avatarURL)
+            avatar.toolTip = senderLabel.stringValue
         }
         bubble.isHidden = false
         bubble.color = BubbleColors.incoming

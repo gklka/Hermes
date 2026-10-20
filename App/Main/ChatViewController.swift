@@ -833,8 +833,14 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
             let cell = reuse("TypingMessage", sizing: sizing) { MessageCellView() }
             var layout = MessageCellView.Layout()
             layout.maxWidth = bubbleMaxWidth
-            layout.reserveAvatarSpace = threadID.flatMap { store.conversation($0) }?.isGroup ?? false
-            cell.configureTyping(layout: layout)
+            let conversation = threadID.flatMap { store.conversation($0) }
+            layout.reserveAvatarSpace = conversation?.isGroup ?? false
+            // In a group, show who's typing.
+            var typers: [Participant] = []
+            if let threadID, conversation?.isGroup == true {
+                typers = (store.typing[threadID] ?? []).sorted().compactMap { store.participant($0, in: threadID) }
+            }
+            cell.configureTyping(layout: layout, typers: typers)
             return cell
         }
     }
