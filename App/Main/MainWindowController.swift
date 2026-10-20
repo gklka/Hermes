@@ -17,6 +17,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         window.minSize = NSSize(width: 640, height: 420)
         window.title = "Messenger"
         window.isReleasedWhenClosed = false
+        // Reopen on the Space you're on now (like Messages), instead of switching back to the
+        // Space where it was last shown.
+        window.collectionBehavior.insert(.moveToActiveSpace)
         window.contentViewController = split
         window.setContentSize(NSSize(width: 1040, height: 720))
         window.center()
