@@ -10,6 +10,8 @@ enum ShareHandoff {
     nonisolated static let groupID = Bundle.main.object(forInfoDictionaryKey: "MMAppGroupID") as? String ?? ""
     nonisolated static let urlScheme = "hermes"
     nonisolated static let shareHost = "share"
+    /// `hermes://chat?id=<thread ID>`, opened from the widget.
+    nonisolated static let chatHost = "chat"
 
     nonisolated static var container: URL? {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupID)

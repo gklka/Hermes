@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import WidgetKit
 
 /// The app's side of the share extension (ShareHandoff): keeps the most recent chats and their
 /// pictures in the app group for the extension's picker, and sends what the extension leaves in
@@ -36,6 +37,7 @@ final class ShareSupport {
         if let avatars = ShareHandoff.avatarsFolder {
             try? FileManager.default.removeItem(at: avatars)
         }
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     private func scheduleUpdate() {
@@ -49,7 +51,8 @@ final class ShareSupport {
         guard let file = ShareHandoff.recentChatsFile, let avatars = ShareHandoff.avatarsFolder else { return }
         let recent = Array(store.conversations.filter { !$0.name.isEmpty }.prefix(Self.chatCount))
         // The top chats' pictures, even if the chat list hasn't shown them yet; written once loaded.
-        let missing = recent.prefix(10).compactMap { $0.avatarURL.flatMap(URL.init(string:)) }
+        // For a group without its own photo, its members' pictures (for the composite icon).
+        let missing = recent.prefix(10).flatMap(pictureURLs)
             .filter { ImageCache.shared.cached($0) == nil && requestedPictures.insert($0).inserted }
         if !missing.isEmpty {
             Task { [weak self] in
@@ -74,13 +77,71 @@ final class ShareSupport {
         }
         if let data = try? JSONEncoder().encode(chats) {
             try? data.write(to: file, options: .atomic)
+            WidgetCenter.shared.reloadAllTimelines()
         }
     }
 
-    /// The chat's picture as already loaded for the chat list, as a small PNG.
+    /// Whether the group has no picture of its own, so it's shown as its members (like the app).
+    private func isMemberGroup(_ conversation: Conversation) -> Bool {
+        conversation.isGroup && (conversation.avatarURL?.isEmpty ?? true)
+    }
+
+    /// Up to three members shown in a group's composite icon (latest sender first, then photos).
+    private func groupMembers(_ conversation: Conversation) -> [Participant] {
+        let selfID = store.account?.id
+        return Array(conversation.participants.filter { $0.id != selfID }.sorted { a, b in
+            if (a.id == conversation.snippetSenderID) != (b.id == conversation.snippetSenderID) {
+                return a.id == conversation.snippetSenderID
+            }
+            return (a.avatarURL?.isEmpty == false) && (b.avatarURL?.isEmpty != false)
+        }.prefix(3))
+    }
+
+    /// The picture URLs a chat needs loaded: its own, or its members' (for a group composite).
+    private func pictureURLs(_ conversation: Conversation) -> [URL] {
+        if isMemberGroup(conversation) {
+            return groupMembers(conversation).compactMap { $0.avatarURL.flatMap(URL.init(string:)) }
+        }
+        return conversation.avatarURL.flatMap(URL.init(string:)).map { [$0] } ?? []
+    }
+
+    /// The chat's picture as already loaded for the chat list, as a small PNG. A group with no
+    /// picture of its own is drawn from its members, like the app's avatar.
     private func picture(of conversation: Conversation) -> Data? {
-        conversation.avatarURL.flatMap(URL.init(string:)).flatMap { ImageCache.shared.cached($0) }
+        if isMemberGroup(conversation) {
+            return groupPicture(of: conversation)
+        }
+        return conversation.avatarURL.flatMap(URL.init(string:)).flatMap { ImageCache.shared.cached($0) }
             .flatMap { SpotlightIndex.thumbnail($0) }
+    }
+
+    /// A group's composite icon: up to three members clustered in a circle, like `ConversationAvatarView`.
+    private func groupPicture(of conversation: Conversation) -> Data? {
+        let picked = groupMembers(conversation)
+        guard !picked.isEmpty else { return nil }
+        let count = max(2, picked.count)
+        let size: CGFloat = 128
+        let image = NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
+            // No background fill: the widget tints the gaps between members (5% of the text color).
+            NSBezierPath(ovalIn: rect).addClip()
+            let center = NSPoint(x: rect.midX, y: rect.midY)
+            let memberSize: CGFloat, distance: CGFloat, angles: [CGFloat]
+            if count == 2 {
+                memberSize = size * 0.56; distance = size * 0.2; angles = [135, -45]
+            } else {
+                memberSize = size * 0.52; distance = size * 0.24; angles = [90, 210, 330]
+            }
+            for index in 0..<count {
+                let member = index < picked.count ? picked[index] : nil
+                let photo = member?.avatarURL.flatMap(URL.init(string:)).flatMap { ImageCache.shared.cached($0) }
+                let avatar = RoundAvatar.image(photo, name: member?.name ?? conversation.name, size: memberSize)
+                let angle = angles[index] * .pi / 180
+                let point = NSPoint(x: center.x + cos(angle) * distance, y: center.y + sin(angle) * distance)
+                avatar.draw(in: NSRect(x: point.x - memberSize / 2, y: point.y - memberSize / 2, width: memberSize, height: memberSize))
+            }
+            return true
+        }
+        return SpotlightIndex.thumbnail(image)
     }
 
     // MARK: - Sending

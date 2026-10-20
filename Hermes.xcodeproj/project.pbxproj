@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		AA000000000000000000002D /* ShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000020 /* ShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		AAD0000000000000000000E1 /* HermesWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AAD0000000000000000000E3 /* HermesWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AA0000000000000000000042 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000041 /* Sparkle */; };
 /* End PBXBuildFile section */
 
@@ -19,6 +20,13 @@
 			remoteGlobalIDString = AA0000000000000000000023;
 			remoteInfo = ShareExtension;
 		};
+		AAD0000000000000000000E2 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA000000000000000000000B /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AAD0000000000000000000EA;
+			remoteInfo = HermesWidget;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -29,6 +37,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				AA000000000000000000002D /* ShareExtension.appex in Embed Foundation Extensions */,
+				AAD0000000000000000000E1 /* HermesWidget.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -38,6 +47,9 @@
 /* Begin PBXFileReference section */
 		AA0000000000000000000001 /* Hermes.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Hermes.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000020 /* ShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		AAD0000000000000000000E3 /* HermesWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = HermesWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		AAD0000000000000000000E4 /* Widget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Widget.entitlements; sourceTree = "<group>"; };
+		AAD0000000000000000000E5 /* Widget-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "Widget-Info.plist"; sourceTree = "<group>"; };
 		AA000000000000000000002E /* Hermes.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Hermes.entitlements; sourceTree = "<group>"; };
 		AA000000000000000000002F /* ShareExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ShareExtension.entitlements; sourceTree = "<group>"; };
 		AA0000000000000000000030 /* ShareExtension-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "ShareExtension-Info.plist"; sourceTree = "<group>"; };
@@ -51,6 +63,7 @@
 		AA0000000000000000000012 /* Core */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Core; sourceTree = "<group>"; };
 		AA0000000000000000000021 /* ShareExtension */ = {isa = PBXFileSystemSynchronizedRootGroup; path = ShareExtension; sourceTree = "<group>"; };
 		AA0000000000000000000022 /* Shared */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Shared; sourceTree = "<group>"; };
+		AAD0000000000000000000E6 /* WidgetExtension */ = {isa = PBXFileSystemSynchronizedRootGroup; path = WidgetExtension; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -69,6 +82,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AAD0000000000000000000E7 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -77,6 +97,7 @@
 			children = (
 				AA0000000000000000000002 /* App */,
 				AA0000000000000000000021 /* ShareExtension */,
+				AAD0000000000000000000E6 /* WidgetExtension */,
 				AA0000000000000000000022 /* Shared */,
 				AA0000000000000000000012 /* Core */,
 				AA0000000000000000000013 /* Support */,
@@ -89,6 +110,7 @@
 			children = (
 				AA0000000000000000000001 /* Hermes.app */,
 				AA0000000000000000000020 /* ShareExtension.appex */,
+				AAD0000000000000000000E3 /* HermesWidget.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -101,6 +123,8 @@
 				AA000000000000000000002E /* Hermes.entitlements */,
 				AA000000000000000000002F /* ShareExtension.entitlements */,
 				AA0000000000000000000030 /* ShareExtension-Info.plist */,
+				AAD0000000000000000000E4 /* Widget.entitlements */,
+				AAD0000000000000000000E5 /* Widget-Info.plist */,
 				AA0000000000000000000031 /* Signing.xcconfig */,
 			);
 			path = Support;
@@ -123,6 +147,7 @@
 			);
 			dependencies = (
 				AA000000000000000000002B /* PBXTargetDependency */,
+				AAD0000000000000000000EB /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				AA0000000000000000000002 /* App */,
@@ -157,6 +182,27 @@
 			productReference = AA0000000000000000000020 /* ShareExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		AAD0000000000000000000EA /* HermesWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AAD0000000000000000000EE /* Build configuration list for PBXNativeTarget "HermesWidget" */;
+			buildPhases = (
+				AAD0000000000000000000E9 /* Sources */,
+				AAD0000000000000000000E7 /* Frameworks */,
+				AAD0000000000000000000E8 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				AAD0000000000000000000E6 /* WidgetExtension */,
+				AA0000000000000000000022 /* Shared */,
+			);
+			name = HermesWidget;
+			productName = HermesWidget;
+			productReference = AAD0000000000000000000E3 /* HermesWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -171,6 +217,9 @@
 						CreatedOnToolsVersion = 27.1;
 					};
 					AA0000000000000000000023 = {
+						CreatedOnToolsVersion = 27.1;
+					};
+					AAD0000000000000000000EA = {
 						CreatedOnToolsVersion = 27.1;
 					};
 				};
@@ -194,6 +243,7 @@
 			targets = (
 				AA0000000000000000000006 /* Hermes */,
 				AA0000000000000000000023 /* ShareExtension */,
+				AAD0000000000000000000EA /* HermesWidget */,
 			);
 		};
 /* End PBXProject section */
@@ -207,6 +257,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		AA0000000000000000000026 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AAD0000000000000000000E8 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -254,6 +311,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AAD0000000000000000000E9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -261,6 +325,11 @@
 			isa = PBXTargetDependency;
 			target = AA0000000000000000000023 /* ShareExtension */;
 			targetProxy = AA000000000000000000002A /* PBXContainerItemProxy */;
+		};
+		AAD0000000000000000000EB /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AAD0000000000000000000EA /* HermesWidget */;
+			targetProxy = AAD0000000000000000000E2 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -448,6 +517,60 @@
 			};
 			name = Release;
 		};
+		AAD0000000000000000000EC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Support/Widget.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 3;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Support/Widget-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Hermes;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 0.3;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BUNDLE_ID_PREFIX).Hermes.Widget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		AAD0000000000000000000ED /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Support/Widget.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 3;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Support/Widget-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Hermes;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 0.3;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(BUNDLE_ID_PREFIX).Hermes.Widget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -465,6 +588,15 @@
 			buildConfigurations = (
 				AA0000000000000000000028 /* Debug */,
 				AA0000000000000000000029 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AAD0000000000000000000EE /* Build configuration list for PBXNativeTarget "HermesWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AAD0000000000000000000EC /* Debug */,
+				AAD0000000000000000000ED /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

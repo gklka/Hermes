@@ -73,7 +73,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// `hermes://share?id=…` from the share extension (ShareSupport).
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
-            ShareSupport.shared.handle(url)
+            // The widget opens a chat with hermes://chat?id=<thread ID>.
+            if url.host() == ShareHandoff.chatHost,
+               let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "id" })?.value, !id.isEmpty {
+                openChat(id)
+            } else {
+                ShareSupport.shared.handle(url)
+            }
         }
     }
 
