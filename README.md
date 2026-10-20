@@ -6,6 +6,16 @@ An unofficial, learning-purpose macOS client for Facebook Messenger with a nativ
 
 <p align="center"><img src="docs/screenshot.png" alt="Hermes showing a chat list and a conversation with a link preview, a tapback and the typing bubble" width="760"></p>
 
+## Download
+
+**[Download the latest version](https://github.com/gklka/Hermes/releases/latest)** (`Hermes-<version>.dmg`, under Assets). It needs macOS 26 or later and a Mac with Apple silicon.
+
+1. Open the DMG and drag Hermes to Applications.
+2. Open Hermes. It isn't notarized, so macOS blocks it the first time: go to **System Settings › Privacy & Security** and click **Open Anyway** next to the Hermes message.
+3. Log in with your Facebook account. To see your encrypted chats' history, choose **Restore Encrypted Chats…** and enter your Messenger PIN once.
+
+After that, Hermes updates itself: it checks daily, or choose **Hermes › Check for Updates…**. Read [Before you use it](#before-you-use-it) first.
+
 ## Features
 
 ### A real Mac app
