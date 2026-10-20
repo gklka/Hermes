@@ -135,13 +135,14 @@ extension ChatViewController: ComposeViewDelegate {
         }
         editTarget = message
         replyTarget = nil
-        selectMessage(nil)
+        selectMessage(message.id, dismissable: false)
         compose.showEditing(message.text)
     }
 
     /// Back to what the compose field held before the edit.
     func finishEditing() {
         editTarget = nil
+        selectMessage(nil)
         compose.hideReply()
         compose.draft = draftBeforeEditing ?? NSAttributedString()
         draftBeforeEditing = nil

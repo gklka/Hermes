@@ -298,6 +298,7 @@ final class ComposeView: NSView, NSTextViewDelegate {
             replyBanner.addSubview(view)
         }
         replyBanner.isHidden = true
+        replyBanner.alphaValue = 0
 
         for view in [replyBanner, plusGlass, fieldGlass, buttonGlass] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
@@ -321,10 +322,10 @@ final class ComposeView: NSView, NSTextViewDelegate {
             replyBanner.trailingAnchor.constraint(equalTo: field.trailingAnchor),
             bannerCollapsed,
             replyLabel.leadingAnchor.constraint(equalTo: replyBanner.leadingAnchor),
-            replyLabel.centerYAnchor.constraint(equalTo: replyBanner.centerYAnchor),
+            replyLabel.centerYAnchor.constraint(equalTo: replyBanner.centerYAnchor, constant: 5),
             replyLabel.trailingAnchor.constraint(lessThanOrEqualTo: closeReply.leadingAnchor, constant: -6),
             closeReply.trailingAnchor.constraint(equalTo: replyBanner.trailingAnchor),
-            closeReply.centerYAnchor.constraint(equalTo: replyBanner.centerYAnchor),
+            closeReply.centerYAnchor.constraint(equalTo: replyBanner.centerYAnchor, constant: 5),
 
             fieldGlass.topAnchor.constraint(equalTo: replyBanner.bottomAnchor, constant: 8),
             fieldGlass.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
@@ -640,13 +641,28 @@ final class ComposeView: NSView, NSTextViewDelegate {
     private func showBanner(_ text: String) {
         replyLabel.stringValue = text
         replyBanner.isHidden = false
-        bannerCollapsed.constant = 18
+        setBanner(open: true)
         focus()
     }
 
     func hideReply() {
-        replyBanner.isHidden = true
-        bannerCollapsed.constant = 0
+        guard !replyBanner.isHidden else { return }
+        setBanner(open: false) { [weak self] in
+            self?.replyBanner.isHidden = true
+        }
+    }
+
+    /// Slides and fades the "Replying to…" / "Editing message" banner in or out.
+    private func setBanner(open: Bool, completion: (() -> Void)? = nil) {
+        layoutSubtreeIfNeeded()
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            context.allowsImplicitAnimation = true
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            bannerCollapsed.animator().constant = open ? 26 : 0
+            replyBanner.animator().alphaValue = open ? 1 : 0
+            layoutSubtreeIfNeeded()
+        }, completionHandler: completion)
     }
 
     // MARK: - Actions

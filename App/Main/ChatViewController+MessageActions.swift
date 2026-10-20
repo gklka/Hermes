@@ -250,16 +250,20 @@ extension ChatViewController: MessageCellDelegate {
         selectMessage(message.id)
     }
 
-    func selectMessage(_ id: String?) {
-        guard id != selectedMessageID else { return }
-        selectedMessageID = id
-        for (_, cell) in visibleCells(MessageCellView.self) {
-            cell.isMessageSelected = id != nil && cell.message?.id == id
+    /// `dismissable` false keeps the highlight until it's cleared in code (clicks don't drop it),
+    /// used to mark the message being edited.
+    func selectMessage(_ id: String?, dismissable: Bool = true) {
+        if id != selectedMessageID {
+            selectedMessageID = id
+            for (_, cell) in visibleCells(MessageCellView.self) {
+                cell.isMessageSelected = id != nil && cell.message?.id == id
+            }
         }
-        if id == nil, let deselectMonitor {
+        if let deselectMonitor {
             NSEvent.removeMonitor(deselectMonitor)
             self.deselectMonitor = nil
-        } else if id != nil, deselectMonitor == nil {
+        }
+        if id != nil, dismissable {
             deselectMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
                 self?.deselectUnlessInSelection(event)
                 return event
