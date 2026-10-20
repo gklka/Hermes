@@ -104,6 +104,18 @@ final class BubbleView: NSView {
         if let cursor { addCursorRect(bounds, cursor: cursor) }
     }
 
+    /// Called when the bubble's background is pressed (to select the message on mouse down). When
+    /// set, the press isn't passed on, so the messages table doesn't start its own tracking.
+    var onMouseDown: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        if let onMouseDown {
+            onMouseDown()
+        } else {
+            super.mouseDown(with: event)
+        }
+    }
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true

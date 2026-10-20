@@ -39,12 +39,17 @@ final class LinkCardView: NSView, NSDraggingSource {
     private let siteLabel = NSTextField(labelWithString: "")
     private var widthConstraint = NSLayoutConstraint()
     private var pictureHeight = NSLayoutConstraint()
+    private let pressLayer = CALayer()
 
     init() {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.cornerRadius = 16
         layer?.masksToBounds = true
+        pressLayer.backgroundColor = NSColor.black.cgColor
+        pressLayer.opacity = 0
+        pressLayer.zPosition = 1000
+        layer?.addSublayer(pressLayer)
 
         picture.wantsLayer = true
         picture.layer?.contentsGravity = .resizeAspectFill
@@ -88,7 +93,6 @@ final class LinkCardView: NSView, NSDraggingSource {
             siteLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9),
         ])
 
-        addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(clicked)))
     }
 
     @available(*, unavailable)
@@ -102,6 +106,7 @@ final class LinkCardView: NSView, NSDraggingSource {
     func configure(_ preview: LinkPreviews.Preview, width: CGFloat) {
         url = preview.url
         title = preview.title
+        window?.invalidateCursorRects(for: self)
         widthConstraint.constant = width
         titleLabel.preferredMaxLayoutWidth = width - 24
         subtitleLabel.preferredMaxLayoutWidth = width - 24
@@ -128,8 +133,22 @@ final class LinkCardView: NSView, NSDraggingSource {
 
     override var wantsUpdateLayer: Bool { true }
 
-    @objc private func clicked() {
-        if let url { NSWorkspace.shared.open(url) }
+    override func layout() {
+        super.layout()
+        pressLayer.frame = bounds
+    }
+
+    /// Darkens the card by 5% while the mouse is held down on it.
+    private func setPressed(_ pressed: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pressLayer.opacity = pressed ? 0.05 : 0
+        CATransaction.commit()
+    }
+
+    /// A pointing hand over the card, like a link, while it has something to open.
+    override func resetCursorRects() {
+        if url != nil { addCursorRect(bounds, cursor: .pointingHand) }
     }
 
     // MARK: - Dragging out
@@ -140,8 +159,19 @@ final class LinkCardView: NSView, NSDraggingSource {
     }
 
     override func mouseDown(with event: NSEvent) {
-        // Not passed on, so the table doesn't track the drag; clicks go to the click recognizer.
+        // Not passed on, so the table doesn't track the drag.
         mouseDownPoint = event.locationInWindow
+        setPressed(true)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        setPressed(false)
+        // Released without dragging — a click, however long it was held.
+        if mouseDownPoint != nil, let url {
+            mouseDownPoint = nil
+            NSWorkspace.shared.open(url)
+        }
+        super.mouseUp(with: event)
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -150,6 +180,7 @@ final class LinkCardView: NSView, NSDraggingSource {
             return
         }
         mouseDownPoint = nil
+        setPressed(false)
         let item = LinkDrag.item(url: url, title: title, frame: bounds, image: snapshot())
         beginDraggingSession(with: [item], event: event, source: self)
     }
@@ -279,6 +310,8 @@ final class AttachmentView: NSView, NSDraggingSource {
     private let message: ChatMessage
     private let imageView = DisplayImageView()
     private lazy var gifView = LoopingVideoView()
+    private let pressLayer = CALayer()
+    private weak var pressHost: CALayer?
 
     private static let cornerRadius: CGFloat = 16
 
@@ -316,17 +349,37 @@ final class AttachmentView: NSView, NSDraggingSource {
             setUpPill(symbol: "mappin.circle.fill", title: attachment.location?.name ?? attachment.kind.label, subtitle: nil, maxWidth: maxWidth)
         }
 
-        addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(clicked)))
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    @objc private func clicked() {
-        onOpen?()
+    var attachmentID: String { attachment.id }
+
+    // MARK: - Pressed state
+
+    /// Darkens the attachment by 5% while the mouse is held down on it. The overlay lives on the
+    /// rounded, clipping layer (the picture's own, or the pill's bubble) so it matches the shape.
+    private func enablePressHighlight(on host: CALayer) {
+        pressHost = host
+        pressLayer.backgroundColor = NSColor.black.cgColor
+        pressLayer.opacity = 0
+        pressLayer.zPosition = 1000
+        host.addSublayer(pressLayer)
     }
 
-    var attachmentID: String { attachment.id }
+    override func layout() {
+        super.layout()
+        if pressHost != nil { pressLayer.frame = bounds }
+    }
+
+    private func setPressed(_ pressed: Bool) {
+        guard pressHost != nil else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pressLayer.opacity = pressed ? 0.05 : 0
+        CATransaction.commit()
+    }
 
     /// The picture shown in the chat (images, GIFs, stickers, video previews); Quick Look zooms from it.
     var displayedImage: NSImage? { imageView.superview == nil ? nil : imageView.image }
@@ -342,6 +395,17 @@ final class AttachmentView: NSView, NSDraggingSource {
         // Don't pass it on: the table view would run its own tracking loop and eat the drag.
         // Clicks still work through the click gesture recognizer.
         mouseDownPoint = event.locationInWindow
+        setPressed(true)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        setPressed(false)
+        // Released without dragging — a click, however long it was held.
+        if mouseDownPoint != nil {
+            mouseDownPoint = nil
+            onOpen?()
+        }
+        super.mouseUp(with: event)
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -350,6 +414,7 @@ final class AttachmentView: NSView, NSDraggingSource {
             return
         }
         mouseDownPoint = nil
+        setPressed(false)
         let item: NSDraggingItem
         if attachment.kind == .link {
             guard let url = attachment.url.flatMap(URL.init(string:)) else { return }
@@ -409,6 +474,7 @@ final class AttachmentView: NSView, NSDraggingSource {
             layer?.masksToBounds = true
             layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
             imageView.imageScaling = .scaleAxesIndependently
+            if let layer { enablePressHighlight(on: layer) }
         }
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: size.width),
@@ -471,6 +537,8 @@ final class AttachmentView: NSView, NSDraggingSource {
     private func setUpPill(symbol: String, title: String, subtitle: String?, maxWidth: CGFloat) {
         let background = BubbleView()
         background.color = BubbleColors.incoming
+        background.wantsLayer = true
+        if let hostLayer = background.layer { enablePressHighlight(on: hostLayer) }
         let icon = DisplayImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
         icon.symbolConfiguration = .init(pointSize: 18, weight: .regular)
         icon.contentTintColor = .secondaryLabelColor

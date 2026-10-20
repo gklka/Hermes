@@ -71,11 +71,20 @@ final class MessageTextView: NSTextView {
         event.clickCount > 1 && ProcessInfo.processInfo.systemUptime - allowedAt < NSEvent.doubleClickInterval + 0.1
     }
 
+    /// Selects the message. Fired the instant the bubble is pressed (not on release), so it
+    /// highlights immediately however long the button is held.
+    var onClick: (() -> Void)?
+
     override func mouseDown(with event: NSEvent) {
         if let link = link(at: event) {
             trackLink(link, from: event)
-        } else if allowsTextSelection && !continuesSelectingClick(event) {
-            super.mouseDown(with: event)
+        } else if allowsTextSelection {
+            // Already selected: a normal click selects text (the second click of a double-click is
+            // left for the bubble's react recognizer).
+            if !continuesSelectingClick(event) { super.mouseDown(with: event) }
+        } else {
+            // Not selected yet: select now, so the bubble highlights on mouse down.
+            onClick?()
         }
     }
 

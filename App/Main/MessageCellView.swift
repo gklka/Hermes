@@ -150,15 +150,17 @@ final class MessageCellView: NSTableCellView {
             self.delegate?.messageCell(self, showReactionsOf: message, anchor: self.reactionsBadge)
         }
 
-        let click = NSClickGestureRecognizer(target: self, action: #selector(clicked))
+        // A single click selects the message. It's handled in the text view (which reliably gets
+        // the mouse events), so a long or slightly drifted press still counts — unlike a click
+        // gesture recognizer, which rejects those.
+        textView.onClick = { [weak self] in self?.clicked() }
+        // Clicks on the bubble's padding (outside the text) select it too.
+        bubble.onMouseDown = { [weak self] in self?.clicked() }
         let doubleClick = NSClickGestureRecognizer(target: self, action: #selector(doubleClicked))
         doubleClick.numberOfClicksRequired = 2
-        for recognizer in [click, doubleClick] {
-            // The text view gets the clicks too, so a selected message's text can be clicked
-            // and double-clicked (a recognized click would otherwise swallow them).
-            recognizer.delaysPrimaryMouseButtonEvents = false
-            bubble.addGestureRecognizer(recognizer)
-        }
+        // The text view gets the clicks too, so a selected message's text can still be selected.
+        doubleClick.delaysPrimaryMouseButtonEvents = false
+        bubble.addGestureRecognizer(doubleClick)
         avatar.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(avatarClicked)))
     }
 
@@ -770,3 +772,4 @@ final class MessageCellView: NSTableCellView {
         column.contentFilters = darkened ? Self.darkenFilter.map { [$0] } ?? [] : []
     }
 }
+

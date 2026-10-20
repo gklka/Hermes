@@ -238,5 +238,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         await WebSyncController.shared.endSession(deletingData: true)
         OutgoingMedia.clear()
         LinkPreviews.shared.clear()
+        ImageCache.shared.clear()
     }
 }

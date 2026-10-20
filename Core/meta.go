@@ -422,8 +422,14 @@ func (c *Core) storeFBMessage(m *table.WrappedMessage, cs *changeSet) {
 		if subtitle == "" && x.TitleText != "" {
 			subtitle = x.SubtitleText // not already used as the title
 		}
+		// The link to open is often only on the attachment's CTA (a shared post's own ActionUrl is
+		// empty), so fall back to it; otherwise the card isn't clickable.
+		url := x.ActionUrl
+		if url == "" && x.CTA != nil {
+			url = firstNonEmpty(x.CTA.ActionUrl, x.CTA.NativeUrl)
+		}
 		add(apiAttachment{
-			ID: x.AttachmentFbid, Kind: kindLink, URL: x.ActionUrl,
+			ID: x.AttachmentFbid, Kind: kindLink, URL: url,
 			PreviewURL: firstNonEmpty(x.PreviewUrl, x.ImageUrl),
 			Width:      int(x.PreviewWidth), Height: int(x.PreviewHeight),
 			Title:    title,

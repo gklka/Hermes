@@ -1,14 +1,25 @@
 import AppKit
+import CryptoKit
 
-/// Memory cache + request de-duplication for avatars and attachment images.
+/// Memory cache + request de-duplication for avatars and attachment images, with a disk cache for
+/// remote pictures (link/rich-share previews from Facebook and Instagram) so they survive relaunch.
 final class ImageCache {
     static let shared = ImageCache()
 
     private let cache = NSCache<NSString, NSImage>()
     private var inflight: [String: Task<NSImage?, Never>] = [:]
+    private let directory = AppData.folder.appendingPathComponent("imagecache", isDirectory: true)
 
     private init() {
         cache.countLimit = 500
+    }
+
+    /// Forgets the cached pictures (logging out).
+    func clear() {
+        cache.removeAllObjects()
+        inflight.values.forEach { $0.cancel() }
+        inflight = [:]
+        try? FileManager.default.removeItem(at: directory)
     }
 
     func cached(_ key: String) -> NSImage? {
@@ -28,15 +39,29 @@ final class ImageCache {
         return components.string ?? url.absoluteString
     }
 
-    /// Loads a remote (http/https) or local file URL.
+    /// Loads a remote (http/https) or local file URL. Remote pictures are cached on disk.
     func image(for url: URL) async -> NSImage? {
-        await load(key: Self.key(for: url)) {
+        let key = Self.key(for: url)
+        return await load(key: key) { [directory] in
             if url.isFileURL {
                 return NSImage(contentsOf: url)
             }
-            guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
-            return NSImage(data: data)
+            let file = Self.file(in: directory, for: key)
+            if let data = try? Data(contentsOf: file), let image = NSImage(data: data) {
+                return image
+            }
+            guard let (data, _) = try? await URLSession.shared.data(from: url), let image = NSImage(data: data) else {
+                return nil
+            }
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try? data.write(to: file)
+            return image
         }
+    }
+
+    private static func file(in directory: URL, for key: String) -> URL {
+        let hash = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        return directory.appendingPathComponent(hash)
     }
 
     /// Loads an attachment through the core (which downloads and decrypts it as needed).
