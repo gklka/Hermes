@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 
 enum BubbleColors {
     static let outgoing = NSColor.systemBlue
@@ -40,6 +41,43 @@ enum BubbleMetrics {
 /// refuses them when not editable), so files dropped on a photo reach the chat's drop target.
 final class DisplayImageView: NSImageView {
     override func registerForDraggedTypes(_ newTypes: [NSPasteboard.PasteboardType]) {}
+}
+
+/// Plays a looping, silent video, filling its bounds — how Messenger and WhatsApp "GIFs" (really
+/// MP4s) are shown in a bubble. It plays only while on screen.
+final class LoopingVideoView: NSView {
+    private let playerLayer = AVPlayerLayer()
+    private var player: AVQueuePlayer?
+    private var looper: AVPlayerLooper?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        playerLayer.videoGravity = .resizeAspectFill
+        layer?.addSublayer(playerLayer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        playerLayer.frame = bounds
+    }
+
+    func load(_ url: URL) {
+        let queue = AVQueuePlayer()
+        queue.isMuted = true
+        looper = AVPlayerLooper(player: queue, templateItem: AVPlayerItem(url: url))
+        player = queue
+        playerLayer.player = queue
+        if window != nil { queue.play() }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil { player?.pause() } else { player?.play() }
+    }
 }
 
 /// A rounded rectangle whose color resolves with the current appearance.

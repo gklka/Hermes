@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import MapKit
 import UniformTypeIdentifiers
 
@@ -264,6 +265,7 @@ final class AttachmentView: NSView, NSDraggingSource {
     private let attachment: Attachment
     private let message: ChatMessage
     private let imageView = DisplayImageView()
+    private lazy var gifView = LoopingVideoView()
 
     private static let cornerRadius: CGFloat = 16
 
@@ -374,11 +376,19 @@ final class AttachmentView: NSView, NSDraggingSource {
         let scale = min(1, box.width / size.width, box.height / size.height)
         size = CGSize(width: max(60, size.width * scale), height: max(60, size.height * scale))
 
-        imageView.imageScaling = .scaleProportionallyUpOrDown
-        imageView.animates = true
-        imageView.wantsLayer = true
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(imageView)
+        // Messenger and WhatsApp deliver "GIFs" as looping, silent MP4s, which NSImageView can't
+        // show — they play in a video layer instead.
+        let content: NSView
+        if attachment.kind == .gif {
+            content = gifView
+        } else {
+            imageView.imageScaling = .scaleProportionallyUpOrDown
+            imageView.animates = true
+            imageView.wantsLayer = true
+            content = imageView
+        }
+        content.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content)
 
         if attachment.kind != .sticker {
             layer?.cornerRadius = Self.cornerRadius
@@ -390,11 +400,19 @@ final class AttachmentView: NSView, NSDraggingSource {
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: size.width),
             heightAnchor.constraint(equalToConstant: size.height),
-            imageView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            imageView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            imageView.topAnchor.constraint(equalTo: topAnchor),
-            imageView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            content.leadingAnchor.constraint(equalTo: leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor),
+            content.topAnchor.constraint(equalTo: topAnchor),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+
+        if attachment.kind == .gif {
+            Task { [weak self] in
+                guard let self, let url = try? await ChatStore.shared.localFile(for: self.attachment, in: self.message) else { return }
+                self.gifView.load(url)
+            }
+            return
+        }
 
         if attachment.kind == .video {
             addPlayButton()
