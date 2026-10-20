@@ -453,6 +453,24 @@ func (c *Core) leaveThread(ctx context.Context, threadID string) error {
 	return err
 }
 
+func (c *Core) renameThread(ctx context.Context, threadID, name string) error {
+	t, err := c.thread(threadID)
+	if err != nil {
+		return err
+	}
+	cli, err := c.requireClient()
+	if err != nil {
+		return err
+	}
+	key, _ := c.fbTaskTarget(t)
+	if _, err := cli.ExecuteTasks(ctx, &socket.RenameThreadTask{ThreadKey: key, ThreadName: name, SyncGroup: 1}); err != nil {
+		return err
+	}
+	c.store.SetThreadName(threadID, name)
+	c.emitThread(threadID)
+	return nil
+}
+
 func (c *Core) blockUser(ctx context.Context, userID string) error {
 	cli, err := c.requireClient()
 	if err != nil {

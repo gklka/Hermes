@@ -156,6 +156,8 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return nil, c.deleteThread(ctx, p.ThreadID)
 	case "threads.leave":
 		return nil, c.leaveThread(ctx, p.ThreadID)
+	case "threads.rename":
+		return nil, c.renameThread(ctx, p.ThreadID, p.Text)
 	case "threads.refreshTheme":
 		return nil, c.refreshTheme(ctx, p.ThreadID)
 	case "threads.subscribePresence":

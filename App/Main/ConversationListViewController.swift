@@ -352,6 +352,9 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         if !conversation.isGroup {
             menu.addItem(item("Block…", symbol: "person.crop.circle.badge.xmark", action: #selector(block), conversation))
         }
+        if conversation.isGroup {
+            menu.addItem(item("Rename Group…", symbol: "pencil", action: #selector(renameGroup), conversation))
+        }
         menu.addItem(item("Delete Chat…", symbol: "trash", action: #selector(deleteChat), conversation))
         if conversation.isGroup {
             menu.addItem(item("Leave Group…", symbol: "rectangle.portrait.and.arrow.right", action: #selector(leaveGroup), conversation))
@@ -436,6 +439,26 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         confirm("Leave \(conversation.name)?",
                 info: "You won't get messages from this group anymore.", button: "Leave") { [store] in
             try await store.leaveThread(conversation.id)
+        }
+    }
+
+    @objc private func renameGroup(_ sender: NSMenuItem) {
+        guard let conversation = sender.representedObject as? Conversation, let window = view.window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Rename Group"
+        alert.informativeText = "Everyone in the group sees the new name."
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.stringValue = conversation.name
+        field.placeholderString = "Group name"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { [store] response in
+            guard response == .alertFirstButtonReturn else { return }
+            let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, name != conversation.name else { return }
+            Task { try? await store.renameGroup(conversation.id, to: name) }
         }
     }
 

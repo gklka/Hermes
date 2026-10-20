@@ -501,6 +501,11 @@ final class ChatStore {
         try await core.call("threads.leave", ThreadParams(threadID: threadID))
     }
 
+    func renameGroup(_ threadID: String, to name: String) async throws {
+        struct Params: Encodable { let threadID: String; let text: String }
+        try await core.call("threads.rename", Params(threadID: threadID, text: name))
+    }
+
     func block(userID: String) async throws {
         struct Params: Encodable { let userID: String }
         try await core.call("users.block", Params(userID: userID))
