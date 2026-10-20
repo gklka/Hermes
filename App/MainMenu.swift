@@ -26,8 +26,6 @@ enum MainMenu {
         let fileMenu = NSMenu(title: "File")
         fileMenu.addItem(withTitle: "New Chat…", action: #selector(MainWindowController.newChat(_:)), keyEquivalent: "n")
         fileMenu.addItem(withTitle: "Open Chat…", action: #selector(MainWindowController.newMessage(_:)), keyEquivalent: "o")
-        let attach = fileMenu.addItem(withTitle: "Attach Files…", action: #selector(MainWindowController.attachFiles(_:)), keyEquivalent: "a")
-        attach.keyEquivalentModifierMask = [.command, .shift]
         fileMenu.addItem(withTitle: "Restore Encrypted Chats…", action: #selector(AppDelegate.showWebSync(_:)), keyEquivalent: "")
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
@@ -56,11 +54,13 @@ enum MainMenu {
         sidebar.keyEquivalentModifierMask = [.command, .control]
         main.addItem(withTitle: "View", action: nil, keyEquivalent: "").submenu = viewMenu
 
-        let conversationMenu = NSMenu(title: "Conversation")
+        let conversationMenu = NSMenu(title: "Chat")
         let unread = conversationMenu.addItem(withTitle: "Mark as Unread", action: #selector(MainWindowController.toggleUnread(_:)), keyEquivalent: "u")
         unread.keyEquivalentModifierMask = [.command, .shift]
         conversationMenu.addItem(withTitle: "Like", action: #selector(MainWindowController.sendLike(_:)), keyEquivalent: "l")
         conversationMenu.addItem(withTitle: "Edit Message", action: #selector(MainWindowController.editMessage(_:)), keyEquivalent: "e")
+        let attach = conversationMenu.addItem(withTitle: "Attach Files…", action: #selector(MainWindowController.attachFiles(_:)), keyEquivalent: "a")
+        attach.keyEquivalentModifierMask = [.command, .shift]
         conversationMenu.addItem(.separator())
         conversationMenu.addItem(withTitle: "Audio Call", action: #selector(MainWindowController.startAudioCall(_:)), keyEquivalent: "")
         conversationMenu.addItem(withTitle: "Video Call", action: #selector(MainWindowController.startVideoCall(_:)), keyEquivalent: "")
@@ -68,7 +68,7 @@ enum MainMenu {
         conversationMenu.addItem(withTitle: "Refresh",action: #selector(MainWindowController.refreshChat(_:)), keyEquivalent: "r")
         let export = conversationMenu.addItem(withTitle: "Export Chat…", action: #selector(MainWindowController.exportChat(_:)), keyEquivalent: "e")
         export.keyEquivalentModifierMask = [.command, .shift]
-        main.addItem(withTitle: "Conversation", action: nil, keyEquivalent: "").submenu = conversationMenu
+        main.addItem(withTitle: "Chat", action: nil, keyEquivalent: "").submenu = conversationMenu
 
         let windowMenu = NSMenu(title: "Window")
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
