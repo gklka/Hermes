@@ -246,5 +246,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         OutgoingMedia.clear()
         LinkPreviews.shared.clear()
         ImageCache.shared.clear()
+        LocationCardView.clearCache()
     }
 }

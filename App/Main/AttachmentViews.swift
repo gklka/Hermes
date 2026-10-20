@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import CryptoKit
 import MapKit
 import UniformTypeIdentifiers
 
@@ -265,15 +266,62 @@ final class LocationCardView: NSView {
     }
 
     private func renderMap(width: CGFloat, height: CGFloat) {
+        let key = cacheKey(width: width, height: height)
+        if let cached = Self.cachedMap(key) {
+            mapImage.image = cached
+            return
+        }
+        let coordinate = self.coordinate
         let options = MKMapSnapshotter.Options()
         options.region = MKCoordinateRegion(center: coordinate, latitudinalMeters: 800, longitudinalMeters: 800)
         options.size = CGSize(width: width, height: height)
         let snapshotter = MKMapSnapshotter(options: options)
         self.snapshotter = snapshotter
         snapshotter.start(with: .main) { [weak self] snapshot, _ in
-            guard let self, let snapshot else { return }
-            self.mapImage.image = Self.pinned(snapshot, at: self.coordinate)
+            guard let snapshot else { return }
+            // Cache it even if the cell was reused during the (slow) render, so it isn't re-rendered
+            // every time — chats reload often, recreating the card mid-render.
+            let image = Self.pinned(snapshot, at: coordinate)
+            Self.storeMap(image, key: key)
+            self?.mapImage.image = image
         }
+    }
+
+    // MARK: - Map snapshot cache
+
+    private static let mapMemoryCache = NSCache<NSString, NSImage>()
+    private static let mapCacheDirectory = AppData.folder.appendingPathComponent("mapsnapshots", isDirectory: true)
+
+    /// Forgets the cached map pictures (logging out).
+    static func clearCache() {
+        mapMemoryCache.removeAllObjects()
+        try? FileManager.default.removeItem(at: mapCacheDirectory)
+    }
+
+    /// The map depends on the place, the card's size and the appearance (light/dark map tiles).
+    private func cacheKey(width: CGFloat, height: CGFloat) -> String {
+        let dark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return String(format: "%.5f,%.5f,%.0fx%.0f,%@", location.latitude, location.longitude, width, height, dark ? "d" : "l")
+    }
+
+    private static func mapCacheFile(_ key: String) -> URL {
+        let hash = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        return mapCacheDirectory.appendingPathComponent(hash).appendingPathExtension("png")
+    }
+
+    private static func cachedMap(_ key: String) -> NSImage? {
+        if let image = mapMemoryCache.object(forKey: key as NSString) { return image }
+        guard let image = NSImage(contentsOf: mapCacheFile(key)) else { return nil }
+        mapMemoryCache.setObject(image, forKey: key as NSString)
+        return image
+    }
+
+    private static func storeMap(_ image: NSImage, key: String) {
+        mapMemoryCache.setObject(image, forKey: key as NSString)
+        guard let tiff = image.tiffRepresentation,
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
+        try? FileManager.default.createDirectory(at: mapCacheDirectory, withIntermediateDirectories: true)
+        try? png.write(to: mapCacheFile(key))
     }
 
     /// The snapshot with a pin drawn at the coordinate.

@@ -30,6 +30,23 @@ final class ImageCache {
         cached(Self.key(for: url))
     }
 
+    /// Memory, then the disk cache (or a local file) — a picture ready to show at once, without a
+    /// fetch, so a disk-cached preview appears immediately after relaunch instead of flashing in.
+    func stored(_ url: URL) -> NSImage? {
+        let key = Self.key(for: url)
+        if let image = cached(key) { return image }
+        let image: NSImage?
+        if url.isFileURL {
+            image = NSImage(contentsOf: url)
+        } else if let data = try? Data(contentsOf: Self.file(in: directory, for: key)) {
+            image = NSImage(data: data)
+        } else {
+            image = nil
+        }
+        if let image { cache.setObject(image, forKey: key as NSString) }
+        return image
+    }
+
     /// Facebook's CDN links carry signing tokens in the query that change on every sync, so the
     /// same picture gets a new link each time; it's cached by its path.
     static func key(for url: URL) -> String {
