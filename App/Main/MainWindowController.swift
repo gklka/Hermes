@@ -143,6 +143,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         split.newMessage()
     }
 
+    @objc func newChat(_ sender: Any?) {
+        split.newChat()
+    }
+
     @objc func attachFiles(_ sender: Any?) {
         split.attachFiles()
     }
@@ -417,6 +421,24 @@ final class MainSplitViewController: NSSplitViewController {
                     self?.list.select(threadID: conversation.id)
                 } catch {
                     _ = self?.presentError(error)
+                }
+            }
+        }
+        presentAsSheet(picker)
+    }
+
+    func newChat() {
+        let picker = NewChatViewController()
+        picker.onCreate = { [weak self] userIDs in
+            guard let self else { return }
+            Task {
+                do {
+                    let conversation = userIDs.count == 1
+                        ? try await ChatStore.shared.openDirectChat(with: userIDs[0])
+                        : try await ChatStore.shared.createGroup(userIDs: userIDs)
+                    self.list.select(threadID: conversation.id)
+                } catch {
+                    _ = self.presentError(error)
                 }
             }
         }

@@ -222,6 +222,59 @@ func (c *Core) createDirectChat(userID string) {
 	log.Info().Msg("Created chat")
 }
 
+// createGroupChat creates a group chat with the given people and returns it. Messenger assigns
+// the real thread ID, which comes back as the replacement for the optimistic one we send up. New
+// group chats aren't end-to-end encrypted (unlike new 1:1 chats).
+func (c *Core) createGroupChat(ctx context.Context, userIDs []string) (apiConversation, error) {
+	cli := c.client()
+	if cli == nil {
+		return apiConversation{}, errors.New("not connected")
+	}
+	participants := make([]int64, 0, len(userIDs))
+	for _, u := range userIDs {
+		if id, err := strconv.ParseInt(u, 10, 64); err == nil && id != 0 {
+			participants = append(participants, id)
+		}
+	}
+	if len(participants) < 2 {
+		return apiConversation{}, errors.New("a group needs at least two people")
+	}
+	optimisticID := methods.GenerateEpochID()
+	resp, err := cli.ExecuteTasks(ctx, &socket.CreateGroupTask{
+		Participants: participants,
+		SendPayload: socket.CreateGroupPayload{
+			ThreadID: optimisticID,
+			OTID:     strconv.FormatInt(methods.GenerateEpochID(), 10),
+			Source:   0,
+			SendType: 8,
+		},
+	})
+	if err != nil {
+		return apiConversation{}, err
+	}
+	if len(resp.LSIssueNewError) > 0 {
+		e := resp.LSIssueNewError[0]
+		return apiConversation{}, errors.New(firstNonEmpty(e.ErrorMessage, e.ErrorTitle, "couldn't create the group"))
+	}
+	if len(resp.LSReplaceOptimisticThread) == 0 {
+		return apiConversation{}, errors.New("unexpected response creating the group")
+	}
+	threadID := strconv.FormatInt(resp.LSReplaceOptimisticThread[0].ThreadKey2, 10)
+	// Store whatever the response already carries (the new thread and its members)...
+	c.handleTable(resp)
+	// ...then make sure it exists with its members, even if the response was sparse.
+	self := c.selfID()
+	c.store.EnsureThread(threadID, table.GROUP_THREAD, "")
+	c.store.EnsureParticipant(threadID, self)
+	for _, u := range userIDs {
+		c.store.EnsureParticipant(threadID, u)
+	}
+	c.store.BumpThread(threadID, time.Now().UnixMilli(), "", "")
+	conv := c.store.Conversation(c.store.GetThread(threadID), self)
+	emitEvent("thread", conv)
+	return conv, nil
+}
+
 // searchPeople finds people on Messenger by name (not only the ones you've chatted with), who
 // can be messaged.
 func (c *Core) searchPeople(ctx context.Context, query string) ([]apiParticipant, error) {

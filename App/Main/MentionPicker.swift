@@ -34,6 +34,8 @@ final class MentionPicker: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hidesOnDeactivate = true
+        // No fade-in; the list should appear at once, not flash in.
+        panel.animationBehavior = .none
 
         let background = NSVisualEffectView()
         background.material = .popover
@@ -76,7 +78,8 @@ final class MentionPicker: NSObject, NSTableViewDataSource, NSTableViewDelegate 
     }
 
     /// Shows the people above `anchor` (the "@" in screen coordinates), the first one selected.
-    func show(_ candidates: [MentionCandidate], above anchor: NSRect, in window: NSWindow) {
+    /// Pass `below: true` to drop it under the anchor instead (for a field near the top of a window).
+    func show(_ candidates: [MentionCandidate], above anchor: NSRect, in window: NSWindow, below: Bool = false) {
         let previous = selected
         self.candidates = candidates
         tableView.reloadData()
@@ -89,7 +92,8 @@ final class MentionPicker: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         // Above the line being typed, kept inside the window.
         var x = anchor.minX - 12
         x = min(max(x, window.frame.minX + 8), window.frame.maxX - Self.width - 8)
-        let frame = NSRect(x: x, y: anchor.maxY + 6, width: Self.width, height: height)
+        let y = below ? anchor.minY - height - 6 : anchor.maxY + 6
+        let frame = NSRect(x: x, y: y, width: Self.width, height: height)
         panel.setFrame(frame, display: true)
         if parentWindow !== window {
             parentWindow?.removeChildWindow(panel)

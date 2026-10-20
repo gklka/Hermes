@@ -28,7 +28,7 @@ final class NewMessageViewController: NSViewController, NSTableViewDataSource, N
         let title = NSTextField(labelWithString: "Open Chat")
         title.font = .systemFont(ofSize: 13, weight: .semibold)
 
-        searchField.placeholderString = "To: name or group"
+        searchField.placeholderString = "Search chats"
         searchField.delegate = self
         searchField.sendsSearchStringImmediately = true
 
@@ -49,7 +49,7 @@ final class NewMessageViewController: NSViewController, NSTableViewDataSource, N
         // Return (in the search field) opens the selected chat; Esc closes.
         let close = NSButton.glassClose(target: self, action: #selector(cancel))
 
-        let note = NSTextField(wrappingLabelWithString: "Finds anyone on Messenger. A message to someone who isn't your friend may land in their message requests.")
+        let note = NSTextField(wrappingLabelWithString: "Your existing chats. Use New Chat (⌘N) to message someone new.")
         note.font = .systemFont(ofSize: 11)
         note.textColor = .secondaryLabelColor
 
@@ -84,30 +84,34 @@ final class NewMessageViewController: NSViewController, NSTableViewDataSource, N
         search("")
     }
 
-    /// People you've chatted with and your group chats at once, then (after a pause in typing)
-    /// everyone Messenger finds by that name, below them.
+    /// Your existing chats — 1:1s and groups — whose name (or a member's) matches, most recent
+    /// first. Only chats you already have; starting a new one is New Chat's job.
     private func search(_ query: String) {
         searchTask?.cancel()
         searchTask = Task {
-            let found = await ChatStore.shared.searchContacts(query).map(Entry.person) + Self.groups(matching: query).map(Entry.group)
+            let found = Self.existingChats(matching: query)
             guard !Task.isCancelled else { return }
             show(found)
-            guard query.count >= 2 else { return }
-            try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled else { return }
-            let people = await ChatStore.shared.searchPeople(query)
-            guard !Task.isCancelled else { return }
-            let known = Set(found.map(\.id))
-            show(found + people.filter { !known.contains($0.id) }.map(Entry.person))
         }
     }
 
-    /// Group chats whose name, or a member's, contains the text (most recent first).
-    private static func groups(matching query: String) -> [Conversation] {
-        let matches = { (text: String) in text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil }
-        let groups = ChatStore.shared.conversations.filter(\.isGroup)
-        guard !query.isEmpty else { return Array(groups.prefix(50)) }
-        return groups.filter { matches($0.name) || $0.participants.contains { matches($0.name) } }
+    /// Entries for the conversations whose name, or a member's, contains the text.
+    private static func existingChats(matching query: String) -> [Entry] {
+        let selfID = ChatStore.shared.account?.id
+        let matches = { (text: String) in
+            query.isEmpty || text.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+        }
+        var entries: [Entry] = []
+        for conversation in ChatStore.shared.conversations {
+            if conversation.isGroup {
+                if matches(conversation.name) || conversation.participants.contains(where: { matches($0.name) }) {
+                    entries.append(.group(conversation))
+                }
+            } else if let other = conversation.participants.first(where: { $0.id != selfID }) {
+                if matches(other.name) { entries.append(.person(other)) }
+            }
+        }
+        return entries
     }
 
     /// Keeps the selected entry selected (the first one if none is).

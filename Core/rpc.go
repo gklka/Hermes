@@ -51,6 +51,7 @@ func (c *Core) HandleRequest(data []byte) {
 type requestParams struct {
 	ThreadID     string             `json:"threadID"`
 	UserID       string             `json:"userID"`
+	UserIDs      []string           `json:"userIDs"`
 	MessageID    string             `json:"messageID"`
 	AttachmentID string             `json:"attachmentID"`
 	Text         string             `json:"text"`
@@ -131,6 +132,8 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return nil, c.loadMoreThreads(ctx)
 	case "threads.open":
 		return c.openDirectThread(p.UserID)
+	case "threads.createGroup":
+		return c.createGroupChat(ctx, p.UserIDs)
 	case "threads.resync":
 		return nil, c.resyncThread(p.ThreadID)
 	case "threads.fetchExtras":

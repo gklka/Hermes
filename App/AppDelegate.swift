@@ -101,6 +101,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !menu.items.isEmpty {
             menu.addItem(.separator())
         }
+        let newChat = NSMenuItem(title: "New Chat…", action: #selector(dockNewChat(_:)), keyEquivalent: "")
+        newChat.target = self
+        menu.addItem(newChat)
         let newMessage = NSMenuItem(title: "Open Chat…", action: #selector(dockNewMessage(_:)), keyEquivalent: "")
         newMessage.target = self
         menu.addItem(newMessage)
@@ -116,6 +119,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         showMain()
         NSApp.activate()
         mainWindowController?.newMessage(sender)
+    }
+
+    @objc private func dockNewChat(_ sender: Any?) {
+        showMain()
+        NSApp.activate()
+        mainWindowController?.newChat(sender)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

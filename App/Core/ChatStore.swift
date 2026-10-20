@@ -154,6 +154,15 @@ final class ChatStore {
         return conversation
     }
 
+    /// Creates (and opens) a group chat with the given people.
+    func createGroup(userIDs: [String]) async throws -> Conversation {
+        struct Params: Encodable { let userIDs: [String] }
+        let conversation = try await core.call("threads.createGroup", Params(userIDs: userIDs), as: Conversation.self)
+        conversationsByID[conversation.id] = conversation
+        resortConversations()
+        return conversation
+    }
+
     func loadMoreConversations() async {
         try? await core.call("threads.loadMore")
     }
