@@ -248,11 +248,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         switch itemIdentifier {
         case Self.newMessageItem:
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.image = NSImage(systemSymbolName: "square.and.pencil", accessibilityDescription: "Open Chat")
-            item.label = "Open Chat"
-            item.toolTip = "Open Chat (⌘O)"
+            item.image = NSImage(systemSymbolName: "square.and.pencil", accessibilityDescription: "New Chat")
+            item.label = "New Chat"
+            item.toolTip = "New Chat (⌘N)"
             item.target = self
-            item.action = #selector(newMessage(_:))
+            item.action = #selector(newChat(_:))
             item.isHidden = split.isSidebarCollapsed
             newMessageToolbarItem = item
             return item
