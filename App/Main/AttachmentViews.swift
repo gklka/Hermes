@@ -52,11 +52,15 @@ final class LinkCardView: NSView, NSDraggingSource {
 
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.maximumNumberOfLines = 3
-        titleLabel.lineBreakMode = .byTruncatingTail
+        // Word-wrap across up to the line cap, then "…" on the last line (like the web), instead of
+        // truncating on a single line.
+        titleLabel.lineBreakMode = .byWordWrapping
+        titleLabel.cell?.truncatesLastVisibleLine = true
         subtitleLabel.font = .systemFont(ofSize: 12)
         subtitleLabel.textColor = .secondaryLabelColor
         subtitleLabel.maximumNumberOfLines = 2
-        subtitleLabel.lineBreakMode = .byTruncatingTail
+        subtitleLabel.lineBreakMode = .byWordWrapping
+        subtitleLabel.cell?.truncatesLastVisibleLine = true
         siteLabel.font = .systemFont(ofSize: 11)
         siteLabel.textColor = .secondaryLabelColor
         siteLabel.lineBreakMode = .byTruncatingTail
@@ -90,14 +94,23 @@ final class LinkCardView: NSView, NSDraggingSource {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Runs of whitespace (including newlines) collapsed to single spaces, trimmed.
+    private static func oneBlock(_ text: String) -> String {
+        text.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+    }
+
     func configure(_ preview: LinkPreviews.Preview, width: CGFloat) {
         url = preview.url
         title = preview.title
         widthConstraint.constant = width
         titleLabel.preferredMaxLayoutWidth = width - 24
-        titleLabel.stringValue = preview.title
-        subtitleLabel.stringValue = preview.subtitle ?? ""
-        subtitleLabel.isHidden = preview.subtitle?.isEmpty ?? true
+        subtitleLabel.preferredMaxLayoutWidth = width - 24
+        // A shared post stuffs its whole body (with newlines) into the title; collapse it to one
+        // block so the line cap truncates it cleanly instead of showing every line.
+        titleLabel.stringValue = Self.oneBlock(preview.title)
+        let subtitle = preview.subtitle.map(Self.oneBlock) ?? ""
+        subtitleLabel.stringValue = subtitle
+        subtitleLabel.isHidden = subtitle.isEmpty
         siteLabel.stringValue = preview.site ?? ""
         siteLabel.isHidden = preview.site == nil
         picture.layer?.contents = preview.image

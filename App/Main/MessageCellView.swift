@@ -466,14 +466,22 @@ final class MessageCellView: NSTableCellView {
             font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask)
         }
         let result = NSMutableAttributedString(string: text, attributes: [.font: font, .foregroundColor: color])
+        // Wrap normal text at words; a link (often a long URL with no spaces) wraps by character so
+        // it can't overflow and get clipped by the bubble, the way the web app shows it.
+        let wordWrap = NSMutableParagraphStyle()
+        wordWrap.lineBreakMode = .byWordWrapping
+        result.addAttribute(.paragraphStyle, value: wordWrap, range: NSRange(location: 0, length: result.length))
         let bold = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask)
         for mention in mentions where NSMaxRange(mention.range) <= result.length {
             result.addAttribute(.font, value: bold, range: mention.range)
         }
         if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            let charWrap = NSMutableParagraphStyle()
+            charWrap.lineBreakMode = .byCharWrapping
             for match in detector.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
                 guard let url = match.url else { continue }
                 result.addAttribute(.link, value: url, range: match.range)
+                result.addAttribute(.paragraphStyle, value: charWrap, range: match.range)
             }
         }
         return result

@@ -47,7 +47,9 @@ final class MessageTextView: NSTextView {
         textContainer.containerSize = NSSize(width: maxWidth, height: .greatestFiniteMagnitude)
         layoutManager.ensureLayout(for: textContainer)
         let used = layoutManager.usedRect(for: textContainer)
-        return NSSize(width: ceil(used.width), height: ceil(used.height))
+        // Never report wider than maxWidth: an unbreakable token (a long URL) can lay out past the
+        // container, and letting the bubble grow to that width would overflow the chat.
+        return NSSize(width: min(ceil(used.width), maxWidth), height: ceil(used.height))
     }
 
     // MARK: - Selecting text
