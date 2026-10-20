@@ -1,4 +1,5 @@
 import AppKit
+import QuickLookUI
 
 // What you can do with a message: its menu, tapbacks, selecting it, its sender's menu, and
 // opening its attachments in Quick Look.
@@ -368,7 +369,30 @@ extension ChatViewController: MessageCellDelegate {
             }
             return
         }
-        Task { await showQuickLook(of: message, startingAt: attachment, from: cell) }
+        // Pictures and videos use the in-chat viewer (zoom from the bubble); anything else (files,
+        // docs, audio, PDFs…) opens in the system Quick Look panel.
+        if [.image, .gif, .sticker, .video].contains(attachment.kind) {
+            Task { await showQuickLook(of: message, startingAt: attachment, from: cell) }
+        } else {
+            Task { await showFileQuickLook(attachment, of: message) }
+        }
+    }
+
+    /// Downloads the file (if needed) and shows it in the system Quick Look panel.
+    private func showFileQuickLook(_ attachment: Attachment, of message: ChatMessage) async {
+        do {
+            let url = try await store.localFile(for: attachment, in: message)
+            quickLookFiles = [url]
+            guard let panel = QLPreviewPanel.shared() else { return }
+            view.window?.makeFirstResponder(view)
+            if panel.isVisible {
+                panel.reloadData()
+            } else {
+                panel.makeKeyAndOrderFront(nil)
+            }
+        } catch {
+            _ = presentError(error)
+        }
     }
 
     /// Quick Look with all of the message's attachments, starting at the clicked one. Pictures
@@ -474,5 +498,28 @@ extension ChatViewController: MessageCellDelegate {
         let rect = view.convert(view.bounds, to: scrollView.contentView)
         guard scrollView.contentView.bounds.intersects(rect) else { return nil }
         return (window.convertToScreen(view.convert(view.bounds, to: nil)), image)
+    }
+}
+
+// MARK: - System Quick Look (non-media attachments)
+
+extension ChatViewController: QLPreviewPanelDataSource, QLPreviewPanelDelegate {
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool {
+        !quickLookFiles.isEmpty
+    }
+
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        panel.dataSource = self
+        panel.delegate = self
+    }
+
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {}
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        quickLookFiles.count
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! {
+        quickLookFiles[index] as NSURL
     }
 }

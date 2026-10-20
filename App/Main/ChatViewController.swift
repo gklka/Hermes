@@ -117,6 +117,8 @@ final class ChatViewController: NSViewController {
     var previewMessageID: String?
     /// Identifies the current Quick Look session, so late downloads don't touch a newer one.
     var previewSession: UUID?
+    /// Files shown in the system Quick Look panel (non-media attachments).
+    var quickLookFiles: [URL] = []
 
     // MARK: State of the compose bar (+Compose)
 
