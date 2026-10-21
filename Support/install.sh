@@ -7,7 +7,15 @@ cd "$(dirname "$0")/.."
 export DEVELOPER_DIR
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
+# By default build only for this Mac (fast). UNIVERSAL=1 builds a universal arm64 + x86_64 app
+# (for releases, so Intel Macs can run it) by targeting a generic macOS destination.
+if [ -n "$UNIVERSAL" ]; then
+	DESTINATION="generic/platform=macOS"
+else
+	DESTINATION="platform=macOS,arch=$(uname -m)"
+fi
 xcodebuild -project Hermes.xcodeproj -scheme Hermes -configuration Release \
+    -destination "$DESTINATION" \
     -derivedDataPath build/DerivedData build 2>&1 | grep -E "error: |\*\* BUILD"
 BUILT=build/DerivedData/Build/Products/Release/Hermes.app
 codesign --verify --strict "$BUILT"
