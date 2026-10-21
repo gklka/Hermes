@@ -1,6 +1,8 @@
 import AppKit
+import ImageIO
 import QuickLookUI
 import UniformTypeIdentifiers
+import VisionKit
 
 /// Shows message attachments with Quick Look's preview view in our own window, so pictures zoom
 /// out of the chat and back (Quick Look's own panel animates its window frame instead, which
@@ -26,6 +28,9 @@ final class MediaViewer: NSObject, NSWindowDelegate {
     private var sourceProvider: SourceProvider?
     private var window: ViewerWindow?
     private var previewView: QLPreviewView?
+    /// Shows pictures in-process so macOS Live Text (text recognition) works on them; Quick Look's
+    /// view renders out of process and doesn't offer it. Used for pictures; QLPreviewView for the rest.
+    private var imageView: LiveTextImageView?
     private var isClosing = false
 
     private static let animationDuration: TimeInterval = 0.28
@@ -66,10 +71,15 @@ final class MediaViewer: NSObject, NSWindowDelegate {
         let container = HoverView(frame: NSRect(origin: .zero, size: frame.size))
         container.onHover = { [weak self] inside in self?.setTitleBarVisible(inside, animated: true) }
         container.addSubview(preview)
+        let image = LiveTextImageView(frame: NSRect(origin: .zero, size: frame.size))
+        image.autoresizingMask = [.width, .height]
+        image.isHidden = true
+        container.addSubview(image)
         window.contentView = container
         window.isDragRegion = { [weak self] point in self?.isDragRegion(point) ?? false }
         self.window = window
         previewView = preview
+        imageView = image
         showCurrentItem()
         // The traffic lights and title only show while the pointer is over the window.
         let mouse = window.mouseLocationOutsideOfEventStream
@@ -104,7 +114,11 @@ final class MediaViewer: NSObject, NSWindowDelegate {
         guard items.indices.contains(index) else { return }
         items[index].url = url
         if index == self.index, isVisible {
-            previewView?.previewItem = url as NSURL
+            if Self.isImage(items[index]) {
+                imageView?.show(url)
+            } else {
+                previewView?.previewItem = url as NSURL
+            }
         }
     }
 
@@ -120,6 +134,7 @@ final class MediaViewer: NSObject, NSWindowDelegate {
             window.orderOut(nil)
             self?.previewView?.close()
             self?.previewView = nil
+            self?.imageView = nil
             self?.window = nil
             self?.isClosing = false
         }
@@ -179,7 +194,17 @@ final class MediaViewer: NSObject, NSWindowDelegate {
 
     private func showCurrentItem() {
         let item = items[index]
-        previewView?.previewItem = item.url as NSURL
+        if Self.isImage(item) {
+            imageView?.show(item.url)
+            imageView?.isHidden = false
+            previewView?.isHidden = true
+            previewView?.previewItem = nil
+        } else {
+            previewView?.previewItem = item.url as NSURL
+            previewView?.isHidden = false
+            imageView?.isHidden = true
+            imageView?.show(nil)
+        }
         window?.title = items.count > 1 ? "\(item.title) (\(index + 1) of \(items.count))" : item.title
     }
 
@@ -187,11 +212,9 @@ final class MediaViewer: NSObject, NSWindowDelegate {
     /// below the title bar (the title bar moves it by itself and has the buttons). Videos and
     /// documents keep their clicks for their controls and scrolling.
     private func isDragRegion(_ point: NSPoint) -> Bool {
-        guard let window, items.indices.contains(index) else { return false }
-        let item = items[index]
-        guard item.pixelSize != nil, !Self.isVideo(item) else { return false }
-        let titleBarHeight = window.frame.height - window.contentLayoutRect.height
-        return point.y < window.frame.height - max(titleBarHeight, 28)
+        // Pictures are no longer draggable by their content: Live Text needs those clicks for
+        // selecting text. Move the window by its title bar (shown on hover) instead, like Preview.
+        return false
     }
 
     private func setTitleBarVisible(_ visible: Bool, animated: Bool) {
@@ -210,6 +233,11 @@ final class MediaViewer: NSObject, NSWindowDelegate {
 
     private static func isVideo(_ item: Item) -> Bool {
         UTType(filenameExtension: item.url.pathExtension)?.conforms(to: .movie) == true
+    }
+
+    /// A still picture we render ourselves (so Live Text works) — it has a pixel size and isn't a video.
+    private static func isImage(_ item: Item) -> Bool {
+        item.pixelSize != nil && !isVideo(item)
     }
 
     // MARK: - NSWindowDelegate
@@ -313,6 +341,69 @@ final class MediaViewer: NSObject, NSWindowDelegate {
                 if let key, onKey?(key) == true { return }
             }
             super.sendEvent(event)
+        }
+    }
+
+    /// Shows a still picture (aspect-fit) with a VisionKit Live Text overlay, so text in the picture
+    /// can be selected, copied and looked up — the way Preview and Quick Look's panel do.
+    private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate {
+        private let imageView = DisplayImageView()
+        private let overlay = ImageAnalysisOverlayView()
+        private let analyzer = ImageAnalyzer()
+        /// Guards against a slow analysis landing after the picture has already changed.
+        private var analysisToken = 0
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            imageView.imageScaling = .scaleProportionallyUpOrDown
+            imageView.autoresizingMask = [.width, .height]
+            imageView.frame = bounds
+            addSubview(imageView)
+
+            overlay.autoresizingMask = [.width, .height]
+            overlay.frame = bounds
+            overlay.delegate = self
+            overlay.preferredInteractionTypes = .automatic
+            addSubview(overlay)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError() }
+
+        /// Loads (or, with nil, clears) the picture and re-runs text recognition on it.
+        func show(_ url: URL?) {
+            analysisToken += 1
+            let token = analysisToken
+            overlay.analysis = nil
+            guard let url, let image = NSImage(contentsOf: url) else {
+                imageView.image = nil
+                return
+            }
+            imageView.image = image
+            var rect = NSRect(origin: .zero, size: image.size)
+            guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return }
+            Task { [weak self] in
+                guard let analyzer = self?.analyzer else { return }
+                let config = ImageAnalyzer.Configuration([.text, .machineReadableCode])
+                let analysis = try? await analyzer.analyze(cg, orientation: .up, configuration: config)
+                await MainActor.run {
+                    guard let self, token == self.analysisToken else { return }
+                    self.overlay.analysis = analysis
+                }
+            }
+        }
+
+        /// Where the picture actually sits inside the overlay (aspect-fit letterboxing), in unit
+        /// coordinates, so the selection boxes line up with the text.
+        func contentsRect(for overlayView: ImageAnalysisOverlayView) -> CGRect {
+            let full = CGRect(x: 0, y: 0, width: 1, height: 1)
+            guard let size = imageView.image?.size, size.width > 0, size.height > 0 else { return full }
+            let bounds = overlayView.bounds.size
+            guard bounds.width > 0, bounds.height > 0 else { return full }
+            let scale = min(bounds.width / size.width, bounds.height / size.height)
+            let w = size.width * scale, h = size.height * scale
+            return CGRect(x: (bounds.width - w) / 2 / bounds.width, y: (bounds.height - h) / 2 / bounds.height,
+                          width: w / bounds.width, height: h / bounds.height)
         }
     }
 }
