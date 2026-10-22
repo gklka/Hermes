@@ -100,6 +100,9 @@ final class ChatViewController: NSViewController {
     /// A message to scroll to and select once it's loaded (from a clicked notification, a
     /// Spotlight result or a Find in Chat result).
     var pendingReveal: String?
+    /// The chat whose first page is still loading (openThread). While it is, a reveal stays
+    /// pending so the reload that finishes the open scrolls to the message, not to the bottom.
+    var openingThread: String?
     /// Older pages loaded while looking for the pending message, and the most to load.
     var revealPagesLoaded = 0
     var revealPageLimit = 40
@@ -375,10 +378,13 @@ final class ChatViewController: NSViewController {
             // (the unencrypted past) ahead of the latest messages.
             WebHistoryImporter.shared.importHistory(threadID: threadID)
         }
+        openingThread = threadID
         Task {
             await store.openThread(threadID)
             if self.threadID == threadID {
-                reload(scrollToBottom: true)
+                openingThread = nil
+                // A pending reveal (e.g. from Spotlight) scrolls to its message instead.
+                reload(scrollToBottom: pendingReveal == nil)
                 markReadIfVisible()
             }
             if encrypted {

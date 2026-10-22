@@ -458,7 +458,8 @@ final class MainSplitViewController: NSSplitViewController {
         }
         list.select(threadID: threadID)
         if let messageID {
-            chat.reveal(messageID: messageID)
+            // From Spotlight: the message is in the database, so load back to it if needed.
+            chat.reveal(messageID: messageID, stored: true)
         }
     }
 

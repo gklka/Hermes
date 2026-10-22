@@ -114,7 +114,9 @@ extension ChatViewController {
             Task { await store.loadOlderMessages(threadID) }
             return
         }
-        pendingReveal = nil
+        // While the chat's first page is still loading, keep it pending: the reload that
+        // finishes the open scrolls to the message once more, over its final row positions.
+        if openingThread == nil { pendingReveal = nil }
         // In the middle of the view, with the messages around it.
         let rect = tableView.rect(ofRow: row)
         let visible = scrollView.contentView.bounds
