@@ -31,17 +31,21 @@ func forgetNameLookups() {
 	nameLookupLock.Unlock()
 }
 
-// lookUpNames asks for the names of the chat's unnamed people, if the chat itself has no name
-// (1:1 chats, unnamed groups). The chats they're in are sent again once named.
+// lookUpNames asks for the names (and avatars) of the chat's people who lack one. This covers
+// unnamed chats (1:1 chats, unnamed groups) whose people arrive before their contact rows, and
+// named groups whose members are strangers with no contact row, so they'd otherwise render with
+// no name and a "?" avatar. The chats they're in are sent again once resolved.
 func (c *Core) lookUpNames(t *threadRow, conv apiConversation) {
-	if t.Name != "" {
-		return
-	}
 	self := c.selfID()
 	var ids []string
 	nameLookupLock.Lock()
 	for _, p := range conv.Participants {
-		if p.Name != "" || p.ID == self || p.ID == "" {
+		if p.ID == self || p.ID == "" {
+			continue
+		}
+		// A named group's members can have a nickname but no contact row, so name or avatar may
+		// be missing; look them up when either is absent.
+		if p.Name != "" && p.AvatarURL != "" {
 			continue
 		}
 		if last, ok := nameLookups[p.ID]; ok && time.Since(last) < nameLookupRetry {

@@ -195,6 +195,10 @@ func (c *Core) handleThreadTables(tbl *table.LSTable, cs *changeSet) {
 
 	for _, p := range tbl.LSAddParticipantIdToGroupThread {
 		id := c.threadID(p.ThreadKey)
+		// This sync row carries no display name or profile picture, only the per-thread
+		// Nickname, so a group member's name/avatar is resolved later via names.go lookUpName
+		// (GetContactsFullTask). If a future mautrix-meta table version exposes a picture URL
+		// or display name here, store it via AddParticipant to avoid depending on a contacts fetch.
 		c.store.AddParticipant(id, id64(p.ContactId), p.Nickname, p.ReadWatermarkTimestampMs)
 		cs.thread(id)
 	}
