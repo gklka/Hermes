@@ -674,12 +674,21 @@ final class ConversationCellView: NSTableCellView {
         updateTextColors()
     }
 
+    /// An opaque stand-in for secondaryLabelColor. The source list draws with vibrancy, which
+    /// blends a semi-transparent color (like the real secondaryLabelColor) differently from one
+    /// row to the next, so some snippets came out darker than others. An opaque color renders the
+    /// same everywhere.
+    private static let subtitleColor = NSColor(name: "chatSubtitle") { appearance in
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        return NSColor(white: dark ? 0.62 : 0.53, alpha: 1)
+    }
+
     /// Selected rows in the sidebar use an accent-colored highlight; keep text readable.
     private func updateTextColors() {
         let emphasized = backgroundStyle == .emphasized
         nameLabel.textColor = emphasized ? .alternateSelectedControlTextColor : .labelColor
-        dateLabel.textColor = emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor
-        snippetLabel.textColor = emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor
+        dateLabel.textColor = emphasized ? .alternateSelectedControlTextColor : Self.subtitleColor
+        snippetLabel.textColor = emphasized ? .alternateSelectedControlTextColor : Self.subtitleColor
         unreadDot.layer?.backgroundColor = (emphasized ? NSColor.white : NSColor.controlAccentColor).cgColor
     }
 
