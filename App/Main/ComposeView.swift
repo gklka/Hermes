@@ -71,6 +71,65 @@ final class ComposeTextView: NSTextView {
     static func hasAttachments(_ pasteboard: NSPasteboard) -> Bool {
         pasteboard.availableType(from: attachmentTypes) != nil
     }
+
+    // MARK: - Spelling & grammar persistence
+
+    /// The spelling, grammar and substitution switches from the Edit menu. AppKit resets these
+    /// every time the view is created, so we save the user's choices and restore them on launch.
+    private static let spellingSettings: [(key: String, path: ReferenceWritableKeyPath<NSTextView, Bool>)] = [
+        ("compose.spell.continuous", \.isContinuousSpellCheckingEnabled),
+        ("compose.spell.grammar", \.isGrammarCheckingEnabled),
+        ("compose.spell.autoCorrect", \.isAutomaticSpellingCorrectionEnabled),
+        ("compose.spell.quotes", \.isAutomaticQuoteSubstitutionEnabled),
+        ("compose.spell.dashes", \.isAutomaticDashSubstitutionEnabled),
+        ("compose.spell.textReplacement", \.isAutomaticTextReplacementEnabled),
+        ("compose.spell.links", \.isAutomaticLinkDetectionEnabled),
+        ("compose.spell.dataDetectors", \.isAutomaticDataDetectionEnabled),
+        ("compose.spell.smartInsertDelete", \.smartInsertDeleteEnabled),
+    ]
+
+    /// Applies any saved switch values over the code defaults. Call after setting the defaults.
+    func restoreSpellingSettings() {
+        let defaults = UserDefaults.standard
+        for setting in Self.spellingSettings where defaults.object(forKey: setting.key) != nil {
+            self[keyPath: setting.path] = defaults.bool(forKey: setting.key)
+        }
+    }
+
+    private func persistSpellingSettings() {
+        let defaults = UserDefaults.standard
+        for setting in Self.spellingSettings {
+            defaults.set(self[keyPath: setting.path], forKey: setting.key)
+        }
+    }
+
+    override func toggleContinuousSpellChecking(_ sender: Any?) {
+        super.toggleContinuousSpellChecking(sender); persistSpellingSettings()
+    }
+    override func toggleGrammarChecking(_ sender: Any?) {
+        super.toggleGrammarChecking(sender); persistSpellingSettings()
+    }
+    override func toggleAutomaticSpellingCorrection(_ sender: Any?) {
+        super.toggleAutomaticSpellingCorrection(sender); persistSpellingSettings()
+    }
+    override func toggleAutomaticQuoteSubstitution(_ sender: Any?) {
+        super.toggleAutomaticQuoteSubstitution(sender); persistSpellingSettings()
+    }
+    override func toggleAutomaticDashSubstitution(_ sender: Any?) {
+        super.toggleAutomaticDashSubstitution(sender); persistSpellingSettings()
+    }
+    override func toggleAutomaticTextReplacement(_ sender: Any?) {
+        super.toggleAutomaticTextReplacement(sender); persistSpellingSettings()
+    }
+    override func toggleAutomaticLinkDetection(_ sender: Any?) {
+        super.toggleAutomaticLinkDetection(sender); persistSpellingSettings()
+    }
+    override func toggleAutomaticDataDetection(_ sender: Any?) {
+        super.toggleAutomaticDataDetection(sender); persistSpellingSettings()
+    }
+    override func toggleSmartInsertDelete(_ sender: Any?) {
+        super.toggleSmartInsertDelete(sender); persistSpellingSettings()
+    }
 }
 
 /// Turns text emoticons like ":)" into emoji as you type, like Messenger does.
@@ -243,6 +302,8 @@ final class ComposeView: NSView, NSTextViewDelegate {
         textView.isAutomaticSpellingCorrectionEnabled = false
         textView.isContinuousSpellCheckingEnabled = true
         textView.writingToolsBehavior = .none
+        // Apply the user's saved spelling/grammar choices over those defaults.
+        textView.restoreSpellingSettings()
 
         scrollView.documentView = textView
         scrollView.hasVerticalScroller = true
