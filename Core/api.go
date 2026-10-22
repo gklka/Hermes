@@ -26,6 +26,8 @@ type apiConversation struct {
 	LastActivity    int64            `json:"lastActivity"`
 	UnreadCount     int              `json:"unreadCount"`
 	IsGroup         bool             `json:"isGroup"`
+	// HasCustomName: the chat's name was set on Facebook (not composed from the members' names).
+	HasCustomName   bool             `json:"hasCustomName"`
 	IsEncrypted     bool             `json:"isEncrypted"`
 	IsMuted         bool             `json:"isMuted"`
 	IsMarketplace   bool             `json:"isMarketplace"`

@@ -5,6 +5,9 @@ import Foundation
 struct Participant: Codable, Hashable {
     let id: String
     var name: String
+    /// The person's real Facebook name when `name` has been replaced by their contact nickname
+    /// (Prefer Nicknames); nil otherwise. Shown as the hover tooltip.
+    var realName: String?
     var avatarURL: String?
     /// Last message timestamp (ms) this participant has read.
     var readWatermark: Int64?
@@ -15,6 +18,11 @@ struct Participant: Codable, Hashable {
 struct Conversation: Codable, Identifiable, Hashable {
     let id: String
     var name: String
+    /// The chat's real name when `name` has been changed by Prefer Nicknames (a 1:1's other
+    /// person, or members swapped into an auto-composed group name); nil otherwise. The tooltip.
+    var realName: String?
+    /// The name was set on Facebook (not composed from members), so it's kept as-is.
+    var hasCustomName: Bool
     var avatarURL: String?
     var snippet: String
     var snippetSenderID: String?

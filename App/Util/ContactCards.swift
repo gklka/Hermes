@@ -19,6 +19,8 @@ final class ContactCards {
         var byFacebookID: [String: String] = [:]
         /// Folded name → contact identifiers.
         var byName: [String: [String]] = [:]
+        /// Contact identifier → nickname (only contacts that have one).
+        var nicknames: [String: String] = [:]
     }
 
     private init() {
@@ -27,7 +29,15 @@ final class ContactCards {
                 self?.index = nil
                 self?.loading = nil
                 self?.prepare()
+                // Contacts changed: a nickname may have been added or removed.
+                if self?.prefersNicknames == true {
+                    Task { await self?.ensureReady(); ChatStore.shared.reapplyNicknames() }
+                }
             }
+        }
+        // Start reading the contacts so saved nicknames show from launch.
+        if prefersNicknames {
+            Task { await ensureReady(); ChatStore.shared.reapplyNicknames() }
         }
     }
 
@@ -55,12 +65,44 @@ final class ContactCards {
 
     /// Asks for access if needed, reads the contacts, and returns the match.
     func findMatch(userID: String, name: String) async -> String? {
+        await ensureReady()
+        return match(userID: userID, name: name)
+    }
+
+    /// Asks for access the first time, then reads the contacts so lookups are ready.
+    func ensureReady() async {
         if canAsk {
             _ = try? await store.requestAccess(for: .contacts)
         }
         prepare()
         await loading?.value
-        return match(userID: userID, name: name)
+    }
+
+    // MARK: - Prefer Nicknames (View ▸ Prefer Nicknames)
+
+    private static let prefersNicknamesKey = "PreferNicknames"
+
+    /// When on, a contact's nickname replaces the person's name throughout the app. ChatStore
+    /// applies it when it hands conversations and participants to the UI (and the widget).
+    private(set) var prefersNicknames = UserDefaults.standard.object(forKey: prefersNicknamesKey) as? Bool ?? true
+
+    /// Toggles the preference: reads the contacts (asking for access if needed) and refreshes the UI.
+    func setPrefersNicknames(_ on: Bool) {
+        prefersNicknames = on
+        UserDefaults.standard.set(on, forKey: Self.prefersNicknamesKey)
+        if on {
+            Task { await ensureReady(); ChatStore.shared.reapplyNicknames() }
+        } else {
+            ChatStore.shared.reapplyNicknames()
+        }
+    }
+
+    /// The nickname to show for a person, or nil when the preference is off, access isn't
+    /// granted, there's no single matching contact, or that contact has no nickname.
+    func nickname(userID: String, name: String) -> String? {
+        guard prefersNicknames, let index, let id = match(userID: userID, name: name),
+              let nickname = index.nicknames[id], !nickname.isEmpty else { return nil }
+        return nickname
     }
 
     /// The contact's card in a popover next to `rect` of `view`, with a button opening it in Contacts.
@@ -95,6 +137,9 @@ final class ContactCards {
             }
             for name in names(of: contact) where !name.isEmpty {
                 index.byName[name, default: []].append(contact.identifier)
+            }
+            if !contact.nickname.isEmpty {
+                index.nicknames[contact.identifier] = contact.nickname
             }
         }
         // A contact listed under two of its names counts once.

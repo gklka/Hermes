@@ -23,6 +23,8 @@ final class MessageCellView: NSTableCellView {
     struct Layout: Hashable {
         var showSenderName = false
         var senderName = ""
+        /// The sender's real Facebook name when `senderName` is a contact nickname; the tooltip.
+        var senderRealName: String?
         var showAvatar = false
         var reserveAvatarSpace = false
         var avatarURL: String?
@@ -273,11 +275,13 @@ final class MessageCellView: NSTableCellView {
         // Sender name and picture (group chats; the picture by the last message of a run).
         senderLabel.isHidden = !layout.showSenderName
         senderLabel.stringValue = layout.senderName
+        // When the name shown is a nickname, hovering reveals the real Facebook name.
+        senderLabel.toolTip = layout.showSenderName ? layout.senderRealName : nil
         avatar.isHidden = !layout.showAvatar
         if layout.showAvatar {
             avatar.configure(name: layout.senderName, url: layout.avatarURL)
         }
-        avatar.toolTip = layout.showAvatar ? layout.senderName : nil
+        avatar.toolTip = layout.showAvatar ? (layout.senderRealName ?? layout.senderName) : nil
 
         // A web link gets Apple's rich preview, which replaces Messenger's own link card.
         let preview = message.isUnsent ? nil : LinkPreviews.source(text: message.text, attachments: message.attachments)

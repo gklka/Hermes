@@ -52,6 +52,8 @@ enum MainMenu {
         let viewMenu = NSMenu(title: "View")
         let sidebar = viewMenu.addItem(withTitle: "Toggle Sidebar", action: #selector(NSSplitViewController.toggleSidebar(_:)), keyEquivalent: "s")
         sidebar.keyEquivalentModifierMask = [.command, .control]
+        viewMenu.addItem(.separator())
+        viewMenu.addItem(withTitle: "Prefer Nicknames", action: #selector(AppDelegate.togglePreferNicknames(_:)), keyEquivalent: "")
         main.addItem(withTitle: "View", action: nil, keyEquivalent: "").submenu = viewMenu
 
         let conversationMenu = NSMenu(title: "Chat")

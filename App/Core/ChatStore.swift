@@ -71,17 +71,76 @@ final class ChatStore {
         return account != nil
     }
 
-    func conversation(_ id: String) -> Conversation? { conversationsByID[id] }
+    func conversation(_ id: String) -> Conversation? { conversationsByID[id].map(display) }
 
     func messages(in threadID: String) -> [ChatMessage] { messagesByThread[threadID] ?? [] }
 
     func participantName(_ userID: String, in threadID: String) -> String {
         if userID == account?.id { return "You" }
-        return conversationsByID[threadID]?.participants.first { $0.id == userID }?.name ?? "Unknown"
+        guard let participant = conversationsByID[threadID]?.participants.first(where: { $0.id == userID }) else { return "Unknown" }
+        return withNickname(participant).name
     }
 
     func participant(_ userID: String, in threadID: String) -> Participant? {
-        conversationsByID[threadID]?.participants.first { $0.id == userID }
+        conversationsByID[threadID]?.participants.first { $0.id == userID }.map(withNickname)
+    }
+
+    // MARK: - Prefer Nicknames
+
+    /// Applies the Prefer Nicknames preference (View menu) when handing data to the UI: a
+    /// contact's nickname replaces each participant's name, and a 1:1 chat's name follows the
+    /// other person's. The stored data (conversationsByID) stays as the core sent it.
+    private func display(_ conversation: Conversation) -> Conversation {
+        guard ContactCards.shared.prefersNicknames else { return conversation }
+        var result = conversation
+        let originalName = conversation.name
+        var otherNickname: String?
+        // A group whose name was composed from the members' names gets each member's nickname
+        // swapped in; a name set on Facebook (hasCustomName) is kept as-is.
+        var groupName = conversation.name
+        for index in result.participants.indices {
+            let original = result.participants[index]
+            let named = withNickname(original)
+            result.participants[index] = named
+            guard named.name != original.name else { continue }
+            if original.id != account?.id { otherNickname = named.name }
+            if conversation.isGroup, !conversation.hasCustomName, !original.name.isEmpty {
+                groupName = groupName.replacingOccurrences(of: original.name, with: named.name)
+            }
+        }
+        if !result.isGroup {
+            if let otherNickname {
+                result.name = otherNickname
+                result.realName = originalName
+            }
+        } else if !conversation.hasCustomName, groupName != originalName {
+            result.name = groupName
+            result.realName = originalName
+        }
+        return result
+    }
+
+    /// The participant with their contact nickname (keeping their real name for the tooltip), if
+    /// Prefer Nicknames is on and they have one.
+    private func withNickname(_ participant: Participant) -> Participant {
+        guard let nickname = ContactCards.shared.nickname(userID: participant.id, name: participant.name) else { return participant }
+        var result = participant
+        result.name = nickname
+        result.realName = participant.name
+        return result
+    }
+
+    /// Re-emits every chat and open thread so the UI (and the widget) pick up a change to the
+    /// Prefer Nicknames preference. Nothing stored changes; only what the accessors return does.
+    func reapplyNicknames() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.conversationsDirty = true
+            self.notify(.conversations)
+            for threadID in self.messagesByThread.keys {
+                self.notify(.messages(threadID: threadID))
+            }
+        }
     }
 
     // MARK: - Commands
@@ -136,13 +195,13 @@ final class ChatStore {
 
     func searchContacts(_ query: String) async -> [Participant] {
         struct Params: Encodable { let text: String }
-        return (try? await core.call("contacts.search", Params(text: query), as: [Participant].self)) ?? []
+        return ((try? await core.call("contacts.search", Params(text: query), as: [Participant].self)) ?? []).map(withNickname)
     }
 
     /// Everyone Messenger finds by the name who can be messaged, not only people you've chatted with.
     func searchPeople(_ query: String) async -> [Participant] {
         struct Params: Encodable { let text: String }
-        return (try? await core.call("contacts.searchPeople", Params(text: query), as: [Participant].self)) ?? []
+        return ((try? await core.call("contacts.searchPeople", Params(text: query), as: [Participant].self)) ?? []).map(withNickname)
     }
 
     /// Opens (creating if needed) the 1:1 chat with a contact.
@@ -151,7 +210,7 @@ final class ChatStore {
         let conversation = try await core.call("threads.open", Params(userID: userID), as: Conversation.self)
         conversationsByID[conversation.id] = conversation
         resortConversations()
-        return conversation
+        return display(conversation)
     }
 
     /// Creates (and opens) a group chat with the given people.
@@ -160,7 +219,7 @@ final class ChatStore {
         let conversation = try await core.call("threads.createGroup", Params(userIDs: userIDs), as: Conversation.self)
         conversationsByID[conversation.id] = conversation
         resortConversations()
-        return conversation
+        return display(conversation)
     }
 
     func loadMoreConversations() async {
@@ -700,8 +759,8 @@ final class ChatStore {
         if conversationsDirty {
             conversationsDirty = false
             let sorted = conversationsByID.values.sorted { $0.lastActivity > $1.lastActivity }
-            conversations = sorted.filter { !$0.isRequest }
-            requests = sorted.filter(\.isRequest)
+            conversations = sorted.filter { !$0.isRequest }.map(display)
+            requests = sorted.filter(\.isRequest).map(display)
         }
         let pending = queuedChanges
         queuedChanges = []

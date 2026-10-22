@@ -575,6 +575,7 @@ final class ChatViewController: NSViewController {
         if conversation.isGroup && !message.isFromMe {
             let participant = store.participant(message.senderID, in: conversation.id)
             layout.senderName = participant?.name ?? "Unknown"
+            layout.senderRealName = participant?.realName
             layout.avatarURL = participant?.avatarURL
             layout.showSenderName = !continuesPrevious
             layout.reserveAvatarSpace = true

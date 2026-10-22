@@ -904,6 +904,8 @@ func (s *Store) Conversation(t *threadRow, selfID string) apiConversation {
 		others = append(others, participantRow{UserID: t.ID, Name: name, AvatarURL: avatar})
 		conv.Participants = append(conv.Participants, apiParticipant{ID: t.ID, Name: name, AvatarURL: avatar})
 	}
+	// A name from Facebook (set on the thread) is kept; an empty one is composed from members.
+	conv.HasCustomName = conv.Name != ""
 	if conv.Name == "" {
 		names := make([]string, 0, len(others))
 		for _, p := range others {

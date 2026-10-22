@@ -218,6 +218,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ActivityWindowController.shared.toggle()
     }
 
+    /// View ▸ Prefer Nicknames: show people by their Apple Contacts nickname where they have one.
+    @objc func togglePreferNicknames(_ sender: Any?) {
+        ContactCards.shared.setPrefersNicknames(!ContactCards.shared.prefersNicknames)
+    }
+
     /// Hermes › Check for Updates….
     @objc func checkForUpdates(_ sender: Any?) {
         updater.checkForUpdates(sender)
@@ -247,5 +252,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LinkPreviews.shared.clear()
         ImageCache.shared.clear()
         LocationCardView.clearCache()
+    }
+}
+
+extension AppDelegate: NSMenuItemValidation {
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(togglePreferNicknames(_:)) {
+            menuItem.state = ContactCards.shared.prefersNicknames ? .on : .off
+        }
+        return true
     }
 }

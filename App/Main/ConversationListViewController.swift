@@ -645,7 +645,7 @@ final class ConversationCellView: NSTableCellView {
     func configure(_ conversation: Conversation, isTyping: Bool, selfID: String?) {
         nameLabel.stringValue = conversation.name
         // Long names (groups listing their members) are cut off; hovering shows them whole.
-        nameLabel.toolTip = conversation.name
+        nameLabel.toolTip = conversation.realName ?? conversation.name
         dateLabel.stringValue = Formatters.listTimestamp(conversation.lastActivityDate)
         dateLabel.toolTip = Formatters.exact(conversation.lastActivityDate)
         avatar.configure(conversation, selfID: selfID)
