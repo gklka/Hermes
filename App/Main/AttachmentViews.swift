@@ -114,7 +114,7 @@ final class LinkCardView: NSView, NSDraggingSource {
         // A shared post stuffs its whole body (with newlines) into the title; collapse it to one
         // block so the line cap truncates it cleanly instead of showing every line.
         titleLabel.stringValue = Self.oneBlock(preview.title)
-        let subtitle = preview.subtitle.map(Self.oneBlock) ?? ""
+        let subtitle = preview.subtitle.map { Self.oneBlock($0) } ?? ""
         subtitleLabel.stringValue = subtitle
         subtitleLabel.isHidden = subtitle.isEmpty
         siteLabel.stringValue = preview.site ?? ""
@@ -343,7 +343,7 @@ final class LocationCardView: NSView {
     }
 
     @objc private func openInMaps() {
-        let item = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
+        let item = MKMapItem(location: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude), address: nil)
         item.name = location.name.flatMap { $0.isEmpty ? nil : $0 } ?? "Shared Location"
         item.openInMaps(launchOptions: nil)
     }

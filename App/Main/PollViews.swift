@@ -153,7 +153,7 @@ final class ComposePollPanel: NSView, NSTextFieldDelegate {
     /// Two different choices for a new poll, one for a sent one; none the same as another.
     var canSend: Bool {
         let all = existing + choices
-        guard Set(all.map(PollLimits.key)).count == all.count else { return false }
+        guard Set(all.map { PollLimits.key($0) }).count == all.count else { return false }
         return choices.count >= (mode == .create ? PollLimits.minOptions : 1)
     }
 

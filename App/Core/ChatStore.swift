@@ -433,6 +433,14 @@ final class ChatStore {
 
     /// Sends a request the UI doesn't wait for (its result arrives as events). A failure is in
     /// the core's log.
+    /// Connects to Messenger again at once if it's disconnected (ConnectionWatcher), instead of
+    /// waiting for the next try. `reason` goes to the log.
+    func reconnectNow(reason: String) {
+        guard connectionState == .disconnected else { return }
+        struct Params: Encodable { let text: String }
+        post("connection.reconnect", Params(text: reason))
+    }
+
     private func post(_ method: String, _ params: some Encodable) {
         Task { try? await core.call(method, params) }
     }

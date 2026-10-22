@@ -104,6 +104,10 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 	case "logout":
 		c.Logout(ctx)
 		return nil, nil
+	case "connection.reconnect":
+		// The network came back or changed, or the Mac woke: `text` says which.
+		c.reconnectNow(p.Text)
+		return nil, nil
 	case "session.cookies":
 		return c.sessionCookies()
 

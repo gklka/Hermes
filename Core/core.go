@@ -37,8 +37,12 @@ type Core struct {
 	store   *Store
 	wa      *sqlstore.Container
 
-	mu           sync.Mutex
-	cancel       context.CancelFunc
+	mu     sync.Mutex
+	cancel context.CancelFunc
+	// The connection's context (canceled on logout), for reconnecting now (reconnectNow).
+	connCtx context.Context
+	// Wakes connectWithRetry's wait (Messenger couldn't be loaded yet) to try again now.
+	retryNow     chan struct{}
 	cli          *messagix.Client
 	e2ee         *whatsmeow.Client
 	cookies      *cookies.Cookies
@@ -53,6 +57,10 @@ type Core struct {
 }
 
 func NewCore(dataDir string) *Core {
+	// Messenger's connection is tried again sooner than messagix's default (up to 5 minutes
+	// after repeated failures: the app showed "Waiting for network…" long after it was back).
+	// The app also reconnects at once when the network comes back (reconnectNow).
+	messagix.MaxConnectBackoff = 30 * time.Second
 	logFile, err := os.OpenFile(filepath.Join(dataDir, "core.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	var log zerolog.Logger
 	if err == nil {
@@ -65,6 +73,7 @@ func NewCore(dataDir string) *Core {
 		log:       log,
 		pending:   make(map[string]pendingSend),
 		sendQueue: make(chan func(), 128),
+		retryNow:  make(chan struct{}, 1),
 	}
 	_ = os.MkdirAll(c.mediaDir(), 0o700)
 	go func() {
@@ -350,8 +359,12 @@ func (c *Core) connectWithRetry() {
 			return
 		}
 		c.setState(stateDisconnected, err.Error())
-		time.Sleep(delay)
-		delay = min(delay*2, 5*time.Minute)
+		// Until the next try, or sooner when the network comes back (reconnectNow).
+		select {
+		case <-time.After(delay):
+		case <-c.retryNow:
+		}
+		delay = min(delay*2, 30*time.Second)
 	}
 }
 
@@ -360,6 +373,7 @@ func (c *Core) attach(cli *messagix.Client, initialTable *table.LSTable) {
 	ctx, cancel := context.WithCancel(context.Background())
 	c.mu.Lock()
 	c.cancel = cancel
+	c.connCtx = ctx
 	c.cli = cli
 	c.initialTable = initialTable
 	c.mu.Unlock()
@@ -372,6 +386,32 @@ func (c *Core) attach(cli *messagix.Client, initialTable *table.LSTable) {
 		return
 	}
 	go c.persistCookiesPeriodically(ctx)
+}
+
+// reconnectNow connects Messenger again at once if it's disconnected (the network came back,
+// the Mac woke), instead of waiting out messagix's backoff. A new connection loop replaces the
+// waiting one; it reports a reconnect, like messagix's own.
+func (c *Core) reconnectNow(reason string) {
+	c.mu.Lock()
+	cli, ctx := c.cli, c.connCtx
+	c.mu.Unlock()
+	if cli == nil {
+		// Messenger isn't loaded yet (connectWithRetry is waiting): it tries again now.
+		select {
+		case c.retryNow <- struct{}{}:
+		default:
+		}
+		return
+	}
+	if ctx == nil || ctx.Err() != nil || cli.IsConnected() {
+		return
+	}
+	c.log.Info().Str("reason", reason).Msg("Reconnecting now")
+	c.setState(stateConnecting, "")
+	if err := cli.Connect(ctx); err != nil {
+		c.log.Err(err).Msg("Failed to reconnect")
+		c.setState(stateDisconnected, err.Error())
+	}
 }
 
 func (c *Core) persistCookiesPeriodically(ctx context.Context) {
@@ -390,7 +430,7 @@ func (c *Core) persistCookiesPeriodically(ctx context.Context) {
 func (c *Core) disconnect() {
 	c.mu.Lock()
 	cli, e2ee, cancel := c.cli, c.e2ee, c.cancel
-	c.cli, c.e2ee, c.cancel = nil, nil, nil
+	c.cli, c.e2ee, c.cancel, c.connCtx = nil, nil, nil, nil
 	c.mu.Unlock()
 	if cancel != nil {
 		cancel()

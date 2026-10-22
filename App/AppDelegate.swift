@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         store.start()
+        ConnectionWatcher.shared.start()
 
         Notifier.shared.onOpenThread = { [weak self] threadID, messageID in
             guard let self, self.mainWindowController != nil else { return }
