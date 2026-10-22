@@ -50,22 +50,36 @@ final class AvatarView: NSView {
         initialsLabel.stringValue = RoundAvatar.initials(of: name)
         guard url != currentURL else { return }
         currentURL = url
+        // No fade: this runs on cell reuse, where the old picture should vanish at once.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
         imageLayer.contents = nil
+        CATransaction.commit()
         initialsLabel.isHidden = false
         guard let url, let parsed = URL(string: url) else { return }
         if let cached = ImageCache.shared.cached(parsed) {
-            show(cached)
+            // Already in memory (e.g. a reused cell): swap in place with no fade.
+            show(cached, animated: false)
             return
         }
         Task { [weak self] in
             let image = await ImageCache.shared.image(for: parsed)
             guard let self, self.currentURL == url, let image else { return }
-            self.show(image)
+            // Loaded asynchronously: fade it in.
+            self.show(image, animated: true)
         }
     }
 
-    private func show(_ image: NSImage) {
-        imageLayer.contents = image.layerContents(forContentsScale: window?.backingScaleFactor ?? 2)
+    private func show(_ image: NSImage, animated: Bool) {
+        let contents = image.layerContents(forContentsScale: window?.backingScaleFactor ?? 2)
+        if animated {
+            imageLayer.contents = contents
+        } else {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            imageLayer.contents = contents
+            CATransaction.commit()
+        }
         initialsLabel.isHidden = true
     }
 }
