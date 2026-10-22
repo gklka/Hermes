@@ -669,16 +669,21 @@ final class ConversationCellView: NSTableCellView {
             snippetLabel.stringValue = conversation.snippet
         }
         nameLabel.font = .systemFont(ofSize: 13, weight: conversation.unreadCount > 0 ? .bold : .semibold)
+        // Set here too (not only in backgroundStyle.didSet): a reused cell may keep the same
+        // style, so didSet wouldn't fire and the previous row's colors would linger.
+        updateTextColors()
+    }
+
+    /// Selected rows in the sidebar use an accent-colored highlight; keep text readable.
+    private func updateTextColors() {
+        let emphasized = backgroundStyle == .emphasized
+        nameLabel.textColor = emphasized ? .alternateSelectedControlTextColor : .labelColor
+        dateLabel.textColor = emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor
+        snippetLabel.textColor = emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor
+        unreadDot.layer?.backgroundColor = (emphasized ? NSColor.white : NSColor.controlAccentColor).cgColor
     }
 
     override var backgroundStyle: NSView.BackgroundStyle {
-        didSet {
-            // Selected rows in the sidebar use an accent-colored highlight; keep text readable.
-            let emphasized = backgroundStyle == .emphasized
-            nameLabel.textColor = emphasized ? .alternateSelectedControlTextColor : .labelColor
-            dateLabel.textColor = emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor
-            snippetLabel.textColor = emphasized ? .alternateSelectedControlTextColor : .secondaryLabelColor
-            unreadDot.layer?.backgroundColor = (emphasized ? NSColor.white : NSColor.controlAccentColor).cgColor
-        }
+        didSet { updateTextColors() }
     }
 }
