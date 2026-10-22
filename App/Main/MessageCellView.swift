@@ -8,6 +8,8 @@ protocol MessageCellDelegate: AnyObject {
     func messageCellDidToggleEdits(_ message: ChatMessage)
     /// A message's bubble was clicked: select it.
     func messageCellDidClick(_ cell: MessageCellView, message: ChatMessage)
+    /// The reply quote above a message was clicked: jump to the quoted message.
+    func messageCell(_ cell: MessageCellView, revealReplyTarget messageID: String)
     /// The "not delivered" icon was clicked: offer to resend or delete.
     func messageCellDidClickFailure(_ message: ChatMessage)
     /// The tapback badge was clicked: show who reacted.
@@ -329,8 +331,14 @@ final class MessageCellView: NSTableCellView {
             replyView.configure(text: reply.text.isEmpty ? "Attachment" : reply.text, maxWidth: layout.maxWidth)
             replyView.isHidden = false
             replyConnector.isHidden = false
+            let targetID = reply.messageID
+            replyView.onClick = { [weak self] in
+                guard let self else { return }
+                self.delegate?.messageCell(self, revealReplyTarget: targetID)
+            }
             NSLayoutConstraint.activate([replyTop, columnBelowReply, replyOnLeft ? replyLeading : replyTrailing])
         } else {
+            replyView.onClick = nil
             replyView.isHidden = true
             replyConnector.isHidden = true
             NSLayoutConstraint.activate([topConstraint])
@@ -740,10 +748,6 @@ final class MessageCellView: NSTableCellView {
             guard isMessageSelected != oldValue else { return }
             selectedAt = ProcessInfo.processInfo.systemUptime
             setDarkened(isMessageSelected)
-            // Text can only be selected in the selected message.
-            textView.allowsTextSelection = isMessageSelected
-            // The I-beam over the whole bubble, including around the text.
-            bubble.cursor = isMessageSelected ? .iBeam : nil
         }
     }
 

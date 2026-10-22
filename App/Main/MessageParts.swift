@@ -4,8 +4,11 @@ import AppKit
 // it, and its tapbacks.
 
 /// The replied-to message above a reply, like Messages: an outlined bubble with gray text.
+/// Clicking it jumps to the quoted message (onClick).
 final class ReplyQuoteView: NSView {
     private let textLabel = NSTextField(wrappingLabelWithString: "")
+    /// Called when the quote is clicked, to scroll to and select the quoted message.
+    var onClick: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -41,6 +44,57 @@ final class ReplyQuoteView: NSView {
 
     override func updateLayer() {
         layer?.borderColor = NSColor.tertiaryLabelColor.cgColor
+    }
+
+    // MARK: - Clicking (jump to the quoted message)
+
+    /// Darkens the quote by 5% while it's pressed, like the app's links and attachments.
+    private let pressLayer = CALayer()
+
+    override func resetCursorRects() {
+        guard onClick != nil else { return }
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        // With a click handler, take the clicks that land on the text label too.
+        return onClick != nil && hit != nil ? self : hit
+    }
+
+    private func setPressed(_ pressed: Bool) {
+        if pressLayer.superlayer == nil, let layer {
+            pressLayer.backgroundColor = NSColor.black.withAlphaComponent(0.05).cgColor
+            pressLayer.cornerRadius = layer.cornerRadius
+            pressLayer.cornerCurve = .continuous
+            pressLayer.zPosition = 1000
+            layer.addSublayer(pressLayer)
+        }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        pressLayer.frame = bounds
+        pressLayer.isHidden = !pressed
+        CATransaction.commit()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard onClick != nil else { return super.mouseDown(with: event) }
+        setPressed(true)
+        // Track the press so a long or dragged click still registers (a gesture recognizer
+        // wouldn't); open on release inside the quote, like the app's other clickable parts.
+        var inside = true
+        while true {
+            guard let next = window?.nextEvent(matching: [.leftMouseUp, .leftMouseDragged]) else { break }
+            let point = convert(next.locationInWindow, from: nil)
+            if next.type == .leftMouseDragged {
+                inside = bounds.contains(point)
+                setPressed(inside)
+            } else {
+                setPressed(false)
+                if bounds.contains(point) { onClick?() }
+                break
+            }
+        }
     }
 }
 

@@ -251,6 +251,12 @@ extension ChatViewController: MessageCellDelegate {
         selectMessage(message.id)
     }
 
+    func messageCell(_ cell: MessageCellView, revealReplyTarget messageID: String) {
+        if searchResults != nil { endSearch() }
+        // The quoted message is older history in the database; load back to it if needed.
+        reveal(messageID: messageID, stored: true)
+    }
+
     /// `dismissable` false keeps the highlight until it's cleared in code (clicks don't drop it),
     /// used to mark the message being edited.
     func selectMessage(_ id: String?, dismissable: Bool = true) {

@@ -119,8 +119,15 @@ extension ChatViewController {
         let rect = tableView.rect(ofRow: row)
         let visible = scrollView.contentView.bounds
         let y = min(max(0, rect.midY - visible.height / 2), max(0, tableView.bounds.height - visible.height))
-        scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
-        scrollView.reflectScrolledClipView(scrollView.contentView)
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.3
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            context.allowsImplicitAnimation = true
+            scrollView.contentView.animator().setBoundsOrigin(NSPoint(x: 0, y: y))
+        }, completionHandler: { [weak self] in
+            guard let self else { return }
+            self.scrollView.reflectScrolledClipView(self.scrollView.contentView)
+        })
         selectMessage(id)
     }
 
