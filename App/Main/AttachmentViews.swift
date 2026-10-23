@@ -2,6 +2,7 @@ import AppKit
 import AVFoundation
 import CryptoKit
 import MapKit
+import QuickLookThumbnailing
 import UniformTypeIdentifiers
 
 /// Dragging a link out of a message: other apps get the URL, Finder makes a .webloc named after
@@ -372,13 +373,11 @@ final class AttachmentView: NSView, NSDraggingSource {
         switch attachment.kind {
         case .image, .gif, .sticker, .video:
             setUpVisual(maxWidth: maxWidth)
-        case .audio, .file:
-            setUpPill(
-                symbol: attachment.kind == .audio ? "waveform" : "doc.fill",
-                title: attachment.filename ?? attachment.kind.label,
-                subtitle: nil,
-                maxWidth: maxWidth
-            )
+        case .audio:
+            setUpPill(symbol: "waveform", title: attachment.filename ?? attachment.kind.label, subtitle: nil, maxWidth: maxWidth)
+        case .file:
+            let icon = setUpPill(symbol: nil, title: attachment.filename ?? attachment.kind.label, subtitle: nil, maxWidth: maxWidth)
+            showFileThumbnail(in: icon)
         case .link:
             setUpPill(
                 symbol: "link",
@@ -581,15 +580,44 @@ final class AttachmentView: NSView, NSDraggingSource {
         ])
     }
 
-    /// Files, voice messages and links: an icon and a title in a gray pill.
-    private func setUpPill(symbol: String, title: String, subtitle: String?, maxWidth: CGFloat) {
+    private static let fileIconSize: CGFloat = 28
+
+    /// The file's type icon from the system, replaced by a Quick Look thumbnail of its contents
+    /// once it's downloaded (files aren't downloaded just for this).
+    private func showFileThumbnail(in icon: NSImageView) {
+        let ext = attachment.filename.map { ($0 as NSString).pathExtension } ?? ""
+        let type = UTType(filenameExtension: ext) ?? attachment.mimeType.flatMap { UTType(mimeType: $0) } ?? .data
+        icon.image = NSWorkspace.shared.icon(for: type)
+        guard let url = ChatStore.shared.downloadedFile(for: attachment, in: message) else { return }
+        let side = Self.fileIconSize
+        let request = QLThumbnailGenerator.Request(
+            fileAt: url,
+            size: CGSize(width: side, height: side),
+            scale: window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2,
+            representationTypes: .thumbnail
+        )
+        Task { [weak icon] in
+            guard let thumbnail = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request) else { return }
+            icon?.image = thumbnail.nsImage
+        }
+    }
+
+    /// Files, voice messages and links: an icon and a title in a gray pill. Without a symbol, the
+    /// icon is left empty, file-icon sized, for the caller to fill.
+    @discardableResult
+    private func setUpPill(symbol: String?, title: String, subtitle: String?, maxWidth: CGFloat) -> NSImageView {
         let background = BubbleView()
         background.color = BubbleColors.incoming
         background.wantsLayer = true
         if let hostLayer = background.layer { enablePressHighlight(on: hostLayer) }
-        let icon = DisplayImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
-        icon.symbolConfiguration = .init(pointSize: 18, weight: .regular)
-        icon.contentTintColor = .secondaryLabelColor
+        let icon = DisplayImageView()
+        if let symbol {
+            icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            icon.symbolConfiguration = .init(pointSize: 18, weight: .regular)
+            icon.contentTintColor = .secondaryLabelColor
+        } else {
+            icon.imageScaling = .scaleProportionallyUpOrDown
+        }
         let titleLabel = NSTextField(labelWithString: title)
         titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
         titleLabel.lineBreakMode = .byTruncatingMiddle
@@ -620,6 +648,15 @@ final class AttachmentView: NSView, NSDraggingSource {
             texts.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9),
             widthAnchor.constraint(lessThanOrEqualToConstant: maxWidth),
         ])
+        if symbol == nil {
+            NSLayoutConstraint.activate([
+                icon.widthAnchor.constraint(equalToConstant: Self.fileIconSize),
+                icon.heightAnchor.constraint(equalToConstant: Self.fileIconSize),
+                icon.topAnchor.constraint(greaterThanOrEqualTo: topAnchor, constant: 5),
+                icon.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -5),
+            ])
+        }
+        return icon
     }
 }
 
