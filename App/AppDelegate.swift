@@ -160,7 +160,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .connecting, .connected, .disconnected:
             loginWindowController?.close()
             loginWindowController = nil
-            showMain()
+            // Only the first time: reconnecting (e.g. after a network change) leaves a closed
+            // window closed.
+            if mainWindowController == nil { showMain() }
             if !didLoadConversations {
                 didLoadConversations = true
                 Task {
