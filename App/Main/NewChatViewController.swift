@@ -7,6 +7,13 @@ final class NewChatViewController: NSViewController, NSTokenFieldDelegate {
     /// Called with the chosen people's user IDs.
     var onCreate: (([String]) -> Void)?
 
+    /// Texts, so the same sheet serves "New Chat" and "Add Members" (set before presenting).
+    var titleText = "New Chat"
+    var actionTitle = "Chat"
+    var noteText = "Add one person for a direct chat, or several for a group."
+    /// People left out of the suggestions (e.g. a group's current members).
+    var excludedIDs: Set<String> = []
+
     private let fieldHost = TokenFieldHost()
     private var field: NSTokenField { fieldHost.field }
     private let picker = MentionPicker()
@@ -21,7 +28,7 @@ final class NewChatViewController: NSViewController, NSTokenFieldDelegate {
     override func loadView() {
         let root = NSView(frame: NSRect(x: 0, y: 0, width: 380, height: 160))
 
-        let title = NSTextField(labelWithString: "New Chat")
+        let title = NSTextField(labelWithString: titleText)
         title.font = .systemFont(ofSize: 13, weight: .semibold)
 
         field.placeholderString = "To: name"
@@ -37,11 +44,11 @@ final class NewChatViewController: NSViewController, NSTokenFieldDelegate {
 
         let close = NSButton.glassClose(target: self, action: #selector(cancel))
 
-        let note = NSTextField(wrappingLabelWithString: "Add one person for a direct chat, or several for a group.")
+        let note = NSTextField(wrappingLabelWithString: noteText)
         note.font = .systemFont(ofSize: 11)
         note.textColor = .secondaryLabelColor
 
-        let create = NSButton(title: "Chat", target: self, action: #selector(createChat))
+        let create = NSButton(title: actionTitle, target: self, action: #selector(createChat))
         create.bezelStyle = .rounded
         create.keyEquivalent = "\r"
 
@@ -126,7 +133,7 @@ final class NewChatViewController: NSViewController, NSTokenFieldDelegate {
         if let person = byName[editingSubstring()], !ids.contains(person.id) {
             ids.append(person.id)
         }
-        return ids
+        return ids.filter { !excludedIDs.contains($0) }
     }
 
     // MARK: - Suggestions
@@ -171,7 +178,7 @@ final class NewChatViewController: NSViewController, NSTokenFieldDelegate {
 
     private func refreshPicker() {
         guard let window = view.window, let results = cache[currentQuery] else { return }
-        let taken = Set(currentTokens().map { $0.participant.id })
+        let taken = Set(currentTokens().map { $0.participant.id }).union(excludedIDs)
         let candidates = results
             .filter { !taken.contains($0.id) }
             .map { MentionCandidate(id: $0.id, name: $0.name, avatarURL: $0.avatarURL) }

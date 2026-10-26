@@ -222,6 +222,12 @@ final class ChatStore {
         return display(conversation)
     }
 
+    /// Adds people to a group chat; the updated member list arrives as a conversation event.
+    func addParticipants(to threadID: String, userIDs: [String]) async throws {
+        struct Params: Encodable { let threadID: String; let userIDs: [String] }
+        try await core.call("threads.addParticipants", Params(threadID: threadID, userIDs: userIDs))
+    }
+
     func loadMoreConversations() async {
         try? await core.call("threads.loadMore")
     }

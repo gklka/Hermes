@@ -275,6 +275,42 @@ func (c *Core) createGroupChat(ctx context.Context, userIDs []string) (apiConver
 	return conv, nil
 }
 
+// addParticipants adds people to a group chat.
+func (c *Core) addParticipants(ctx context.Context, threadID string, userIDs []string) error {
+	cli, err := c.requireClient()
+	if err != nil {
+		return err
+	}
+	contacts := make([]int64, 0, len(userIDs))
+	for _, u := range userIDs {
+		if id, parseErr := strconv.ParseInt(u, 10, 64); parseErr == nil && id != 0 {
+			contacts = append(contacts, id)
+		}
+	}
+	if len(contacts) == 0 {
+		return errors.New("no one to add")
+	}
+	resp, err := cli.ExecuteTasks(ctx, &socket.AddParticipantsTask{
+		ThreadKey:  c.fbThreadKey(threadID),
+		ContactIDs: contacts,
+		SyncGroup:  syncGroupMain,
+	})
+	if err != nil {
+		return err
+	}
+	if len(resp.LSIssueNewError) > 0 {
+		e := resp.LSIssueNewError[0]
+		return errors.New(firstNonEmpty(e.ErrorMessage, e.ErrorTitle, "couldn't add the members"))
+	}
+	// Store whatever the response carries (the new members), then make sure they're there.
+	c.handleTable(resp)
+	for _, u := range userIDs {
+		c.store.EnsureParticipant(threadID, u)
+	}
+	c.emitThread(threadID)
+	return nil
+}
+
 // searchPeople finds people on Messenger by name (not only the ones you've chatted with), who
 // can be messaged.
 func (c *Core) searchPeople(ctx context.Context, query string) ([]apiParticipant, error) {
