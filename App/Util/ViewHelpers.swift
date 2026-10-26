@@ -70,11 +70,12 @@ extension CABasicAnimation {
 extension NSPopover {
     /// Shows the controller in a popover that closes when you click elsewhere.
     @discardableResult
-    static func show(_ controller: NSViewController, from anchor: NSView, edge: NSRectEdge = .maxY) -> NSPopover {
+    static func show(_ controller: NSViewController, from anchor: NSView, rect: NSRect? = nil,
+                     edge: NSRectEdge = .maxY) -> NSPopover {
         let popover = NSPopover()
         popover.behavior = .transient
         popover.contentViewController = controller
-        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: edge)
+        popover.show(relativeTo: rect ?? anchor.bounds, of: anchor, preferredEdge: edge)
         return popover
     }
 }

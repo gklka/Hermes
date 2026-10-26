@@ -148,7 +148,11 @@ extension ChatViewController: MessageCellDelegate {
     /// Double-clicking a message offers the tapbacks.
     func messageCellDidDoubleClick(_ cell: MessageCellView, message: ChatMessage, bubble: NSView) {
         let picker = TapbackPicker(choices: Self.reactionChoices, current: myReaction(to: message))
-        let popover = NSPopover.show(picker, from: bubble)
+        // Anchor to the table view, not the bubble: a chat update (typing indicator, a new
+        // message) reloads the table and recreates cells, and AppKit dismisses a popover whose
+        // anchor view has left the window. The table view stays put, so the popover survives.
+        let rect = tableView.convert(bubble.bounds, from: bubble)
+        let popover = NSPopover.show(picker, from: tableView, rect: rect)
         picker.onPick = { [weak self, weak popover] emoji in
             popover?.close()
             self?.toggleReaction(emoji, on: message)
