@@ -159,11 +159,11 @@ final class TapbackPicker: NSViewController {
         stack.spacing = 2
         stack.edgeInsets = NSEdgeInsets(top: 4, left: 6, bottom: 4, right: 6)
         for emoji in choices {
-            let button = NSButton(title: emoji, target: self, action: #selector(picked(_:)))
+            let button = CircularButton(title: emoji, target: self, action: #selector(picked(_:)))
             button.isBordered = false
             button.font = .systemFont(ofSize: 22)
             button.wantsLayer = true
-            button.layer?.cornerRadius = 15
+            button.layer?.cornerRadius = 17
             if emoji == current {
                 button.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.3).cgColor
             }
@@ -177,4 +177,14 @@ final class TapbackPicker: NSViewController {
     @objc private func picked(_ sender: NSButton) {
         onPick?(sender.title)
     }
+}
+
+/// A round button whose keyboard focus ring is a circle, matching its shape (the default ring
+/// is a rounded rectangle around the bounds).
+private final class CircularButton: NSButton {
+    override func drawFocusRingMask() {
+        NSBezierPath(ovalIn: bounds).fill()
+    }
+
+    override var focusRingMaskBounds: NSRect { bounds }
 }
