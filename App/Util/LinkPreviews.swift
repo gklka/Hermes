@@ -194,7 +194,9 @@ final class LinkPreviews {
     static func source(text: String, attachments: [Attachment]) -> Source? {
         let range = NSRange(text.startIndex..., in: text)
         let textURL = detector?.firstMatch(in: text, range: range)?.url.flatMap { isWeb($0) ? $0 : nil }
-        if let textURL, !isFacebook(textURL) {
+        // A Maps link falls through: it carries a location attachment with its own map card, so
+        // fetching a web preview too would show the same place twice.
+        if let textURL, !isFacebook(textURL), !isMaps(textURL) {
             return .web(textURL)
         }
         guard let attachment = attachments.first(where: { $0.kind == .link }) else { return nil }
