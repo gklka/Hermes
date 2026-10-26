@@ -194,9 +194,7 @@ final class LinkPreviews {
     static func source(text: String, attachments: [Attachment]) -> Source? {
         let range = NSRange(text.startIndex..., in: text)
         let textURL = detector?.firstMatch(in: text, range: range)?.url.flatMap { isWeb($0) ? $0 : nil }
-        // A Maps link falls through: it carries a location attachment with its own map card, so
-        // fetching a web preview too would show the same place twice.
-        if let textURL, !isFacebook(textURL), !isMaps(textURL) {
+        if let textURL, !isFacebook(textURL) {
             return .web(textURL)
         }
         guard let attachment = attachments.first(where: { $0.kind == .link }) else { return nil }
@@ -231,6 +229,17 @@ final class LinkPreviews {
     private static func isMaps(_ url: URL) -> Bool {
         let host = url.host()?.lowercased() ?? ""
         return host.contains("maps.") || host.hasSuffix("goo.gl") || url.path.contains("/maps")
+    }
+
+    /// True when the preview already shows the place a location attachment would: it links to
+    /// Maps. The location card is then redundant (and, for a custom map, just an empty pin), so
+    /// the richer link preview stands in for it.
+    static func coversLocation(_ source: Source?) -> Bool {
+        switch source {
+        case .web(let url): return isMaps(url)
+        case .card(let card): return card.url.map(isMaps) ?? false
+        case nil: return false
+        }
     }
 
     /// True when the message's text is just a link (then only the preview is shown).

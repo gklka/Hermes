@@ -287,7 +287,8 @@ final class MessageCellView: NSTableCellView {
 
         // A web link gets Apple's rich preview, which replaces Messenger's own link card.
         let preview = message.isUnsent ? nil : LinkPreviews.source(text: message.text, attachments: message.attachments)
-        configureAttachments(message, layout: layout, hidingLinks: preview != nil)
+        configureAttachments(message, layout: layout, hidingLinks: preview != nil,
+                             hidingLocation: LinkPreviews.coversLocation(preview))
         let textColor = configureBubble(message, layout: layout, preview: preview)
 
         let emojis = message.reactions.map(\.emoji)
@@ -350,8 +351,10 @@ final class MessageCellView: NSTableCellView {
 
     /// The attachment views. Kept when unchanged: rebuilding them reloads their pictures, which
     /// blinks on every refresh (e.g. while syncing after login).
-    private func configureAttachments(_ message: ChatMessage, layout: Layout, hidingLinks: Bool) {
-        let shown = message.isUnsent ? [] : message.attachments.filter { !(hidingLinks && $0.kind == .link) }
+    private func configureAttachments(_ message: ChatMessage, layout: Layout, hidingLinks: Bool, hidingLocation: Bool) {
+        let shown = message.isUnsent ? [] : message.attachments.filter {
+            !(hidingLinks && $0.kind == .link) && !(hidingLocation && $0.kind == .location)
+        }
         let key = AttachmentsKey(messageID: message.id, attachments: shown, maxWidth: min(layout.maxWidth, 280))
         if key != shownAttachments {
             shownAttachments = key
