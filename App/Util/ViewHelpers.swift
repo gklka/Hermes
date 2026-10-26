@@ -9,6 +9,10 @@ extension NSButton {
         button.controlSize = .large
         button.keyEquivalent = "\u{1b}"
         button.toolTip = "Close"
+        // Keep its round intrinsic size: a long title next to it must not squish it into an oval.
+        button.setContentCompressionResistancePriority(.required, for: .horizontal)
+        button.setContentCompressionResistancePriority(.required, for: .vertical)
+        button.setContentHuggingPriority(.required, for: .horizontal)
         return button
     }
 }
