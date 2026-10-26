@@ -748,6 +748,8 @@ final class MessageCellView: NSTableCellView {
             guard isMessageSelected != oldValue else { return }
             selectedAt = ProcessInfo.processInfo.systemUptime
             setDarkened(isMessageSelected)
+            // Selected: the text becomes selectable (a click then selects text, not the message).
+            textView.allowsTextSelection = isMessageSelected
         }
     }
 
