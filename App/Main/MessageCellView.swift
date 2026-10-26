@@ -44,6 +44,8 @@ final class MessageCellView: NSTableCellView {
     /// The bubble with its sender name, attachments, link preview and "Edited".
     private let column = NSStackView()
     private let senderLabel = NSTextField(labelWithString: "")
+    /// A small "📌 Pinned" caption above a pinned message.
+    private let pinnedRow = NSStackView()
     private let replyView = ReplyQuoteView()
     private let attachmentsStack = NSStackView()
     private let bubble = BubbleView()
@@ -121,6 +123,8 @@ final class MessageCellView: NSTableCellView {
         attachmentsStack.spacing = 3
 
         setUpBubble()
+        setUpPinnedRow()
+        column.addArrangedSubview(pinnedRow)
         column.addArrangedSubview(senderLabel)
         column.addArrangedSubview(attachmentsStack)
         column.addArrangedSubview(bubble)
@@ -170,6 +174,26 @@ final class MessageCellView: NSTableCellView {
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    /// The "Pinned" caption shown above a pinned message.
+    private func setUpPinnedRow() {
+        let icon = NSImageView(image: NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned") ?? NSImage())
+        icon.symbolConfiguration = .init(pointSize: 9, weight: .semibold)
+        icon.contentTintColor = .secondaryLabelColor
+        let label = NSTextField(labelWithString: "Pinned")
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        label.lineBreakMode = .byClipping
+        // Keep the caption at its full width: a narrow message mustn't truncate it on a reload.
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        icon.setContentCompressionResistancePriority(.required, for: .horizontal)
+        pinnedRow.orientation = .horizontal
+        pinnedRow.spacing = 3
+        pinnedRow.addArrangedSubview(icon)
+        pinnedRow.addArrangedSubview(label)
+        pinnedRow.setHuggingPriority(.required, for: .horizontal)
+        pinnedRow.isHidden = true
+    }
 
     /// The text (or the typing dots) in the bubble.
     private func setUpBubble() {
@@ -272,6 +296,7 @@ final class MessageCellView: NSTableCellView {
         NSLayoutConstraint.deactivate(incomingConstraints + outgoingConstraints)
         NSLayoutConstraint.activate(outgoing ? outgoingConstraints : incomingConstraints)
         column.alignment = outgoing ? .trailing : .leading
+        pinnedRow.isHidden = !(message.isPinned ?? false)
         configureReply(message, layout: layout, selfID: store.account?.id)
 
         // Sender name and picture (group chats; the picture by the last message of a run).
@@ -581,7 +606,7 @@ final class MessageCellView: NSTableCellView {
         widthConstraint.constant = layout.maxWidth
         topConstraint.constant = 8
         for view in [replyView, replyConnector, attachmentsStack, linkCard, reactionsBadge,
-                     editedRow, historyStack, failedIcon] as [NSView] {
+                     editedRow, historyStack, failedIcon, pinnedRow] as [NSView] {
             view.isHidden = true
         }
         // In a group, show who's typing (their name, and the first one's picture).

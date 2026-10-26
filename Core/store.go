@@ -183,7 +183,81 @@ const (
 	kvPollCard    = "pollcard:"    // poll → the message showing it (where it was created)
 	kvPollVoters  = "pollvoters:"  // poll → the newest card its voters were taken from (ms)
 	kvPollQ       = "pollq:"       // poll → its question
+	kvPinned      = "pinned:"      // chat → its pinned messages (JSON, newest pin first)
 )
+
+// pinnedEntry is one pinned message: its ID and when it was pinned (ms).
+type pinnedEntry struct {
+	ID string `json:"id"`
+	TS int64  `json:"ts"`
+}
+
+// pinnedEntries returns a chat's pinned messages, newest pin first.
+func (s *Store) pinnedEntries(threadID string) []pinnedEntry {
+	raw := s.Get(kvPinned + threadID)
+	if raw == "" {
+		return nil
+	}
+	var entries []pinnedEntry
+	if json.Unmarshal([]byte(raw), &entries) != nil {
+		return nil
+	}
+	return entries
+}
+
+// PinnedMessageIDs returns a chat's pinned message IDs, newest pin first.
+func (s *Store) PinnedMessageIDs(threadID string) []string {
+	entries := s.pinnedEntries(threadID)
+	ids := make([]string, len(entries))
+	for i, e := range entries {
+		ids[i] = e.ID
+	}
+	return ids
+}
+
+func (s *Store) savePinned(threadID string, entries []pinnedEntry) {
+	if len(entries) == 0 {
+		s.Delete(kvPinned + threadID)
+		return
+	}
+	data, _ := json.Marshal(entries)
+	s.Set(kvPinned+threadID, string(data))
+}
+
+// SetPinned adds or removes one pinned message, keeping the list sorted newest pin first.
+func (s *Store) SetPinned(threadID, messageID string, pinned bool, ts int64) {
+	entries := s.pinnedEntries(threadID)
+	kept := entries[:0:0]
+	for _, e := range entries {
+		if e.ID != messageID {
+			kept = append(kept, e)
+		}
+	}
+	if pinned {
+		if ts == 0 {
+			ts = time.Now().UnixMilli()
+		}
+		kept = append(kept, pinnedEntry{ID: messageID, TS: ts})
+	}
+	slices.SortStableFunc(kept, func(a, b pinnedEntry) int {
+		switch {
+		case a.TS > b.TS:
+			return -1
+		case a.TS < b.TS:
+			return 1
+		default:
+			return 0
+		}
+	})
+	s.savePinned(threadID, kept)
+}
+
+// ClearPinned removes all of a chat's pinned messages, returning the IDs that were pinned.
+func (s *Store) ClearPinned(threadID string) []string {
+	ids := s.PinnedMessageIDs(threadID)
+	s.Delete(kvPinned + threadID)
+	return ids
+}
 
 func (s *Store) Get(key string) string {
 	var value string
@@ -888,6 +962,7 @@ func (s *Store) Conversation(t *threadRow, selfID string) apiConversation {
 		conv.BubbleColors = strings.Split(colors, ",")
 	}
 	conv.QuickEmoji = s.Get(kvEmoji + t.ID)
+	conv.PinnedMessageIDs = s.PinnedMessageIDs(t.ID)
 	var others []participantRow
 	for _, p := range participants {
 		conv.Participants = append(conv.Participants, apiParticipant{
@@ -951,9 +1026,18 @@ func (s *Store) APIMessages(rows []*messageRow, selfID string) []apiMessage {
 	}
 	reactions := s.Reactions(ids)
 	cardMessages := s.pollCardMessages() // message ID → the poll whose card it is
+	pinned := map[string]map[string]bool{} // thread → its pinned message IDs (cached per thread)
 	out := make([]apiMessage, len(rows))
 	for i, m := range rows {
 		out[i] = m.toAPI(selfID, reactions[m.ID])
+		if pinned[m.ThreadID] == nil {
+			set := map[string]bool{}
+			for _, id := range s.PinnedMessageIDs(m.ThreadID) {
+				set[id] = true
+			}
+			pinned[m.ThreadID] = set
+		}
+		out[i].IsPinned = pinned[m.ThreadID][m.ID]
 		// A shared place shows as a map that opens in Maps, not a web link or image.
 		classifyLocationAttachments(out[i].Attachments)
 		// A poll's card shows its votes as synced (Messenger's card only has the options it had

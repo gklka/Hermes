@@ -92,6 +92,7 @@ func (c *Core) handleTable(tbl *table.LSTable) {
 	c.handlePollTables(tbl, cs)
 	c.handleOrphanPollCards(tbl, cs)
 	c.handlePollReferences(tbl, cs)
+	c.handlePinTables(tbl, cs)
 	c.handleReadTables(tbl, cs)
 
 	for _, t := range tbl.LSUpdateTypingIndicator {
@@ -248,6 +249,24 @@ func (c *Core) handleMessageTables(tbl *table.LSTable, cs *changeSet) {
 	for _, r := range tbl.LSDeleteReaction {
 		c.store.SetReaction(r.MessageId, id64(r.ActorId), "")
 		cs.message(r.MessageId)
+	}
+}
+
+// handlePinTables stores pinned-message changes synced from Messenger (pinned here or on
+// another device). A cleared or newly pinned message re-emits so its pin badge updates.
+func (c *Core) handlePinTables(tbl *table.LSTable, cs *changeSet) {
+	for _, cl := range tbl.LSClearPinnedMessages {
+		threadID := c.threadID(cl.ThreadKey)
+		for _, id := range c.store.ClearPinned(threadID) {
+			cs.message(id)
+		}
+		cs.thread(threadID)
+	}
+	for _, sp := range tbl.LSSetPinnedMessage {
+		threadID := c.threadID(sp.ThreadKey)
+		c.store.SetPinned(threadID, sp.MessageId, true, sp.PinnedTimestampMs)
+		cs.message(sp.MessageId)
+		cs.thread(threadID)
 	}
 }
 

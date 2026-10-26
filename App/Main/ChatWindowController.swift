@@ -118,6 +118,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         header.subtitleLabel.isHidden = subtitle.isEmpty
         header.isSubtitleClickable = conversation?.isGroup == true
         infoToolbarItem?.isHidden = conversation?.isGroup != true
+        pinnedToolbarItem?.isHidden = !hasPinnedMessages
         if let conversation {
             header.avatar.configure(conversation, selfID: ChatStore.shared.account?.id)
         }
@@ -128,7 +129,9 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     private let header = ChatHeaderView()
     private static let headerItem = NSToolbarItem.Identifier("chatHeader")
     private static let infoItem = NSToolbarItem.Identifier("info")
+    private static let pinnedItemID = NSToolbarItem.Identifier("pinned")
     private weak var infoToolbarItem: NSToolbarItem?
+    private weak var pinnedToolbarItem: NSToolbarItem?
 
     /// The info button, or the "3 people" subtitle: the group chat's members.
     @objc func showMembers(_ sender: Any?) {
@@ -136,8 +139,17 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         contentViewController?.presentAsSheet(MembersViewController(threadID: threadID))
     }
 
+    private var hasPinnedMessages: Bool { ChatStore.shared.hasPinnedMessages(in: threadID) }
+
+    /// The pin button: the chat's pinned messages, as a sheet.
+    @objc func showPinnedMessages(_ sender: Any?) {
+        let panel = PinnedMessagesViewController(threadID: threadID)
+        panel.onReveal = { [weak self] messageID in self?.chat.reveal(messageID: messageID, stored: true) }
+        contentViewController?.presentAsSheet(panel)
+    }
+
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.headerItem, .flexibleSpace, CallManager.audioCallItem, CallManager.videoCallItem, Self.infoItem]
+        [Self.headerItem, .flexibleSpace, Self.pinnedItemID, CallManager.audioCallItem, CallManager.videoCallItem, Self.infoItem]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -155,6 +167,17 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             item.action = #selector(showMembers(_:))
             item.isHidden = conversation?.isGroup != true
             infoToolbarItem = item
+            return item
+        }
+        if itemIdentifier == Self.pinnedItemID {
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned Messages")
+            item.label = "Pinned"
+            item.toolTip = "Pinned Messages"
+            item.target = self
+            item.action = #selector(showPinnedMessages(_:))
+            item.isHidden = !hasPinnedMessages
+            pinnedToolbarItem = item
             return item
         }
         if itemIdentifier == CallManager.audioCallItem || itemIdentifier == CallManager.videoCallItem {

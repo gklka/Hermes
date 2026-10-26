@@ -44,6 +44,8 @@ struct Conversation: Codable, Identifiable, Hashable {
     var bubbleColors: [String]?
     /// The chat's custom quick reaction emoji (the like button). Nil for the default like.
     var quickEmoji: String?
+    /// Pinned messages' IDs, newest pin first (synced from Messenger).
+    var pinnedMessageIDs: [String]?
 
     var lastActivityDate: Date { Date(timeIntervalSince1970: TimeInterval(lastActivity) / 1000) }
 
@@ -201,6 +203,8 @@ struct ChatMessage: Codable, Identifiable, Hashable {
     var status: Status
     var isUnsent: Bool
     var isEdited: Bool
+    /// Pinned in this chat (synced from Messenger).
+    var isPinned: Bool?
     /// Earlier versions of an edited message (oldest first), as far as the app saw them.
     var previousTexts: [String]?
     /// Set for messages created locally before the server echoed them back.

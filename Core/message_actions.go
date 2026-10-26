@@ -191,3 +191,62 @@ func (c *Core) editMessage(ctx context.Context, threadID, messageID, text string
 	c.flush(cs)
 	return nil
 }
+
+// MARK: - Pinning messages
+
+// pinMessageTaskLabel is Messenger's LightSpeed task label for pinning/unpinning a message.
+// The library doesn't define it and it isn't publicly documented; capture it from a live web
+// session (DevTools MQTT, or the WebNetLog) and set it here to sync pins to your other devices.
+// While empty, pins are stored and shown locally and still sync IN from other devices, but a
+// pin made here isn't pushed to Messenger.
+const pinMessageTaskLabel = ""
+
+// pinMessageTask pins or unpins a message. Unpinning sends the same task with is_pinned false.
+type pinMessageTask struct {
+	ThreadKey   int64  `json:"thread_key"`
+	MessageID   string `json:"message_id"`
+	TimestampMs int64  `json:"timestamp_ms"`
+	ActorID     int64  `json:"actor_id"`
+	Pinned      bool   `json:"is_pinned"`
+}
+
+func (t *pinMessageTask) GetLabel() string { return pinMessageTaskLabel }
+
+func (t *pinMessageTask) Create() (any, string) { return t, "pin_message_" + t.MessageID }
+
+// setPinned pins or unpins a message. It's stored and shown at once; when the task label is
+// known, Messenger also syncs the change to your other devices.
+func (c *Core) setPinned(ctx context.Context, threadID, messageID string, pinned bool) error {
+	if _, err := c.changeTarget(threadID, messageID); err != nil {
+		return err
+	}
+	// Optimistic: store and show the pin now. An echo from the server reconciles it.
+	c.store.SetPinned(threadID, messageID, pinned, 0)
+	cs := newChangeSet()
+	cs.message(messageID)
+	cs.thread(threadID)
+	c.flush(cs)
+
+	if pinMessageTaskLabel == "" {
+		c.log.Info().Str("message", messageID).Bool("pinned", pinned).
+			Msg("Pin stored locally; outbound sync pending a verified task label")
+		return nil
+	}
+	cli, err := c.requireClient()
+	if err != nil {
+		return err
+	}
+	actor, _ := strconv.ParseInt(c.selfID(), 10, 64)
+	resp, err := cli.ExecuteTasks(ctx, &pinMessageTask{
+		ThreadKey:   c.fbThreadKey(threadID),
+		MessageID:   messageID,
+		TimestampMs: time.Now().UnixMilli(),
+		ActorID:     actor,
+		Pinned:      pinned,
+	})
+	if err != nil {
+		return err
+	}
+	c.handleTable(resp)
+	return nil
+}

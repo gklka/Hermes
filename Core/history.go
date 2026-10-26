@@ -40,6 +40,17 @@ func (c *Core) messagesPage(rows []*messageRow, hasMore bool) apiMessagesPage {
 	return apiMessagesPage{Messages: c.store.APIMessages(rows, c.selfID()), HasMore: hasMore}
 }
 
+// pinnedMessagesList returns a chat's pinned messages, newest pin first.
+func (c *Core) pinnedMessagesList(threadID string) apiMessagesPage {
+	var rows []*messageRow
+	for _, id := range c.store.PinnedMessageIDs(threadID) {
+		if m := c.store.GetMessage(id); m != nil {
+			rows = append(rows, m)
+		}
+	}
+	return c.messagesPage(rows, false)
+}
+
 // canFetchOlder tells whether Messenger has history before the oldest stored message
 // (end-to-end encrypted chats have none on the server, except an encrypted chat's
 // unencrypted past: see historyThreadKey).

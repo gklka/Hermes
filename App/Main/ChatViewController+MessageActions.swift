@@ -36,6 +36,7 @@ extension ChatViewController: MessageCellDelegate {
         menu.addItem(.separator())
 
         add("Reply", #selector(replyFromMenu(_:)))
+        add(message.isPinned == true ? "Unpin Message" : "Pin Message", #selector(togglePinFromMenu(_:)))
         if !message.text.isEmpty {
             add("Copy", #selector(copyFromMenu(_:)))
         }
@@ -65,6 +66,11 @@ extension ChatViewController: MessageCellDelegate {
         guard let message = sender.representedObject as? ChatMessage else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(message.text, forType: .string)
+    }
+
+    @objc private func togglePinFromMenu(_ sender: NSMenuItem) {
+        guard let message = sender.representedObject as? ChatMessage else { return }
+        store.setPinned(message, pinned: message.isPinned != true)
     }
 
     private static func isPicture(_ attachment: Attachment) -> Bool {

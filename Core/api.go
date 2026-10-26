@@ -33,6 +33,8 @@ type apiConversation struct {
 	IsMarketplace   bool             `json:"isMarketplace"`
 	RequestList     string           `json:"requestList,omitempty"` // a message request: "mayKnow" or "spam"
 	Participants    []apiParticipant `json:"participants"`
+	// Pinned messages' IDs, newest pin first. Synced from Messenger (LSSetPinnedMessage).
+	PinnedMessageIDs []string `json:"pinnedMessageIDs,omitempty"`
 	// The chat's custom Messenger theme for outgoing bubbles: one CSS color, or several for a
 	// gradient (top to bottom of the visible chat). Empty for the default theme.
 	BubbleColors []string `json:"bubbleColors,omitempty"`
@@ -168,6 +170,7 @@ type apiMessage struct {
 	Status      string          `json:"status"`
 	IsUnsent    bool            `json:"isUnsent"`
 	IsEdited    bool            `json:"isEdited"`
+	IsPinned    bool            `json:"isPinned,omitempty"`
 	PendingID   string          `json:"pendingID,omitempty"`
 	// Earlier versions of an edited message (oldest first), as far as this app saw them.
 	PreviousTexts []string `json:"previousTexts,omitempty"`

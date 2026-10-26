@@ -40,7 +40,7 @@ func (c *Core) HandleRequest(data []byte) {
 		emitResponse(req.ID, result, err)
 	}
 	switch req.Method {
-	case "messages.send", "messages.sendMedia", "messages.react", "messages.unsend", "messages.edit", "polls.create", "polls.vote":
+	case "messages.send", "messages.sendMedia", "messages.react", "messages.unsend", "messages.edit", "messages.setPinned", "polls.create", "polls.vote":
 		c.sendQueue <- run
 	default:
 		go run()
@@ -61,6 +61,7 @@ type requestParams struct {
 	Path         string             `json:"path"`
 	IsTyping     bool               `json:"isTyping"`
 	Enabled      bool               `json:"enabled"`
+	Pinned       bool               `json:"pinned"`
 	Before       int64              `json:"before"`
 	NoServer     bool               `json:"noServer"`
 	Limit        int                `json:"limit"`
@@ -182,6 +183,8 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return c.messagesPage(c.store.ListMessages(p.ThreadID, p.Before, p.Limit), false), nil
 	case "messages.search":
 		return c.searchMessages(p.ThreadID, p.Text, p.Limit), nil
+	case "messages.pinned":
+		return c.pinnedMessagesList(p.ThreadID), nil
 	case "messages.fetchOlder":
 		return c.fetchOlder(p.ThreadID), nil
 	case "messages.send":
@@ -194,6 +197,8 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return nil, c.unsend(ctx, p.ThreadID, p.MessageID)
 	case "messages.edit":
 		return nil, c.editMessage(ctx, p.ThreadID, p.MessageID, p.Text)
+	case "messages.setPinned":
+		return nil, c.setPinned(ctx, p.ThreadID, p.MessageID, p.Pinned)
 	case "polls.create":
 		// `text` is the question.
 		return nil, c.createPoll(ctx, p.ThreadID, p.Text, p.Options)

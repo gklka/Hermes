@@ -416,18 +416,37 @@ final class ChatStore {
         post("messages.unsend", MessageParams(message))
     }
 
+    /// Pins or unpins a message. Shown at once; syncs to Messenger.
+    func setPinned(_ message: ChatMessage, pinned: Bool) {
+        post("messages.setPinned", MessageParams(message, pinned: pinned))
+    }
+
+    /// The chat's pinned messages, newest pin first, fetched from the database (so old pins show
+    /// even when their message isn't loaded).
+    func pinnedMessages(in threadID: String) async -> [ChatMessage] {
+        let page = try? await core.call("messages.pinned", ThreadParams(threadID: threadID), as: MessagesPage.self)
+        return page?.messages ?? []
+    }
+
+    /// Whether the chat has any pinned messages (from the conversation, synchronously).
+    func hasPinnedMessages(in threadID: String) -> Bool {
+        !(conversation(threadID)?.pinnedMessageIDs ?? []).isEmpty
+    }
+
     /// A request about one message.
     private struct MessageParams: Encodable {
         let threadID: String
         let messageID: String
         var emoji: String?
         var text: String?
+        var pinned: Bool?
 
-        init(_ message: ChatMessage, emoji: String? = nil, text: String? = nil) {
+        init(_ message: ChatMessage, emoji: String? = nil, text: String? = nil, pinned: Bool? = nil) {
             threadID = message.threadID
             messageID = message.id
             self.emoji = emoji
             self.text = text
+            self.pinned = pinned
         }
     }
 

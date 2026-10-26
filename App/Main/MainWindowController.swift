@@ -90,6 +90,20 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         window.subtitle = Self.subtitle(for: conversation)
         infoToolbarItem?.isHidden = conversation?.isGroup != true
         callToolbarItems.forEach { $0.isHidden = conversation == nil }
+        pinnedToolbarItem?.isHidden = !hasPinnedMessages
+    }
+
+    /// Whether the open chat has pinned messages (so the toolbar shows the pin button).
+    private var hasPinnedMessages: Bool {
+        split.selectedConversation.map { ChatStore.shared.hasPinnedMessages(in: $0.id) } ?? false
+    }
+
+    /// The pin button: the chat's pinned messages, as a sheet.
+    @objc func showPinnedMessages(_ sender: Any?) {
+        guard let conversation = split.selectedConversation else { return }
+        let panel = PinnedMessagesViewController(threadID: conversation.id)
+        panel.onReveal = { [weak self] messageID in self?.split.revealMessage(messageID) }
+        split.presentAsSheet(panel)
     }
 
     @objc func startAudioCall(_ sender: Any?) {
@@ -230,14 +244,16 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
     private static let newMessageItem = NSToolbarItem.Identifier("newMessage")
     private static let filterItemID = NSToolbarItem.Identifier("filter")
     private static let infoItem = NSToolbarItem.Identifier("info")
+    private static let pinnedItemID = NSToolbarItem.Identifier("pinned")
     private weak var filterItem: NSMenuToolbarItem?
     private weak var newMessageToolbarItem: NSToolbarItem?
     private weak var infoToolbarItem: NSToolbarItem?
+    private weak var pinnedToolbarItem: NSToolbarItem?
     private var callToolbarItems: [NSToolbarItem] = []
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.toggleSidebar, .flexibleSpace, Self.filterItemID, Self.newMessageItem, .sidebarTrackingSeparator, .flexibleSpace,
-         CallManager.audioCallItem, CallManager.videoCallItem, Self.infoItem]
+         Self.pinnedItemID, CallManager.audioCallItem, CallManager.videoCallItem, Self.infoItem]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -283,6 +299,16 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
             item.isHidden = split.selectedConversation?.isGroup != true
             infoToolbarItem = item
             return item
+        case Self.pinnedItemID:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned Messages")
+            item.label = "Pinned"
+            item.toolTip = "Pinned Messages"
+            item.target = self
+            item.action = #selector(showPinnedMessages(_:))
+            item.isHidden = !hasPinnedMessages
+            pinnedToolbarItem = item
+            return item
         case CallManager.audioCallItem, CallManager.videoCallItem:
             let item = CallManager.toolbarItem(itemIdentifier, target: self)
             item.isHidden = split.selectedConversation == nil
@@ -308,6 +334,11 @@ final class MainSplitViewController: NSSplitViewController {
 
     var selectedConversation: Conversation? {
         chat.threadID.flatMap { ChatStore.shared.conversation($0) }
+    }
+
+    /// Scrolls the open chat to a message and selects it (from the pinned-messages panel).
+    func revealMessage(_ messageID: String) {
+        chat.reveal(messageID: messageID, stored: true)
     }
 
     private static let sidebarWidthKey = "SidebarWidth"
