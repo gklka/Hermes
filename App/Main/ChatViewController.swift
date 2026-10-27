@@ -109,8 +109,13 @@ final class ChatViewController: NSViewController {
 
     // MARK: State of the message actions (+MessageActions)
 
-    /// The clicked message, shown dimmed until a click lands anywhere else.
-    var selectedMessageID: String?
+    /// The selected messages, shown dimmed until a click lands anywhere else. One by a plain
+    /// click; several by Shift-click (a range) or Command-click (toggling one).
+    var selectedMessageIDs: Set<String> = []
+    /// Where a Shift-click range starts (the last plainly clicked or toggled message).
+    var selectionAnchor: String?
+    /// The sole selected message, for the actions that only make sense for one (edit, reply).
+    var selectedMessageID: String? { selectedMessageIDs.count == 1 ? selectedMessageIDs.first : nil }
     var deselectMonitor: Any?
     /// Edited messages whose earlier versions are shown.
     var expandedEdits: Set<String> = []
@@ -830,7 +835,9 @@ extension ChatViewController: NSTableViewDataSource, NSTableViewDelegate {
             let cell = (sizing ? nil : transitioningCell(for: row)) ?? reuse("Message", sizing: sizing) { MessageCellView() }
             cell.delegate = self
             cell.configure(message, layout: layout, store: store)
-            cell.isMessageSelected = !sizing && message.id == selectedMessageID
+            let selected = !sizing && selectedMessageIDs.contains(message.id)
+            cell.isMessageSelected = selected
+            cell.setTextSelectable(selected && selectedMessageIDs.count == 1)
             return cell
         case .readers(let readers):
             let cell = reuse("Readers", sizing: sizing) { ReadersCellView() }

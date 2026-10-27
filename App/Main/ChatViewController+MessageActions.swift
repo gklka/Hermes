@@ -14,6 +14,18 @@ extension ChatViewController: MessageCellDelegate {
     // MARK: - The message's menu
 
     func messageCell(_ cell: MessageCellView, menuFor message: ChatMessage) -> NSMenu? {
+        // Right-clicking a message outside a multi-selection collapses to just that one.
+        if selectedMessageIDs.count > 1, !selectedMessageIDs.contains(message.id) {
+            selectMessage(message.id)
+        }
+        let selected = selectedMessages()
+        if selected.count > 1, selectedMessageIDs.contains(message.id) {
+            return multiMessageMenu(for: selected)
+        }
+        return singleMessageMenu(for: message, cell: cell)
+    }
+
+    private func singleMessageMenu(for message: ChatMessage, cell: MessageCellView) -> NSMenu? {
         guard !message.isUnsent, message.status != .pending else { return nil }
         let menu = NSMenu()
         func add(_ title: String, _ action: Selector) {
@@ -57,6 +69,64 @@ extension ChatViewController: MessageCellDelegate {
         return menu
     }
 
+    /// The menu shared by several selected messages: the actions that make sense for a group.
+    private func multiMessageMenu(for messages: [ChatMessage]) -> NSMenu {
+        let menu = NSMenu()
+        func add(_ title: String, _ action: Selector) {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+            item.target = self
+            item.representedObject = messages
+        }
+        if messages.contains(where: { !$0.text.isEmpty }) {
+            add("Copy", #selector(copySelectedFromMenu(_:)))
+        }
+        let pictures = messages.flatMap { $0.attachments.filter { Self.isPicture($0) } }
+        if !pictures.isEmpty {
+            add(pictures.count == 1 ? "Copy Image" : "Copy Images", #selector(copyImagesSelectedFromMenu(_:)))
+        }
+        if messages.contains(where: { message in message.attachments.contains { $0.kind != .link } }) {
+            add("Save to Downloads", #selector(saveSelectedToDownloadsFromMenu(_:)))
+        }
+        let anyUnpinned = messages.contains { $0.isPinned != true }
+        add(anyUnpinned ? "Pin Messages" : "Unpin Messages", #selector(togglePinSelectedFromMenu(_:)))
+        if messages.allSatisfy(\.isFromMe) {
+            menu.addItem(.separator())
+            add("Unsend", #selector(unsendSelectedFromMenu(_:)))
+        }
+        return menu
+    }
+
+    @objc private func copySelectedFromMenu(_ sender: NSMenuItem) {
+        guard let messages = sender.representedObject as? [ChatMessage] else { return }
+        let text = messages.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    @objc private func copyImagesSelectedFromMenu(_ sender: NSMenuItem) {
+        guard let messages = sender.representedObject as? [ChatMessage] else { return }
+        copyImages(of: messages)
+    }
+
+    @objc private func saveSelectedToDownloadsFromMenu(_ sender: NSMenuItem) {
+        guard let messages = sender.representedObject as? [ChatMessage] else { return }
+        saveToDownloads(messages)
+    }
+
+    @objc private func togglePinSelectedFromMenu(_ sender: NSMenuItem) {
+        guard let messages = sender.representedObject as? [ChatMessage] else { return }
+        // Pin them all if any is unpinned; otherwise unpin them all.
+        let pin = messages.contains { $0.isPinned != true }
+        for message in messages { store.setPinned(message, pinned: pin) }
+        selectMessage(nil)
+    }
+
+    @objc private func unsendSelectedFromMenu(_ sender: NSMenuItem) {
+        guard let messages = sender.representedObject as? [ChatMessage] else { return }
+        for message in messages where message.isFromMe { store.unsend(message) }
+        selectMessage(nil)
+    }
+
     @objc private func replyFromMenu(_ sender: NSMenuItem) {
         guard let message = sender.representedObject as? ChatMessage else { return }
         startReply(to: message)
@@ -80,12 +150,18 @@ extension ChatViewController: MessageCellDelegate {
     /// Copies the message's pictures (full size, downloaded if needed).
     @objc private func copyImagesFromMenu(_ sender: NSMenuItem) {
         guard let message = sender.representedObject as? ChatMessage else { return }
+        copyImages(of: [message])
+    }
+
+    private func copyImages(of messages: [ChatMessage]) {
         Task {
             do {
                 var images: [NSImage] = []
-                for attachment in message.attachments where Self.isPicture(attachment) {
-                    let url = try await store.localFile(for: attachment, in: message)
-                    if let image = NSImage(contentsOf: url) { images.append(image) }
+                for message in messages {
+                    for attachment in message.attachments where Self.isPicture(attachment) {
+                        let url = try await store.localFile(for: attachment, in: message)
+                        if let image = NSImage(contentsOf: url) { images.append(image) }
+                    }
                 }
                 guard !images.isEmpty else { return }
                 NSPasteboard.general.clearContents()
@@ -99,15 +175,21 @@ extension ChatViewController: MessageCellDelegate {
     /// Saves the message's files (pictures, videos, files) to the Downloads folder, under new
     /// names if taken, and bounces the Downloads stack like a browser download.
     @objc private func saveToDownloadsFromMenu(_ sender: NSMenuItem) {
-        guard let message = sender.representedObject as? ChatMessage,
-              let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else { return }
+        guard let message = sender.representedObject as? ChatMessage else { return }
+        saveToDownloads([message])
+    }
+
+    private func saveToDownloads(_ messages: [ChatMessage]) {
+        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else { return }
         Task {
             do {
-                for attachment in message.attachments where attachment.kind != .link {
-                    let file = try await store.localFile(for: attachment, in: message)
-                    let destination = Self.freeURL(in: downloads, for: Self.downloadName(of: attachment, in: message, file: file))
-                    try FileManager.default.copyItem(at: file, to: destination)
-                    DistributedNotificationCenter.default().post(name: .init("com.apple.DownloadFileFinished"), object: destination.path)
+                for message in messages {
+                    for attachment in message.attachments where attachment.kind != .link {
+                        let file = try await store.localFile(for: attachment, in: message)
+                        let destination = Self.freeURL(in: downloads, for: Self.downloadName(of: attachment, in: message, file: file))
+                        try FileManager.default.copyItem(at: file, to: destination)
+                        DistributedNotificationCenter.default().post(name: .init("com.apple.DownloadFileFinished"), object: destination.path)
+                    }
                 }
             } catch {
                 _ = presentError(error)
@@ -251,14 +333,40 @@ extension ChatViewController: MessageCellDelegate {
 
     // MARK: - Selecting a message
 
-    func messageCellDidClick(_ cell: MessageCellView, message: ChatMessage) {
+    func messageCellDidClick(_ cell: MessageCellView, message: ChatMessage, modifiers: NSEvent.ModifierFlags) {
         guard searchResults == nil else {
             // A found message: back to the chat, at that message.
             endSearch()
             reveal(messageID: message.id, stored: true)
             return
         }
-        selectMessage(message.id)
+        if modifiers.contains(.shift), let anchor = selectionAnchor, anchor != message.id {
+            // Extend the selection to a range, like a list (the anchor stays put).
+            setSelection(Set(messageIDs(from: anchor, to: message.id)), anchor: anchor)
+        } else if modifiers.contains(.command) {
+            // Toggle this one in or out of the selection.
+            var ids = selectedMessageIDs
+            if ids.contains(message.id) { ids.remove(message.id) } else { ids.insert(message.id) }
+            setSelection(ids, anchor: message.id)
+        } else {
+            selectMessage(message.id)
+        }
+    }
+
+    /// The loaded messages' IDs in the range between two of them (inclusive), in chat order.
+    private func messageIDs(from: String, to: String) -> [String] {
+        let order: [String] = rows.compactMap {
+            if case .message(let message, _) = $0 { return message.id }
+            return nil
+        }
+        guard let a = order.firstIndex(of: from), let b = order.firstIndex(of: to) else { return [to] }
+        return Array(order[min(a, b)...max(a, b)])
+    }
+
+    /// The selected messages, in chat order (for the actions a multi-selection offers).
+    func selectedMessages() -> [ChatMessage] {
+        guard let threadID else { return [] }
+        return store.messages(in: threadID).filter { selectedMessageIDs.contains($0.id) }
     }
 
     func messageCell(_ cell: MessageCellView, revealReplyTarget messageID: String) {
@@ -267,20 +375,30 @@ extension ChatViewController: MessageCellDelegate {
         reveal(messageID: messageID, stored: true)
     }
 
-    /// `dismissable` false keeps the highlight until it's cleared in code (clicks don't drop it),
-    /// used to mark the message being edited.
+    /// Selects exactly this message (or clears the selection with nil). `dismissable` false keeps
+    /// the highlight until it's cleared in code (clicks don't drop it), used to mark the message
+    /// being edited.
     func selectMessage(_ id: String?, dismissable: Bool = true) {
-        if id != selectedMessageID {
-            selectedMessageID = id
+        setSelection(id.map { [$0] } ?? [], anchor: id, dismissable: dismissable)
+    }
+
+    /// Sets the selected messages, highlights their on-screen cells, and (for a dismissable
+    /// selection) watches for a click elsewhere to clear it.
+    func setSelection(_ ids: Set<String>, anchor: String?, dismissable: Bool = true) {
+        if ids != selectedMessageIDs {
+            selectedMessageIDs = ids
             for (_, cell) in visibleCells(MessageCellView.self) {
-                cell.isMessageSelected = id != nil && cell.message?.id == id
+                let selected = cell.message.map { ids.contains($0.id) } ?? false
+                cell.isMessageSelected = selected
+                cell.setTextSelectable(selected && ids.count == 1)
             }
         }
+        selectionAnchor = anchor
         if let deselectMonitor {
             NSEvent.removeMonitor(deselectMonitor)
             self.deselectMonitor = nil
         }
-        if id != nil, dismissable {
+        if !ids.isEmpty, dismissable {
             deselectMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
                 self?.deselectUnlessInSelection(event)
                 return event
@@ -288,12 +406,12 @@ extension ChatViewController: MessageCellDelegate {
         }
     }
 
-    /// Any click outside the selected message's bubble deselects it (a click on another bubble
-    /// then selects that one).
+    /// A click on any message's bubble is left to the cell (it selects, extends or toggles);
+    /// a click anywhere else clears the selection.
     private func deselectUnlessInSelection(_ event: NSEvent) {
-        guard let selectedMessageID else { return }
+        guard !selectedMessageIDs.isEmpty else { return }
         if event.window === view.window {
-            for (_, cell) in visibleCells(MessageCellView.self) where cell.message?.id == selectedMessageID {
+            for (_, cell) in visibleCells(MessageCellView.self) {
                 let anchor = cell.anchorView
                 if anchor.bounds.contains(anchor.convert(event.locationInWindow, from: nil)) { return }
             }

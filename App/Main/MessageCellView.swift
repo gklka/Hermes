@@ -6,8 +6,9 @@ protocol MessageCellDelegate: AnyObject {
     func messageCell(_ cell: MessageCellView, open attachment: Attachment, of message: ChatMessage)
     /// "Edited" was clicked: show or hide the earlier versions.
     func messageCellDidToggleEdits(_ message: ChatMessage)
-    /// A message's bubble was clicked: select it.
-    func messageCellDidClick(_ cell: MessageCellView, message: ChatMessage)
+    /// A message's bubble was clicked: select it. `modifiers` carry Shift / Command for
+    /// extending or toggling a multi-message selection.
+    func messageCellDidClick(_ cell: MessageCellView, message: ChatMessage, modifiers: NSEvent.ModifierFlags)
     /// The reply quote above a message was clicked: jump to the quoted message.
     func messageCell(_ cell: MessageCellView, revealReplyTarget messageID: String)
     /// The "not delivered" icon was clicked: offer to resend or delete.
@@ -776,14 +777,19 @@ final class MessageCellView: NSTableCellView {
             guard isMessageSelected != oldValue else { return }
             selectedAt = ProcessInfo.processInfo.systemUptime
             setDarkened(isMessageSelected)
-            // Selected: the text becomes selectable (a click then selects text, not the message).
-            textView.allowsTextSelection = isMessageSelected
         }
+    }
+
+    /// The message's text becomes selectable only when it's the sole selected message (several
+    /// selected messages act as a group, where a click deselects rather than selecting text).
+    func setTextSelectable(_ selectable: Bool) {
+        textView.allowsTextSelection = selectable
     }
 
     @objc private func clicked() {
         guard let message, !message.isUnsent else { return }
-        delegate?.messageCellDidClick(self, message: message)
+        delegate?.messageCellDidClick(self, message: message,
+                                      modifiers: NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask))
     }
 
     /// Double-clicking reacts, unless the message was already selected before the double-click
