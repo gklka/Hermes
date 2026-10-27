@@ -411,9 +411,8 @@ extension ChatViewController: MessageCellDelegate {
     private func deselectUnlessInSelection(_ event: NSEvent) {
         guard !selectedMessageIDs.isEmpty else { return }
         if event.window === view.window {
-            for (_, cell) in visibleCells(MessageCellView.self) {
-                let anchor = cell.anchorView
-                if anchor.bounds.contains(anchor.convert(event.locationInWindow, from: nil)) { return }
+            for (_, cell) in visibleCells(MessageCellView.self) where cell.hitsMessageContent(event.locationInWindow) {
+                return
             }
         }
         selectMessage(nil)

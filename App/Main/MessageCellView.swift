@@ -165,6 +165,8 @@ final class MessageCellView: NSTableCellView {
         textView.onClick = { [weak self] in self?.clicked() }
         // Clicks on the bubble's padding (outside the text) select it too.
         bubble.onMouseDown = { [weak self] in self?.clicked() }
+        // A Shift- or Command-click on the link preview selects the message.
+        linkCard.onSelect = { [weak self] in self?.selectWithModifiers($0) }
         let doubleClick = NSClickGestureRecognizer(target: self, action: #selector(doubleClicked))
         doubleClick.numberOfClicksRequired = 2
         // The text view gets the clicks too, so a selected message's text can still be selected.
@@ -397,7 +399,9 @@ final class MessageCellView: NSTableCellView {
                     continue
                 }
                 if attachment.kind == .location, let location = attachment.location {
-                    attachmentsStack.addArrangedSubview(LocationCardView(location: location, maxWidth: key.maxWidth))
+                    let card = LocationCardView(location: location, maxWidth: key.maxWidth)
+                    card.onSelect = { [weak self] in self?.selectWithModifiers($0) }
+                    attachmentsStack.addArrangedSubview(card)
                     continue
                 }
                 let view = AttachmentView(attachment: attachment, message: message, maxWidth: key.maxWidth)
@@ -405,6 +409,7 @@ final class MessageCellView: NSTableCellView {
                     guard let self, let message = self.message else { return }
                     self.delegate?.messageCell(self, open: attachment, of: message)
                 }
+                view.onSelect = { [weak self] in self?.selectWithModifiers($0) }
                 attachmentsStack.addArrangedSubview(view)
             }
         }
@@ -790,6 +795,22 @@ final class MessageCellView: NSTableCellView {
         guard let message, !message.isUnsent else { return }
         delegate?.messageCellDidClick(self, message: message,
                                       modifiers: NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask))
+    }
+
+    /// A Shift- or Command-click on an attachment selects the message (the same as its bubble).
+    private func selectWithModifiers(_ modifiers: NSEvent.ModifierFlags) {
+        guard let message, !message.isUnsent else { return }
+        delegate?.messageCellDidClick(self, message: message, modifiers: modifiers)
+    }
+
+    /// Whether a window point lands on the message's clickable content (its bubble, attachments
+    /// or link card): a click there keeps the selection, so a modifier-click can change it before
+    /// the controller's deselect monitor clears everything.
+    func hitsMessageContent(_ windowPoint: NSPoint) -> Bool {
+        for view in [bubble, attachmentsStack, linkCard] as [NSView] where !view.isHidden {
+            if view.bounds.contains(view.convert(windowPoint, from: nil)) { return true }
+        }
+        return false
     }
 
     /// Double-clicking reacts, unless the message was already selected before the double-click

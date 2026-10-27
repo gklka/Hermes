@@ -32,9 +32,12 @@ enum LinkDrag {
 /// A link's preview: its picture, title and site, like Messages' link previews. Clicking opens
 /// the link; dragging takes it out.
 final class LinkCardView: NSView, NSDraggingSource {
+    /// A Shift- or Command-click selects the message instead of opening the link.
+    var onSelect: ((NSEvent.ModifierFlags) -> Void)?
     private var url: URL?
     private var title: String?
     private var mouseDownPoint: NSPoint?
+    private var downModifiers: NSEvent.ModifierFlags = []
     private let picture = NSView()
     private let titleLabel = NSTextField(wrappingLabelWithString: "")
     private let subtitleLabel = NSTextField(wrappingLabelWithString: "")
@@ -163,21 +166,27 @@ final class LinkCardView: NSView, NSDraggingSource {
     override func mouseDown(with event: NSEvent) {
         // Not passed on, so the table doesn't track the drag.
         mouseDownPoint = event.locationInWindow
+        downModifiers = event.modifierFlags.intersection([.command, .shift])
         setPressed(true)
     }
 
     override func mouseUp(with event: NSEvent) {
         setPressed(false)
         // Released without dragging — a click, however long it was held.
-        if mouseDownPoint != nil, let url {
+        if mouseDownPoint != nil {
             mouseDownPoint = nil
-            NSWorkspace.shared.open(url)
+            // A plain click opens the link; Shift / Command selects the message instead.
+            if downModifiers.isEmpty {
+                if let url { NSWorkspace.shared.open(url) }
+            } else {
+                onSelect?(downModifiers)
+            }
         }
         super.mouseUp(with: event)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let url, let start = mouseDownPoint, LinkDrag.isDrag(from: start, to: event) else {
+        guard downModifiers.isEmpty, let url, let start = mouseDownPoint, LinkDrag.isDrag(from: start, to: event) else {
             super.mouseDragged(with: event)
             return
         }
@@ -195,6 +204,8 @@ final class LinkCardView: NSView, NSDraggingSource {
 /// A shared location: a map snapshot with a pin, the place's name and address below. Clicking
 /// opens it in Maps. The map picture is rendered off the main thread, then faded in.
 final class LocationCardView: NSView {
+    /// A Shift- or Command-click selects the message instead of opening Maps.
+    var onSelect: ((NSEvent.ModifierFlags) -> Void)?
     private let location: Attachment.Location
     private let mapImage = NSImageView()
     private let titleLabel = NSTextField(wrappingLabelWithString: "")
@@ -243,7 +254,7 @@ final class LocationCardView: NSView {
             subtitleLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -9),
         ])
 
-        addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(openInMaps)))
+        addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(clicked)))
         renderMap(width: width, height: mapHeight)
     }
 
@@ -343,7 +354,13 @@ final class LocationCardView: NSView {
         return composed
     }
 
-    @objc private func openInMaps() {
+    @objc private func clicked() {
+        // A plain click opens Maps; Shift / Command selects the message instead.
+        let modifiers = (NSApp.currentEvent?.modifierFlags ?? []).intersection([.command, .shift])
+        if modifiers.isEmpty { openInMaps() } else { onSelect?(modifiers) }
+    }
+
+    private func openInMaps() {
         let item = MKMapItem(location: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude), address: nil)
         item.name = location.name.flatMap { $0.isEmpty ? nil : $0 } ?? "Shared Location"
         item.openInMaps(launchOptions: nil)
@@ -353,7 +370,10 @@ final class LocationCardView: NSView {
 /// Image / video / file / link attachment. Can be dragged out to Finder or other apps.
 final class AttachmentView: NSView, NSDraggingSource {
     var onOpen: (() -> Void)?
+    /// A Shift- or Command-click selects the message instead of opening the attachment.
+    var onSelect: ((NSEvent.ModifierFlags) -> Void)?
     private var mouseDownPoint: NSPoint?
+    private var downModifiers: NSEvent.ModifierFlags = []
 
     private let attachment: Attachment
     private let message: ChatMessage
@@ -442,6 +462,7 @@ final class AttachmentView: NSView, NSDraggingSource {
         // Don't pass it on: the table view would run its own tracking loop and eat the drag.
         // Clicks still work through the click gesture recognizer.
         mouseDownPoint = event.locationInWindow
+        downModifiers = event.modifierFlags.intersection([.command, .shift])
         setPressed(true)
     }
 
@@ -450,13 +471,15 @@ final class AttachmentView: NSView, NSDraggingSource {
         // Released without dragging — a click, however long it was held.
         if mouseDownPoint != nil {
             mouseDownPoint = nil
-            onOpen?()
+            // A plain click opens the attachment; Shift / Command selects the message instead.
+            if downModifiers.isEmpty { onOpen?() } else { onSelect?(downModifiers) }
         }
         super.mouseUp(with: event)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let start = mouseDownPoint, LinkDrag.isDrag(from: start, to: event) else {
+        // While selecting (a modifier held), a small drag doesn't start a file drag.
+        guard downModifiers.isEmpty, let start = mouseDownPoint, LinkDrag.isDrag(from: start, to: event) else {
             super.mouseDragged(with: event)
             return
         }
