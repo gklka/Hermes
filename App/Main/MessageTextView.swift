@@ -26,6 +26,10 @@ final class MessageTextView: NSTextView {
         setContentHuggingPriority(.required, for: .horizontal)
         setContentHuggingPriority(.required, for: .vertical)
         setContentCompressionResistancePriority(.required, for: .vertical)
+        // Horizontally too: the bubble shares a vertical stack with a fixed-width link card, and
+        // without this the text view is compressed to the card's narrower width and its text is
+        // clipped. Its intrinsic width is already capped at maxWidth, so this never pushes past it.
+        setContentCompressionResistancePriority(.required, for: .horizontal)
         unregisterDraggedTypes()
     }
 

@@ -122,6 +122,14 @@ final class BubbleView: NSView {
         layer?.cornerRadius = BubbleMetrics.cornerRadius
         layer?.cornerCurve = .continuous
         layer?.masksToBounds = true
+        // A bubble shares the message's vertical stack with a link-preview card, which pins itself
+        // to a fixed 300pt width. With a leading-aligned stack the column would otherwise settle at
+        // that 300pt and squeeze the bubble (and the text pinned inside it) down to it, clipping any
+        // longer text. Resisting compression lets the bubble hold its own content width, forcing the
+        // column wider than the card (up to the text view's maxWidth); hugging keeps it from growing
+        // past its content when a sibling is narrower.
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
     }
 
     @available(*, unavailable)
