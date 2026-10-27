@@ -1,15 +1,17 @@
 #!/bin/sh
 # Writes build/appcast.xml for a release: Sparkle's feed (the app reads the latest GitHub
 # release's appcast.xml, Info.plist's SUFeedURL). After building Release and the DMG:
-#   Support/release-appcast.sh build/Hermes-0.3.dmg
+#   Support/release-appcast.sh build/Hermes-0.3.dmg build/Hermes-0.3.md
 #   gh release create v0.3 build/Hermes-0.3.dmg build/appcast.xml …
+# The Markdown file is the changelog (What's new, Fixes) the updater shows before updating.
 # The DMG is signed with Sparkle's private key from this Mac's login Keychain (made once with
 # Sparkle's generate_keys; its public key is Info.plist's SUPublicEDKey).
 set -e
 cd "$(dirname "$0")/.."
 DMG="$1"
-if [ ! -f "$DMG" ]; then
-    echo "usage: $0 build/Hermes-<version>.dmg" >&2
+NOTES="$2"
+if [ ! -f "$DMG" ] || [ ! -s "$NOTES" ]; then
+    echo "usage: $0 build/Hermes-<version>.dmg build/Hermes-<version>.md" >&2
     exit 1
 fi
 BIN=build/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin
@@ -34,6 +36,9 @@ cat > build/appcast.xml <<EOF
       <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>$MIN_OS</sparkle:minimumSystemVersion>
       <link>https://github.com/gklka/Hermes/releases/tag/v$VERSION</link>
+      <description sparkle:format="markdown"><![CDATA[
+$(cat "$NOTES")
+]]></description>
       <enclosure url="$URL" type="application/octet-stream" $SIGNATURE/>
     </item>
   </channel>
