@@ -69,6 +69,62 @@ final class ContactCards {
         return match(userID: userID, name: name)
     }
 
+    /// What a person's menu offers, like Mail: their card when they're among the contacts (or
+    /// before access was asked for, or while the contacts are still being read), Add to Contacts
+    /// when they aren't.
+    enum MenuChoice { case showCard, addContact }
+
+    func menuChoice(userID: String, name: String) -> MenuChoice {
+        if canAsk || match(userID: userID, name: name) != nil { return .showCard }
+        return isAuthorized && index == nil ? .showCard : .addContact
+    }
+
+    /// Add to Contacts: a vCard with the person's name, Facebook profile (so it matches by their
+    /// ID) and picture, opened in Contacts, which adds it. Saving it from here (CNSaveRequest)
+    /// lost the picture on an iCloud account; Contacts' own import keeps it.
+    func addContact(userID: String, name: String, avatarURL: String?, in window: NSWindow?) {
+        Task {
+            do {
+                let card = try await Self.vCard(userID: userID, name: name, avatarURL: avatarURL)
+                let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let file = folder.appendingPathComponent("\(name.replacingOccurrences(of: "/", with: "-")).vcf")
+                try card.write(to: file)
+                guard let contacts = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.AddressBook") else { return }
+                _ = try await NSWorkspace.shared.open([file], withApplicationAt: contacts, configuration: .init())
+            } catch {
+                if let window { NSAlert(error: error).beginSheetModal(for: window, completionHandler: nil) }
+            }
+        }
+    }
+
+    private static func vCard(userID: String, name: String, avatarURL: String?) async throws -> Data {
+        let contact = CNMutableContact()
+        if let parts = PersonNameComponentsFormatter().personNameComponents(from: name), parts.givenName != nil {
+            contact.givenName = parts.givenName ?? ""
+            contact.middleName = parts.middleName ?? ""
+            contact.familyName = parts.familyName ?? ""
+        } else {
+            contact.givenName = name
+        }
+        let profile = CNSocialProfile(urlString: Facebook.profileURL(of: userID)?.absoluteString, username: nil,
+                                      userIdentifier: userID, service: CNSocialProfileServiceFacebook)
+        contact.socialProfiles = [CNLabeledValue(label: nil, value: profile)]
+        var image: NSImage?
+        if let avatarURL, let url = URL(string: avatarURL) {
+            image = await ImageCache.shared.image(for: url)
+        }
+        var card = try CNContactVCardSerialization.data(with: [contact])
+        // The serialization leaves the picture out, so it's added as a PHOTO line.
+        if let tiff = image?.tiffRepresentation, let photo = NSBitmapImageRep(data: tiff)?.representation(using: .jpeg, properties: [:]),
+           let text = String(data: card, encoding: .utf8), let end = text.range(of: "END:VCARD", options: .backwards) {
+            var lines = text
+            lines.insert(contentsOf: "PHOTO;ENCODING=b;TYPE=JPEG:\(photo.base64EncodedString())\r\n", at: end.lowerBound)
+            card = Data(lines.utf8)
+        }
+        return card
+    }
+
     /// Asks for access the first time, then reads the contacts so lookups are ready.
     func ensureReady() async {
         if canAsk {

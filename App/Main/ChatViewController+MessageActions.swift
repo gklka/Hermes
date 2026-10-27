@@ -545,14 +545,18 @@ extension ChatViewController: MessageCellDelegate {
     private struct Sender {
         let id: String
         let name: String
+        /// Their Facebook name when `name` is a contact nickname.
+        let realName: String?
+        let avatarURL: String?
         /// The message whose avatar was clicked (its cell anchors the contact card).
         let messageID: String
     }
 
     func messageCell(_ cell: MessageCellView, menuForSenderOf message: ChatMessage) -> NSMenu? {
         guard !message.isFromMe else { return nil }
-        let sender = Sender(id: message.senderID, name: store.participant(message.senderID, in: message.threadID)?.name ?? "Unknown",
-                            messageID: message.id)
+        let participant = store.participant(message.senderID, in: message.threadID)
+        let sender = Sender(id: message.senderID, name: participant?.name ?? "Unknown", realName: participant?.realName,
+                            avatarURL: participant?.avatarURL, messageID: message.id)
         let menu = NSMenu()
         @discardableResult
         func add(_ title: String, symbol: String, action: Selector) -> NSMenuItem {
@@ -564,11 +568,12 @@ extension ChatViewController: MessageCellDelegate {
         }
         add("Message", symbol: "message", action: #selector(messageSender(_:)))
         add("View Profile", symbol: "person.crop.circle", action: #selector(viewSenderProfile(_:)))
-        // Enabled when the person is among the contacts (or before access was asked for).
-        let contacts = ContactCards.shared
-        let card = add("Show Contact Card", symbol: "person.text.rectangle", action: #selector(showSenderContactCard(_:)))
-        if !contacts.canAsk, contacts.match(userID: sender.id, name: sender.name) == nil {
-            card.action = nil
+        // Their card when they're among the contacts; otherwise Add to Contacts, like Mail.
+        switch ContactCards.shared.menuChoice(userID: sender.id, name: sender.name) {
+        case .addContact:
+            add("Add to Contacts", symbol: "person.crop.circle.badge.plus", action: #selector(addSenderToContacts(_:)))
+        case .showCard:
+            add("Show Contact Card", symbol: "person.text.rectangle", action: #selector(showSenderContactCard(_:)))
         }
         menu.addItem(.separator())
         add("Block…", symbol: "person.crop.circle.badge.xmark", action: #selector(blockSender(_:)))
@@ -605,6 +610,13 @@ extension ChatViewController: MessageCellDelegate {
             guard let anchor = cell?.avatarView ?? cell else { return }
             ContactCards.shared.showCard(identifier, relativeTo: anchor.bounds, of: anchor)
         }
+    }
+
+    /// A new contact with their name, Facebook profile and picture, added in Contacts.
+    @objc private func addSenderToContacts(_ sender: NSMenuItem) {
+        guard let person = sender.representedObject as? Sender else { return }
+        ContactCards.shared.addContact(userID: person.id, name: person.realName ?? person.name,
+                                       avatarURL: person.avatarURL, in: view.window)
     }
 
     @objc private func blockSender(_ sender: NSMenuItem) {

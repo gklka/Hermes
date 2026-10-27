@@ -22,9 +22,9 @@
 			</array>
 		</dict>
 	</array>
-	<!-- Show Contact Card: finding the person of a chat among your contacts (ContactCards). -->
+	<!-- Show Contact Card and Add to Contacts: the people you chat with in your contacts (ContactCards). -->
 	<key>NSContactsUsageDescription</key>
-	<string>Hermes finds the people you chat with in your contacts to show their contact cards.</string>
+	<string>Hermes finds the people you chat with in your contacts to show their contact cards, and adds them when you ask.</string>
 	<!-- Audio and video calls (CallManager). -->
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Hermes uses the microphone for Messenger calls.</string>

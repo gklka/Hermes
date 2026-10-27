@@ -340,13 +340,13 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
             menu.addItem(item("View Profile", symbol: "person.crop.circle", action: #selector(viewProfile), conversation))
         }
         if !conversation.isGroup, !conversation.isMarketplace {
-            // Enabled when the person is among the contacts (or before access was asked for).
-            let contacts = ContactCards.shared
-            let card = item("Show Contact Card", symbol: "person.text.rectangle", action: #selector(showContactCard), conversation)
-            if !contacts.canAsk, contacts.match(userID: conversation.id, name: conversation.name) == nil {
-                card.action = nil
+            // Their card when they're among the contacts; otherwise Add to Contacts, like Mail.
+            switch ContactCards.shared.menuChoice(userID: conversation.id, name: conversation.name) {
+            case .addContact:
+                menu.addItem(item("Add to Contacts", symbol: "person.crop.circle.badge.plus", action: #selector(addToContacts), conversation))
+            case .showCard:
+                menu.addItem(item("Show Contact Card", symbol: "person.text.rectangle", action: #selector(showContactCard), conversation))
             }
-            menu.addItem(card)
         }
         menu.addItem(.separator())
         if !conversation.isGroup {
@@ -412,10 +412,21 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
                 NSSound.beep()
                 return
             }
-            guard let row = rows.firstIndex(where: { $0.id == conversation.id }) else { return }
-            tableView.scrollRowToVisible(row)
-            ContactCards.shared.showCard(identifier, relativeTo: tableView.rect(ofRow: row), of: tableView)
+            showCard(identifier, for: conversation)
         }
+    }
+
+    /// A new contact with the person's name, Facebook profile and picture, added in Contacts.
+    @objc private func addToContacts(_ sender: NSMenuItem) {
+        guard let conversation = sender.representedObject as? Conversation else { return }
+        ContactCards.shared.addContact(userID: conversation.id, name: conversation.realName ?? conversation.name,
+                                       avatarURL: conversation.avatarURL, in: view.window)
+    }
+
+    private func showCard(_ identifier: String, for conversation: Conversation) {
+        guard let row = rows.firstIndex(where: { $0.id == conversation.id }) else { return }
+        tableView.scrollRowToVisible(row)
+        ContactCards.shared.showCard(identifier, relativeTo: tableView.rect(ofRow: row), of: tableView)
     }
 
     @objc private func block(_ sender: NSMenuItem) {
