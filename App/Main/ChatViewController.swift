@@ -637,7 +637,11 @@ final class ChatViewController: NSViewController {
         guard !candidates.isEmpty else { return [:] }
         var positions: [String: [Participant]] = [:]
         for participant in conversation.participants where participant.id != selfID {
-            guard let watermark = participant.readWatermark, watermark > 0 else { continue }
+            // Sending a message means having read everything up to it, even when the read
+            // watermark (stale, or not synced yet) is older.
+            let ownLast = candidates.last { $0.senderID == participant.id }?.timestamp ?? 0
+            let watermark = max(participant.readWatermark ?? 0, ownLast)
+            guard watermark > 0 else { continue }
             // The last message at or before the watermark (the messages are in time order).
             var low = 0, high = candidates.count
             while low < high {
