@@ -813,6 +813,16 @@ final class MessageCellView: NSTableCellView {
         return false
     }
 
+    /// The message's content (bubble, attachments, link card) in the cell's coordinates, for a
+    /// rubber-band selection to test against.
+    var contentFrame: NSRect {
+        var frame = NSRect.null
+        for view in [bubble, attachmentsStack, linkCard] as [NSView] where !view.isHidden {
+            frame = frame.union(convert(view.bounds, from: view))
+        }
+        return frame.isNull ? bounds : frame
+    }
+
     /// Double-clicking reacts, unless the message was already selected before the double-click
     /// (its first click selects it): then the text view selects a word instead.
     @objc private func doubleClicked() {

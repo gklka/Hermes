@@ -9,6 +9,84 @@ final class ChatTableView: NSTableView {
         }
         return super.validateProposedFirstResponder(responder, for: event)
     }
+
+    // MARK: - Rubber-band selection (Finder-style)
+
+    /// Whether a window point is on a message's content (so a press there isn't a marquee).
+    var hitsMessage: ((NSPoint) -> Bool)?
+    /// The message IDs whose bubbles a rect (in table coordinates) covers.
+    var messageIDs: ((NSRect) -> [String])?
+    /// The current selection, to extend (Shift) or toggle (Command) from while dragging.
+    var currentSelection: (() -> Set<String>)?
+    /// Applies the selection the marquee produced, with the anchor for a later Shift-click.
+    var applyMarqueeSelection: ((Set<String>, String?) -> Void)?
+
+    private lazy var marquee: NSView = {
+        let view = NSView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.selectedContentBackgroundColor.withAlphaComponent(0.2).cgColor
+        view.layer?.borderColor = NSColor.selectedContentBackgroundColor.cgColor
+        view.layer?.borderWidth = 1
+        view.isHidden = true
+        return view
+    }()
+
+    override func mouseDown(with event: NSEvent) {
+        // Only empty space starts a band; a press on a message keeps the normal handling.
+        guard messageIDs != nil, !(hitsMessage?(event.locationInWindow) ?? false) else {
+            super.mouseDown(with: event)
+            return
+        }
+        let modifiers = event.modifierFlags.intersection([.command, .shift])
+        // Shift and Command extend or toggle the existing selection; a plain drag replaces it.
+        let base = modifiers.isEmpty ? [] : (currentSelection?() ?? [])
+        let start = convert(event.locationInWindow, from: nil)
+        var covered: [String] = []
+        // A plain press on empty space (no drag) clears the selection.
+        apply(base: base, covered: covered, modifiers: modifiers)
+        var dragging = false
+
+        while let next = window?.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if next.type == .leftMouseUp { break }
+            autoscroll(with: next)
+            let point = convert(next.locationInWindow, from: nil)
+            let rect = NSRect(x: min(start.x, point.x), y: min(start.y, point.y),
+                              width: abs(point.x - start.x), height: abs(point.y - start.y))
+            // Show the rectangle only once a drag begins, so a plain click doesn't flash it.
+            if !dragging {
+                dragging = true
+                addSubview(marquee, positioned: .above, relativeTo: nil)
+                marquee.isHidden = false
+            }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            marquee.frame = rect
+            CATransaction.commit()
+            let ids = messageIDs?(rect) ?? []
+            if ids != covered {
+                covered = ids
+                apply(base: base, covered: covered, modifiers: modifiers)
+            }
+        }
+        if dragging {
+            marquee.isHidden = true
+            marquee.removeFromSuperview()
+        }
+    }
+
+    /// The selection for the band so far: Command toggles each covered message against the base
+    /// selection, Shift (or a plain drag, with an empty base) adds them.
+    private func apply(base: Set<String>, covered: [String], modifiers: NSEvent.ModifierFlags) {
+        var result = base
+        if modifiers.contains(.command) {
+            for id in covered {
+                if base.contains(id) { result.remove(id) } else { result.insert(id) }
+            }
+        } else {
+            result.formUnion(covered)
+        }
+        applyMarqueeSelection?(result, covered.last)
+    }
 }
 
 /// Shows things (animations) without taking any clicks, scrolls or drags from what's under it.

@@ -28,8 +28,8 @@ extension ChatViewController: MessageCellDelegate {
     private func singleMessageMenu(for message: ChatMessage, cell: MessageCellView) -> NSMenu? {
         guard !message.isUnsent, message.status != .pending else { return nil }
         let menu = NSMenu()
-        func add(_ title: String, _ action: Selector) {
-            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+        func add(_ title: String, _ action: Selector, key: String = "") {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: key)
             item.target = self
             item.representedObject = message
         }
@@ -50,7 +50,7 @@ extension ChatViewController: MessageCellDelegate {
         add("Reply", #selector(replyFromMenu(_:)))
         add(message.isPinned == true ? "Unpin Message" : "Pin Message", #selector(togglePinFromMenu(_:)))
         if !message.text.isEmpty {
-            add("Copy", #selector(copyFromMenu(_:)))
+            add("Copy", #selector(copyFromMenu(_:)), key: "c")
         }
         let pictures = message.attachments.filter { Self.isPicture($0) }
         if !pictures.isEmpty {
@@ -64,21 +64,24 @@ extension ChatViewController: MessageCellDelegate {
                 add("Edit", #selector(editFromMenu(_:)))
             }
             menu.addItem(.separator())
-            add("Unsend", #selector(unsendFromMenu(_:)))
+            add("Unsend", #selector(unsendFromMenu(_:)), key: Self.deleteKey)
         }
         return menu
     }
 
+    /// ⌫ as a menu item's key equivalent (shown as the shortcut hint).
+    private static let deleteKey = String(UnicodeScalar(UInt8(NSBackspaceCharacter)))
+
     /// The menu shared by several selected messages: the actions that make sense for a group.
     private func multiMessageMenu(for messages: [ChatMessage]) -> NSMenu {
         let menu = NSMenu()
-        func add(_ title: String, _ action: Selector) {
-            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: "")
+        func add(_ title: String, _ action: Selector, key: String = "") {
+            let item = menu.addItem(withTitle: title, action: action, keyEquivalent: key)
             item.target = self
             item.representedObject = messages
         }
         if messages.contains(where: { !$0.text.isEmpty }) {
-            add("Copy", #selector(copySelectedFromMenu(_:)))
+            add("Copy", #selector(copySelectedFromMenu(_:)), key: "c")
         }
         let pictures = messages.flatMap { $0.attachments.filter { Self.isPicture($0) } }
         if !pictures.isEmpty {
@@ -91,13 +94,18 @@ extension ChatViewController: MessageCellDelegate {
         add(anyUnpinned ? "Pin Messages" : "Unpin Messages", #selector(togglePinSelectedFromMenu(_:)))
         if messages.allSatisfy(\.isFromMe) {
             menu.addItem(.separator())
-            add("Unsend", #selector(unsendSelectedFromMenu(_:)))
+            add("Unsend", #selector(unsendSelectedFromMenu(_:)), key: Self.deleteKey)
         }
         return menu
     }
 
     @objc private func copySelectedFromMenu(_ sender: NSMenuItem) {
         guard let messages = sender.representedObject as? [ChatMessage] else { return }
+        copyText(of: messages)
+    }
+
+    /// The messages' text, one per line.
+    private func copyText(of messages: [ChatMessage]) {
         let text = messages.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n")
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
@@ -134,8 +142,7 @@ extension ChatViewController: MessageCellDelegate {
 
     @objc private func copyFromMenu(_ sender: NSMenuItem) {
         guard let message = sender.representedObject as? ChatMessage else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(message.text, forType: .string)
+        copyText(of: [message])
     }
 
     @objc private func togglePinFromMenu(_ sender: NSMenuItem) {
@@ -340,6 +347,7 @@ extension ChatViewController: MessageCellDelegate {
             reveal(messageID: message.id, stored: true)
             return
         }
+        focusMessages()
         if modifiers.contains(.shift), let anchor = selectionAnchor, anchor != message.id {
             // Extend the selection to a range, like a list (the anchor stays put).
             setSelection(Set(messageIDs(from: anchor, to: message.id)), anchor: anchor)
@@ -353,14 +361,43 @@ extension ChatViewController: MessageCellDelegate {
         }
     }
 
-    /// The loaded messages' IDs in the range between two of them (inclusive), in chat order.
-    private func messageIDs(from: String, to: String) -> [String] {
-        let order: [String] = rows.compactMap {
+    /// The loaded messages' IDs, in chat order.
+    private func loadedMessageIDs() -> [String] {
+        rows.compactMap {
             if case .message(let message, _) = $0 { return message.id }
             return nil
         }
+    }
+
+    /// The loaded messages' IDs in the range between two of them (inclusive), in chat order.
+    private func messageIDs(from: String, to: String) -> [String] {
+        let order = loadedMessageIDs()
         guard let a = order.firstIndex(of: from), let b = order.firstIndex(of: to) else { return [to] }
         return Array(order[min(a, b)...max(a, b)])
+    }
+
+    /// Moves the focus from the message field to the list, so the selection's shortcuts work.
+    /// A bubble's text being selected keeps it.
+    func focusMessages() {
+        guard let window = view.window else { return }
+        if let focused = window.firstResponder as? NSView, focused.isDescendant(of: tableView) { return }
+        window.makeFirstResponder(tableView)
+    }
+
+    /// The loaded messages whose bubbles a rubber-band rect (in table coordinates) covers.
+    func messageIDs(coveredBy rect: NSRect) -> [String] {
+        let rowRange = tableView.rows(in: rect)
+        guard rowRange.location != NSNotFound, rowRange.length > 0 else { return [] }
+        var ids: [String] = []
+        for row in max(0, rowRange.location)..<min(rows.count, rowRange.location + rowRange.length) {
+            guard case .message(let message, _) = rows[row] else { continue }
+            // On-screen rows are matched against the exact bubble; rows scrolled out of view (no
+            // live cell) against the whole row, so auto-scrolling still selects them.
+            let frame = (tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? MessageCellView)
+                .map { $0.convert($0.contentFrame, to: tableView) } ?? tableView.rect(ofRow: row)
+            if frame.intersects(rect) { ids.append(message.id) }
+        }
+        return ids
     }
 
     /// The selected messages, in chat order (for the actions a multi-selection offers).
@@ -410,12 +447,97 @@ extension ChatViewController: MessageCellDelegate {
     /// a click anywhere else clears the selection.
     private func deselectUnlessInSelection(_ event: NSEvent) {
         guard !selectedMessageIDs.isEmpty else { return }
+        // A Shift- or Command-click (or band) extends the selection, so it mustn't clear it first.
+        if !event.modifierFlags.intersection([.command, .shift]).isEmpty { return }
         if event.window === view.window {
             for (_, cell) in visibleCells(MessageCellView.self) where cell.hitsMessageContent(event.locationInWindow) {
                 return
             }
         }
         selectMessage(nil)
+    }
+
+    // MARK: - Keyboard shortcuts for the selection
+
+    /// ⌘C copies the selected messages, ⌘A selects every loaded one, ↑/↓ select the next one
+    /// (with Shift they extend the selection), Esc clears it and Delete unsends. The message
+    /// field keeps its own keys, and text selected in a bubble keeps ⌘C and ⌘A.
+    func handleSelectionKey(_ event: NSEvent) -> Bool {
+        guard threadID != nil, searchResults == nil, let window = view.window, event.window === window,
+              window.attachedSheet == nil else { return false }
+        let textView = window.firstResponder as? NSTextView
+        if textView?.isEditable == true { return false }
+        let selectingText = (textView?.selectedRange().length ?? 0) > 0
+        // A selection made by clicking, not the highlight of the message being edited.
+        let hasSelection = !selectedMessageIDs.isEmpty && deselectMonitor != nil
+        let modifiers = event.modifierFlags.intersection([.command, .control, .option, .shift])
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        if modifiers == .command, key == "c", hasSelection, !selectingText {
+            copy(selectedMessages())
+        } else if modifiers == .command, key == "a", !selectingText, hasSelection || window.firstResponder === tableView {
+            let order = loadedMessageIDs()
+            setSelection(Set(order), anchor: order.first)
+        } else if !hasSelection {
+            return false
+        } else if key == "\u{1b}", modifiers.isEmpty {
+            selectMessage(nil)
+        } else if event.specialKey == .delete || event.specialKey == .deleteForward,
+                  modifiers.isEmpty || modifiers == .command {
+            confirmUnsend(selectedMessages())
+        } else if event.specialKey == .upArrow || event.specialKey == .downArrow,
+                  modifiers.isEmpty || modifiers == .shift {
+            moveSelection(up: event.specialKey == .upArrow, extending: modifiers == .shift)
+        } else {
+            return false
+        }
+        return true
+    }
+
+    /// Copies the messages' text, or their pictures when none has text.
+    private func copy(_ messages: [ChatMessage]) {
+        if messages.contains(where: { !$0.text.isEmpty }) {
+            copyText(of: messages)
+        } else if messages.contains(where: { message in message.attachments.contains { Self.isPicture($0) } }) {
+            copyImages(of: messages)
+        } else {
+            NSSound.beep()
+        }
+    }
+
+    /// Asks before unsending: only your own messages can be unsent.
+    private func confirmUnsend(_ messages: [ChatMessage]) {
+        guard let window = view.window, !messages.isEmpty,
+              messages.allSatisfy({ $0.isFromMe && !$0.isUnsent && $0.status != .pending }) else {
+            NSSound.beep()
+            return
+        }
+        let title = messages.count == 1 ? "Unsend this message?" : "Unsend \(messages.count) messages?"
+        let detail = messages.count == 1 ? "It will be removed for everyone in the chat." : "They will be removed for everyone in the chat."
+        NSAlert.confirm(title, detail: detail, button: "Unsend", in: window) { [weak self] in
+            guard let self else { return }
+            for message in messages { self.store.unsend(message) }
+            self.selectMessage(nil)
+        }
+    }
+
+    /// ↑/↓ select the message above or below the selection. With Shift, the selection's end away
+    /// from the anchor moves instead, like in a list.
+    private func moveSelection(up: Bool, extending: Bool) {
+        let order = loadedMessageIDs()
+        let selected = order.indices.filter { selectedMessageIDs.contains(order[$0]) }
+        guard let first = selected.first, let last = selected.last else { return }
+        let step = up ? -1 : 1
+        let next: Int
+        if extending, let anchorID = selectionAnchor, let anchor = order.firstIndex(of: anchorID) {
+            next = min(max((first < anchor ? first : last) + step, 0), order.count - 1)
+            setSelection(Set(order[min(anchor, next)...max(anchor, next)]), anchor: anchorID)
+        } else {
+            next = min(max((up ? first : last) + step, 0), order.count - 1)
+            selectMessage(order[next])
+        }
+        if let row = rowIndex(ofMessage: order[next]) {
+            tableView.scrollRowToVisible(row)
+        }
     }
 
     // MARK: - The sender's menu

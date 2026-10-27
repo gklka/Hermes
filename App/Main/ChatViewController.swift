@@ -169,6 +169,19 @@ final class ChatViewController: NSViewController {
         tableView.dataSource = self
         tableView.delegate = self
 
+        // Finder-style rubber-band selection, dragged over empty space in the list.
+        tableView.hitsMessage = { [weak self] point in
+            self?.visibleCells(MessageCellView.self).contains { $0.cell.hitsMessageContent(point) } ?? false
+        }
+        tableView.messageIDs = { [weak self] rect in self?.messageIDs(coveredBy: rect) ?? [] }
+        tableView.currentSelection = { [weak self] in self?.selectedMessageIDs ?? [] }
+        tableView.applyMarqueeSelection = { [weak self] ids, anchor in
+            self?.setSelection(ids, anchor: anchor)
+            self?.focusMessages()
+        }
+        // The list takes the focus while messages are selected (for their shortcuts), without a ring.
+        tableView.focusRingType = .none
+
         scrollView.documentView = tableView
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
@@ -249,6 +262,11 @@ final class ChatViewController: NSViewController {
             guard let self, self.shouldRedirectTyping(event) else { return event }
             self.compose.focus()
             return event
+        }
+        // ⌘C, ⌘A, arrows, Esc and Delete act on the selected messages.
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.handleSelectionKey(event) else { return event }
+            return nil
         }
     }
 
