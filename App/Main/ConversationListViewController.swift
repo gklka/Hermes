@@ -326,6 +326,9 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
             tableView.insertRows(at: index, withAnimation: .effectFade)
         } else {
             tableView.removeRows(at: index, withAnimation: .effectFade)
+            // Its chats show before it ends: reaching the bottom meanwhile asked for more while
+            // it was still busy, so ask again now.
+            scrolled()
         }
     }
 
