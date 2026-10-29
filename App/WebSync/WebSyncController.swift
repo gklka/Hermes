@@ -19,6 +19,16 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
     private static let storeID = UUID(uuidString: "6F1C2B7E-4E1A-4C55-9B7A-2D0E7F9A1C31")!
     static let messagesURL = URL(string: "https://www.facebook.com/messages/")!
 
+    /// The page doesn't load Facebook's pictures and videos (profile pictures, link cards,
+    /// stickers): the importers read their addresses, and download a link card's picture
+    /// themselves. Encrypted messages' pictures are decrypted in the page, so they still show.
+    /// Not in call windows (other paths).
+    private static let mediaRules = #"""
+    [{"trigger": {"url-filter": "^https?://[^/]*\\.fbcdn\\.net/", "resource-type": ["image", "media"],
+                  "if-top-url": ["^https://www\\.facebook\\.com/messages"]},
+      "action": {"type": "block"}}]
+    """#
+
     /// The page always has a chat open (/messages/ opens the latest one), and the web app reads
     /// new messages in a chat that's on screen: they'd be read before they notify here. So the
     /// page is told it's hidden and unfocused. Not call popups (they have an opener and other paths).
@@ -142,6 +152,15 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
         // Messenger serve Chrome-only code, which breaks the encrypted chat restore.
         webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
         await resetDataIfNeeded()
+        do {
+            if let rules = try await WKContentRuleListStore.default().compileContentRuleList(
+                forIdentifier: "MessagesPageMedia", encodedContentRuleList: Self.mediaRules
+            ) {
+                webView.configuration.userContentController.add(rules)
+            }
+        } catch {
+            CoreBridge.shared.log("WebSync: the media rules didn't compile: \(error)")
+        }
         guard let cookies = try? await CoreBridge.shared.call("session.cookies", as: [String: String].self),
               let userID = cookies["c_user"] else { return false }
         let store = webView.configuration.websiteDataStore.httpCookieStore

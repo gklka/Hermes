@@ -67,6 +67,9 @@ final class WebHistoryImporter {
     private static let recentChatCount = 15
     /// How many messages an import reads (new ones; the imported stretch is skipped).
     private static let batchSize = 400
+    /// For background imports (the recent chats after a restore): enough for the chat to show
+    /// its latest messages, so all of them are done soon. Scrolling up loads the rest.
+    private static let backgroundBatchSize = 40
     /// For this long after a restore, the web app may still be downloading the history.
     private static let restoringPeriod: TimeInterval = 30 * 60
     private static let restoredAtKey = "WebRestoredAt"
@@ -457,7 +460,8 @@ final class WebHistoryImporter {
             let coverage = saved.coverage[threadID]
             CoreBridge.shared.log("WebHistoryImporter: \(threadID) → web chat \(webID), reading \(job.mode.rawValue)")
             setStage(.waitingForPage)
-            let script = Self.collectScript(userID: threadID, mode: job.mode, batch: Self.batchSize, coverage: coverage)
+            let batch = job.opened ? Self.batchSize : Self.backgroundBatchSize
+            let script = Self.collectScript(userID: threadID, mode: job.mode, batch: batch, coverage: coverage)
             let result = try await web.withExclusiveAccess {
                 // Closed while it waited for the page.
                 guard !currentStopped else { throw CancellationError() }
@@ -803,7 +807,7 @@ final class WebHistoryImporter {
           await sleep(500);
         }
         if (!log || !log.querySelector('[data-message-id^="\(userID)@"]')) return JSON.stringify({ messages: [], error: 'no messages shown for this chat' });
-        await sleep(1000);
+        await sleep(400);
         const scroller = (() => {
           for (let el = log; el; el = el.parentElement)
             if (el.scrollHeight > el.clientHeight + 20 && /(auto|scroll)/.test(getComputedStyle(el).overflowY)) return el;
@@ -831,7 +835,17 @@ final class WebHistoryImporter {
           try {
             const { data, size } = await toBase64(img.src);
             const mimeType = img.src.startsWith('data:') ? img.src.slice(5, img.src.indexOf(';')) : 'image/jpeg';
-            return size < 15 * 1024 * 1024 ? { data, mimeType, width: img.width, height: img.height } : null;
+            let { width, height } = img;
+            // Facebook's pictures (link cards) aren't loaded in the page (WebSyncController's
+            // rules): their size is the downloaded picture's.
+            if (!width || !height) {
+              const probe = new Image();
+              probe.src = `data:${mimeType};base64,${data}`;
+              await probe.decode();
+              width = probe.naturalWidth;
+              height = probe.naturalHeight;
+            }
+            return size < 15 * 1024 * 1024 ? { data, mimeType, width, height } : null;
           } catch (e) { return null; }
         };
         // Text with emoji, which the page draws as <img alt="😆">.
@@ -955,18 +969,28 @@ final class WebHistoryImporter {
         collect();
         report();
         // Older messages can take a moment to load (longer while the web app is still restoring);
-        // scrolling back faster than this makes the page stop loading them.
+        // scrolling back again before they came makes the page stop loading them. So it waits
+        // for them (up to 2 s), and goes on as soon as they're there.
+        const waitForMore = async (count, ms) => {
+          for (let waited = 0; waited < ms; waited += 150) {
+            await sleep(150);
+            collect();
+            if (seen.size + skipped.size > count) return true;
+          }
+          return false;
+        };
         let stable = 0;
         let reachedStart = !scroller;
         for (let i = 0; i < 3000 && scroller && !enough() && !overlap(); i++) {
           if (stopped()) return STOPPED;
           const before = seen.size + skipped.size;
           scroller.scrollTop = 0;
-          await sleep(2000);
-          collect();
+          const more = await waitForMore(before, 2000);
+          // Rendering the new ones can take a moment more.
+          if (more) { await sleep(150); collect(); }
           report();
-          stable = seen.size + skipped.size === before ? stable + 1 : 0;
-          if (stable >= 5) { reachedStart = true; break; }
+          stable = more ? 0 : stable + 1;
+          if (stable >= 3) { reachedStart = true; break; }
         }
         // The first message on screen, to stop the second pass once it's in the imported stretch.
         const firstVisibleTs = () => {
@@ -975,20 +999,32 @@ final class WebHistoryImporter {
             if (el.getBoundingClientRect().bottom > top) return tsOf(el.getAttribute('data-message-id'));
           return Infinity;
         };
+        // Pictures on screen still loading (they decrypt after the message appears).
+        const picturesLoading = () => {
+          const view = scroller.getBoundingClientRect();
+          return Array.from(log.querySelectorAll('img')).some(i => {
+            const r = i.getBoundingClientRect();
+            return r.bottom > view.top && r.top < view.bottom && isPicture(i) && !i.complete;
+          });
+        };
+        // Until the pictures on screen have loaded (at most `ms`).
+        const settle = async ms => {
+          await sleep(200);
+          for (let waited = 200; waited < ms && picturesLoading(); waited += 100) await sleep(100);
+          collect();
+        };
         // Second pass, forward through what was read, so every message gets time to render fully.
         if (scroller) {
           scroller.scrollTop = 0;
-          await sleep(1000);
+          await settle(1000);
           for (let i = 0; i < 400 && scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 5; i++) {
             if (stopped()) return STOPPED;
             if (MODE === 'earlier' && COV_TO >= 0 && covered(firstVisibleTs())) break;
             scroller.scrollTop += scroller.clientHeight * 0.7;
-            await sleep(700);
-            collect();
+            await settle(700);
             progress({ phase: 'forward', fresh: seen.size, fraction: (scroller.scrollTop + scroller.clientHeight) / scroller.scrollHeight });
           }
-          await sleep(1000);
-          collect();
+          await settle(1000);
         }
         const messages = [];
         for (const m of seen.values()) {
