@@ -1002,9 +1002,12 @@ func (s *Store) Conversation(t *threadRow, selfID string) apiConversation {
 	if known && t.LastActivity > t.LastRead && t.SnippetSenderID != selfID {
 		// Messenger also bumps the activity time without a message (e.g. for encrypted chats),
 		// so when the messages are known, only one from someone else after the last read counts.
+		// In encrypted chats only messages received on the encrypted connection count: older ones
+		// (the plain chat's from before it was encrypted, or the web app's history) aren't new,
+		// and the plain chat's read position can be years old.
 		var newest sql.NullInt64
-		_ = s.db.QueryRow(`SELECT MAX(timestamp) FROM messages WHERE thread_id=? AND sender_id!=? AND is_system=0`,
-			t.ID, selfID).Scan(&newest)
+		_ = s.db.QueryRow(`SELECT MAX(timestamp) FROM messages WHERE thread_id=? AND sender_id!=? AND is_system=0 AND (? OR wa_sender!='')`,
+			t.ID, selfID, !t.Type.IsWhatsApp()).Scan(&newest)
 		// Encrypted chats' messages all arrive here (live), so without one from someone else
 		// after the last read the bump was something else; read state from other devices
 		// doesn't always reach them either.

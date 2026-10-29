@@ -102,7 +102,8 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
     private let tableView = NSTableView()
     private var rows: [Conversation] = []
     private var selectedID: String?
-    /// The first chat is opened once, when the list first loads after launch.
+    /// The first chat is opened once, when the list first loads after launch (after a new
+    /// login: once Messenger's chat lists were read).
     private var didAutoSelect = false
     private var cancellables: Set<AnyCancellable> = []
     private var isLoadingMore = false
@@ -267,7 +268,7 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         if query.isEmpty, filter == .requests, tableView.bounds.height <= scrollView.contentView.bounds.height {
             loadMoreRequests()
         }
-        if !didAutoSelect, let first = rows.first {
+        if !didAutoSelect, store.isChatListLoaded, let first = rows.first {
             didAutoSelect = true
             if selectedID == nil {
                 selectedID = first.id

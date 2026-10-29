@@ -90,6 +90,8 @@ func (c *Core) backfillThreads(ctx context.Context) {
 			}
 		}
 	}
+	// The chat lists are complete: after a new login, the app opens the first chat now.
+	emitEvent("threadsLoaded", struct{}{})
 	c.fillEmptyPreviews(ctx)
 	for _, list := range []string{requestListMayKnow, requestListSpam} {
 		if err := c.loadRequests(ctx, list, false); err != nil {

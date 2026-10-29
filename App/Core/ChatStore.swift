@@ -32,6 +32,10 @@ final class ChatStore {
     /// Message requests (someone you're not connected with wrote), most recent first.
     private(set) var requests: [Conversation] = []
     private var conversationsByID: [String: Conversation] = [:]
+    /// Whether the chat list is complete enough to open its first chat: saved chats were loaded
+    /// at launch, or (after a new login) Messenger's chat lists were read. Until then, the
+    /// first chat may be just the first one synced.
+    private(set) var isChatListLoaded = false
 
     /// Messages per thread, sorted oldest → newest. Only populated for opened threads.
     private var messagesByThread: [String: [ChatMessage]] = [:]
@@ -162,6 +166,7 @@ final class ChatStore {
     /// Drops everything of the account that was logged in (logged out, or its session ended).
     private func forgetAccount() {
         account = nil
+        isChatListLoaded = false
         conversations = []
         requests = []
         conversationsByID = [:]
@@ -187,6 +192,7 @@ final class ChatStore {
         do {
             let list = try await core.call("threads.list", as: [Conversation].self)
             conversationsByID = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { $1 })
+            if !list.isEmpty { isChatListLoaded = true }
             resortConversations()
         } catch {
             core.log("threads.list failed: \(error)")
@@ -656,6 +662,11 @@ final class ChatStore {
             guard let conversation = core.decodeEvent(Conversation.self, from: payload) else { return }
             conversationsByID[conversation.id] = conversation
             resortConversations()
+
+        case "threadsLoaded":
+            guard !isChatListLoaded else { return }
+            isChatListLoaded = true
+            notify(.conversations)
 
         case "threadRemoved":
             guard let event = core.decodeEvent(ThreadRemovedEvent.self, from: payload) else { return }

@@ -164,8 +164,9 @@ func (c *Core) importWebThreads(rows []webThreadRow) apiThreadImportResult {
 			c.store.SetThreadLatest(userID, m.Timestamp, snippetFor(m.Text, len(m.Attachments) > 0), m.SenderID)
 		} else {
 			// The web app knows a newer message: moves the chat forward in time, unless the
-			// list's time is only later by its rounding ("15 hete" is 15–16 weeks ago).
-			if t := c.store.GetThread(userID); t == nil || ts-unit.Milliseconds() > t.LastActivity {
+			// list's time is only later by its rounding ("15 hete" is 15–16 weeks ago). Not
+			// without a time: before restoring with a PIN, encrypted chats are listed without one.
+			if t := c.store.GetThread(userID); r.Age != "" && (t == nil || ts-unit.Milliseconds() > t.LastActivity) {
 				c.store.BumpThread(userID, ts, snippet, "")
 			}
 			// A chat without a snippet (no stored messages) gets the list's, and one read before
