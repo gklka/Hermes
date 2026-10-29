@@ -425,6 +425,10 @@ func (c *Core) importWebMessages(threadID string, messages []webMessage) apiMess
 	}
 	if newest != nil {
 		c.store.BumpThread(threadID, newest.Timestamp, snippetFor(newest.Text, len(newest.Attachments) > 0), newest.SenderID)
+		// What's imported is history: new messages arrive over the encrypted connection first,
+		// and the chat's read position may be from before it was encrypted (years old), so
+		// imported chats would look unread.
+		c.store.SetThreadLastRead(threadID, newest.Timestamp)
 		cs.thread(threadID)
 	}
 	// The chat's read position isn't known (it came from the web app's chat list, e.g. after
