@@ -30,7 +30,7 @@ final class WebHistoryImporter {
         case earlier
     }
 
-    private struct Job {
+    private struct Job: Codable {
         let threadID: String
         var mode: Mode
         /// Asked for by opening the chat (not in the background, e.g. after a restore): only
@@ -115,6 +115,42 @@ final class WebHistoryImporter {
     private init() {
         saved = UserDefaults.standard.data(forKey: Self.savedKey)
             .flatMap { try? JSONDecoder().decode(Saved.self, from: $0) } ?? Saved()
+    }
+
+    /// The imports still to do (running, queued, or waiting to be tried again), kept so that
+    /// quitting doesn't lose them: they go on at the next launch. One stopped part way is read
+    /// again (what was read of it isn't kept).
+    private struct Pending: Codable {
+        var jobs: [Job] = []
+        var retryAt: [String: Date] = [:]
+    }
+
+    private static let pendingKey = "WebHistoryImporterPending"
+
+    private func savePending() {
+        let pending = Pending(jobs: (current.map { [$0] } ?? []) + queue, retryAt: retryAt)
+        if let data = try? JSONEncoder().encode(pending) {
+            UserDefaults.standard.set(data, forKey: Self.pendingKey)
+        }
+    }
+
+    /// At launch: what the last run left to do goes on.
+    private func resumePending() {
+        guard let data = UserDefaults.standard.data(forKey: Self.pendingKey),
+              let pending = try? JSONDecoder().decode(Pending.self, from: data) else { return }
+        // Not older messages: scrolling up in the chat asks for them.
+        for job in pending.jobs where job.mode == .latest && !isPending(job.threadID) {
+            queue.append(job)
+            stateChanged(job.threadID)
+        }
+        for (threadID, date) in pending.retryAt where !isPending(threadID) {
+            retryLater(threadID, at: date)
+            stateChanged(threadID)
+        }
+        if !pending.jobs.isEmpty || !pending.retryAt.isEmpty {
+            CoreBridge.shared.log("WebHistoryImporter: resuming \(pending.jobs.count) imports, \(pending.retryAt.count) to check again")
+        }
+        runQueue()
     }
 
     /// When the encrypted chats were restored here last (kept across launches).
@@ -211,10 +247,12 @@ final class WebHistoryImporter {
         saved = Saved()
         log = []
         restoredAt = nil
+        UserDefaults.standard.removeObject(forKey: Self.pendingKey)
         NotificationCenter.default.post(name: Self.activityDidChange, object: self)
     }
 
     private func stateChanged(_ threadID: String) {
+        savePending()
         onStateChange?(threadID)
         NotificationCenter.default.post(name: Self.activityDidChange, object: self)
     }
@@ -307,6 +345,7 @@ final class WebHistoryImporter {
 
     /// The chats are loaded (at launch): soon after a restore, the recent chats' import goes on.
     func chatsLoaded() {
+        resumePending()
         if isRestoring {
             importRecentChats()
         } else if restoredAt == nil {
@@ -418,11 +457,13 @@ final class WebHistoryImporter {
         log.insert(record, at: 0)
     }
 
-    private func retryLater(_ threadID: String) {
-        retryAt[threadID] = Date().addingTimeInterval(Self.retryDelay)
+    /// Imports the chat again at `date` (by default after `retryDelay`).
+    private func retryLater(_ threadID: String, at date: Date? = nil) {
+        let date = date ?? Date().addingTimeInterval(Self.retryDelay)
+        retryAt[threadID] = date
         let generation = self.generation
         Task {
-            try? await Task.sleep(for: .seconds(Self.retryDelay))
+            try? await Task.sleep(for: .seconds(max(0, date.timeIntervalSinceNow)))
             // Opened meanwhile (imported then), or logged out.
             guard generation == self.generation, retryAt.removeValue(forKey: threadID) != nil else { return }
             if !queue.contains(where: { $0.threadID == threadID }) {
