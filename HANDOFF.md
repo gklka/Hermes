@@ -18,7 +18,7 @@ These come from the user's global `~/.claude/CLAUDE.md` plus feedback given duri
 - **Don't commit or push** unless explicitly asked. When asked, commit and push to `main` directly (no branches).
 - **Always edit files with Edit/Write**, never sed/perl/heredocs in Bash. The user wants inline diffs.
 - Be careful with debug logs: no force-unwraps, and only log values that are actually accessible.
-- **Always build, install and relaunch after every change** (`Support/install.sh`), without asking. But not while an import is running (the web history import can take minutes; check `core.log` first). A relaunch once interrupted an import.
+- **Always build, install and relaunch after every change** (`Support/install.sh`), without asking. A running web history import doesn't need to finish first: the queue is kept and resumes at the next launch (a chat stopped part way is read again).
 - Don't drive the screen (osascript clicks, screencapture) to test; ask the user to try things instead.
 - **Off-limits:** don't help reverse-engineer Meta's PIN-protected encrypted backup ("Labyrinth"). That was declined. The hidden-WebView approach below is what the user chose instead.
 
@@ -27,11 +27,6 @@ These come from the user's global `~/.claude/CLAUDE.md` plus feedback given duri
 1. Install Xcode 26+ and Go (`brew install go`). `Support/build-core.sh` adds `/opt/homebrew/bin` and `/usr/local/go/bin` to `PATH`.
 2. **Day to day: `Support/install.sh`.** It builds Release, installs it to `/Applications`, unregisters the build-folder copies, relaunches the app, and restarts `intelligenceflowd` (Siri/Shortcuts keep an app's old actions until it restarts). Siri and Shortcuts need a team-signed app with only one registered copy.
    - `DEVELOPER_DIR` defaults to `/Applications/Xcode 27.1.app` in the script; override it on another machine.
-   - Before installing, wait for a running import to finish:
-     ```sh
-     L() { grep -o '"message":"WebHistoryImporter[^"]*' ~/Library/Application\ Support/Hermes/core.log | tail -1; }
-     until L | grep -qE "imported|skipped|collected|empty"; do sleep 5; done; Support/install.sh
-     ```
 3. Go checks:
    ```sh
    cd Core && CC="xcrun --sdk macosx clang" go vet . && go test -run 'TestSearchFold|TestParseAge|TestAvatarKey|TestWebMessageID|TestUnrestoredPlaceholder|TestWithoutEmoji' .
@@ -97,9 +92,9 @@ Share extension (ShareExtension/) ──App Group files + hermes:// URL──▶
 - `Login/LoginWindowController.swift`: facebook.com login in a WKWebView; captures the cookies.
 - `Util/`: `ImageCache`, `AvatarView`, `Formatters`, `LinkPreviews`, `ChatExport` (Markdown transcript), `SpotlightIndex`, `ShareSupport`, `DockBadge`, `ImageSize`, `Debouncer`, `ViewHelpers` (snapshots, fades, popovers, confirm alerts, `Facebook` URLs).
 - **`WebSync/`**: the hidden web view.
-  - `WebSyncController.swift`: a hidden `WKWebView` with a persistent data store (UUID `6F1C2B7E-4E1A-4C55-9B7A-2D0E7F9A1C31`). It **must use a Safari user agent** (a fake Chrome one broke the PIN restore). Embedded invisibly in the chat pane so WebKit doesn't throttle it. `withExclusiveAccess`, `navigate(toPath:)`, `evaluate`.
+  - `WebSyncController.swift`: a hidden `WKWebView` with a persistent data store (UUID `6F1C2B7E-4E1A-4C55-9B7A-2D0E7F9A1C31`). It **must use a Safari user agent** (a fake Chrome one broke the PIN restore). Embedded invisibly in the chat pane so WebKit doesn't throttle it. The page is told it's hidden (so it doesn't mark messages read) and doesn't load Facebook's pictures and videos (a content rule). `withExclusiveAccess`, `navigate(toPath:)`, `evaluate`.
   - `WebChatImporter.swift`: at launch and every 10 minutes, reads the encrypted chats the web chat list shows at first; scrolling the sidebar to its bottom reads the web list's next page (`loadMore`), as on the web. The sidebar shows as many chats as the web list has loaded (`listedChats`; all of them while searching).
-  - `WebHistoryImporter.swift`: when an encrypted 1:1 chat opens, scrolls its web chat back and collects messages, pictures, links and reactions.
+  - `WebHistoryImporter.swift`: when an encrypted 1:1 chat opens, scrolls its web chat back and collects messages, pictures, links and reactions. Its queue (and scheduled re-checks) is kept in UserDefaults and resumes at launch. After a new login it checks whether the PIN restore is needed (the chat list's restore banner).
   - `WebThemeReader.swift`: an encrypted chat's theme, from the web app.
   - `WebDOMInspector.swift`: dev hooks (`defaults write <bundle ID> WebDumpEnabled -bool YES`; `webeval.js` in the data folder runs in the page).
 - **`Calls/`**: audio and video calls through the hidden web view (Meta's calling has no open implementation).
@@ -128,6 +123,6 @@ Working:
 Known limitations:
 - Siri can't send: Apple's messages-schema intents never received a recipient (macOS 27.1), so they were removed.
 - Encrypted chats further down the web chat list are matched only once the sidebar is scrolled down to them.
-- History import: about 400 messages per chat; preview-quality photos; no stickers, voice or video; 1:1 chats only.
+- History import: about 400 messages when a chat is opened, 40 for the recent chats imported in the background after a restore (scrolling up loads more); preview-quality photos; no stickers, voice or video; 1:1 chats only.
 - Opening a chat in the web view may mark it read on Messenger.
 - Each picture is sent as its own message (no albums).
