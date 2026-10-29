@@ -326,7 +326,11 @@ final class MessageCellView: NSTableCellView {
         if let badgeAnchor {
             anchorBadge(to: badgeAnchor, outgoing: outgoing)
         }
-        reactionsBadge.configure(emojis: emojis, highlighted: message.reactions.contains { $0.senderID == store.account?.id })
+        reactionsBadge.configure(
+            emojis: emojis, highlighted: message.reactions.contains { $0.senderID == store.account?.id },
+            // A gradient theme's lower color, as on the compose bar.
+            highlight: layout.outgoingColors.last ?? BubbleColors.outgoing
+        )
 
         // Spacing: tight within a run, looser between runs, extra room for tapbacks.
         let top: CGFloat = layout.isFirstInGroup ? 8 : 1

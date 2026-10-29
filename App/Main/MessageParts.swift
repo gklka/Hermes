@@ -201,15 +201,16 @@ final class ReactionsBadge: NSView {
         return true
     }
 
-    /// Up to three different emoji, and the count when more than one person reacted.
-    func configure(emojis: [String], highlighted: Bool) {
+    /// Up to three different emoji, and the count when more than one person reacted. With your
+    /// reaction among them, it's in `highlight` (the chat's color).
+    func configure(emojis: [String], highlighted: Bool, highlight: NSColor = BubbleColors.outgoing) {
         var unique: [String] = []
         for emoji in emojis where !unique.contains(emoji) {
             unique.append(emoji)
         }
         let countSuffix = emojis.count > 1 ? " \(emojis.count)" : ""
         label.stringValue = unique.prefix(3).joined() + countSuffix
-        background.color = highlighted ? BubbleColors.outgoing : BubbleColors.incoming
+        background.color = highlighted ? highlight : BubbleColors.incoming
         background.layer?.borderColor = NSColor.windowBackgroundColor.cgColor
         label.textColor = highlighted ? .white : .labelColor
     }
