@@ -17,7 +17,9 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
 
     /// Fixed so the restored web app state survives relaunches.
     private static let storeID = UUID(uuidString: "6F1C2B7E-4E1A-4C55-9B7A-2D0E7F9A1C31")!
-    static let messagesURL = URL(string: "https://www.facebook.com/messages/")!
+    /// Messenger's "new message" page: the chat list, and no chat open (see `park`).
+    static let idlePath = "/messages/new/"
+    static let messagesURL = URL(string: "https://www.facebook.com\(idlePath)")!
 
     /// The page doesn't load Facebook's pictures and videos (profile pictures, link cards,
     /// stickers): the importers read their addresses, and download a link card's picture
@@ -29,9 +31,9 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
       "action": {"type": "block"}}]
     """#
 
-    /// The page always has a chat open (/messages/ opens the latest one), and the web app reads
-    /// new messages in a chat that's on screen: they'd be read before they notify here. So the
-    /// page is told it's hidden and unfocused. Not call popups (they have an opener and other paths).
+    /// The web app reads new messages in a chat that's on screen: they'd be read before they
+    /// notify here. So the page is told it's hidden and unfocused (which isn't enough: it also
+    /// keeps no chat open, see `park`). Not call popups (they have an opener and other paths).
     private static let neverReadScript = WKUserScript(source: """
     (() => {
         if (window.opener || !location.pathname.startsWith('/messages')) return;
@@ -284,8 +286,9 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
     private var session = 0
 
     /// Runs `body` while no other importer is driving the page (they navigate it). Throws if
-    /// the session ends while waiting.
-    func withExclusiveAccess<T>(_ body: () async throws -> T) async throws -> T {
+    /// the session ends while waiting. Afterwards, if no other work waits, the page closes the
+    /// chat it opened (`park`), unless `parks` is false (a call's popup needs its chat).
+    func withExclusiveAccess<T>(parks: Bool = true, _ body: () async throws -> T) async throws -> T {
         if isBusy {
             try await withCheckedThrowingContinuation { busyWaiters.append($0) }
         }
@@ -300,7 +303,27 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
                 }
             }
         }
-        return try await body()
+        let result: Result<T, Error>
+        do {
+            result = .success(try await body())
+        } catch {
+            result = .failure(error)
+        }
+        if parks, session == self.session, busyWaiters.isEmpty {
+            await park()
+        }
+        return try result.get()
+    }
+
+    /// The web app reads new messages in the chat it has open (telling it that it's hidden
+    /// doesn't stop it), so they'd be read before they notify here. Between importers' work,
+    /// it shows the "new message" page instead: no chat open. Not while the user is entering
+    /// the PIN in its window.
+    private func park() async {
+        guard window?.isVisible != true, let path = webView.url?.path,
+              path.hasPrefix("/messages/"), !path.hasPrefix(Self.idlePath) else { return }
+        await navigate(toPath: Self.idlePath)
+        CoreBridge.shared.log("WebSync: parked at \(webView.url?.path ?? "nil")")
     }
 
     /// Opens a path in the web app: client-side if a link to it is on the page, otherwise by loading it.

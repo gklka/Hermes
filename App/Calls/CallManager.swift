@@ -52,7 +52,8 @@ final class CallManager: NSObject, WKUIDelegate, WKScriptMessageHandler {
                 guard await web.start(showWindow: false) else { throw CallError.notLoggedIn }
                 guard let path = await ChatStore.shared.webPath(for: threadID) else { throw CallError.chatNotOnWeb }
                 let web = web
-                let clicked = try await web.withExclusiveAccess {
+                // The call's popup needs its chat to stay open in the page.
+                let clicked = try await web.withExclusiveAccess(parks: false) {
                     // The window may have been closed while waiting for the page.
                     guard self.pendingWindow === window else { return false }
                     await web.navigate(toPath: path)
