@@ -119,8 +119,12 @@ final class ActivityWindowController: NSWindowController, NSTableViewDataSource,
         let sections: [(WebHistoryImporter.ActivityItem.Section, String)] = [(.upNext, "Up Next"), (.now, "Now"), (.done, "Done")]
         for (section, title) in sections {
             var inSection = items.filter { $0.section == section }
-            if section == .done {
-                inSection.sort { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
+            // One timeline from the top: the furthest of what's next, down to the next one, what
+            // runs now, then what's done, most recent first.
+            switch section {
+            case .upNext: inSection.reverse()
+            case .now: break
+            case .done: inSection.sort { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
             }
             guard !inSection.isEmpty else { continue }
             rows.append(.header(title))
