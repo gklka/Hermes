@@ -115,28 +115,46 @@ extension ChatViewController {
     // MARK: - Moving rows
 
     /// What identifies a row across reloads, for sliding it: messages and the typing bubble by
-    /// their key, statuses by status and message, date separators by their text. (Read pictures
-    /// fly on their own.)
+    /// their key, statuses by status and message, date separators and system messages by their
+    /// text (and which of the same text it is), polls by their message, read pictures by the
+    /// message they're under (when they move to another one, they fly on their own).
     private static func slideKeys(in rows: [Row]) -> [Int: String] {
         var keys = statusKeys(in: rows)
-        for (index, row) in rows.enumerated() {
-            if let key = rowKey(row) {
-                keys[index] = key
-            } else if case .separator(let text) = row {
-                keys[index] = "separator:\(text)"
+        var seen: [String: Int] = [:]
+        var messageID = ""
+        for (index, row) in rows.enumerated() where keys[index] == nil {
+            let key: String
+            switch row {
+            case .message(let message, _):
+                messageID = message.id
+                key = rowKey(row) ?? message.id
+            case .separator(let text): key = "separator:\(text)"
+            case .caption(let text, _): key = "caption:\(text)"
+            case .pollCard(let message, _): key = "poll:\(message.id)"
+            case .readers: key = "readers:\(messageID)"
+            case .restore: key = "restore"
+            case .loading: key = "loading"
+            default:
+                guard let rowKey = rowKey(row) else { continue }
+                key = rowKey
             }
+            let count = seen[key, default: 0]
+            seen[key] = count + 1
+            keys[index] = count == 0 ? key : "\(key)#\(count)"
         }
         return keys
     }
 
-    /// Where the visible rows are on screen (their top in the clip view), by slide key.
+    /// Where the visible rows are on screen (their bottom in the clip view), by slide key. The
+    /// bottom, as a message's bubble sits there: room added above it (for a reaction badge)
+    /// leaves the bubble where it was.
     func rowPositionsOnScreen() -> [String: CGFloat] {
         var positions: [String: CGFloat] = [:]
         let keys = Self.slideKeys(in: rows)
         let top = scrollView.contentView.bounds.minY
         for row in visibleRowIndices {
             if let key = keys[row] {
-                positions[key] = tableView.rect(ofRow: row).minY - top
+                positions[key] = tableView.rect(ofRow: row).maxY - top
             }
         }
         return positions
@@ -153,7 +171,7 @@ extension ChatViewController {
             guard let key = keys[row], !appearing.contains(key), let old = before[key],
                   let rowView = tableView.rowView(atRow: row, makeIfNecessary: false) else { continue }
             let frame = rowView.frame
-            let offset = old - (frame.minY - top)
+            let offset = old - (frame.maxY - top)
             guard abs(offset) > 0.5 else { continue }
             rowView.wantsLayer = true
             // A layer-backed view's layer position is its frame's origin.

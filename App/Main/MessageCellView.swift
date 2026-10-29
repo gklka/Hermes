@@ -601,6 +601,16 @@ final class MessageCellView: NSTableCellView {
         column.animateAppearance()
     }
 
+    /// A reaction was added: the badge pops in, or bounces if it was already there.
+    func animateReactionAdded(badgeWasShown: Bool) {
+        guard !reactionsBadge.isHidden else { return }
+        if badgeWasShown {
+            reactionsBadge.animateBounce()
+        } else {
+            reactionsBadge.animateAppearance()
+        }
+    }
+
     // MARK: - Typing
 
     /// The typing indicator: just the incoming bubble with the dots, where the next message

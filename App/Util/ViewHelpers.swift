@@ -33,24 +33,33 @@ extension NSView {
     /// A new message or typing bubble arriving: zooms up from its center with a little spring,
     /// fading in.
     func animateAppearance() {
+        springScale(from: 0.5, damping: 18, key: "appear.zoom")
+        layer?.add(CABasicAnimation.fade(from: 0, to: 1, duration: 0.18, timing: .easeOut), forKey: "appear.fade")
+    }
+
+    /// Something in the view changed (e.g. a reaction added to a badge): it bounces.
+    func animateBounce() {
+        springScale(from: 1.3, damping: 10, key: "bounce")
+    }
+
+    /// Springs the view from `scale` to its size, around its center.
+    private func springScale(from scale: CGFloat, damping: CGFloat, key: String) {
         wantsLayer = true
         guard let layer else { return }
         // Layer-backed views scale around their corner; move the scaling to the center.
         let center = CGPoint(x: layer.bounds.midX, y: layer.bounds.midY)
         var from = CATransform3DMakeTranslation(center.x, center.y, 0)
-        from = CATransform3DScale(from, 0.5, 0.5, 1)
+        from = CATransform3DScale(from, scale, scale, 1)
         from = CATransform3DTranslate(from, -center.x, -center.y, 0)
 
         let zoom = CASpringAnimation(keyPath: "transform")
         zoom.fromValue = from
         zoom.toValue = CATransform3DIdentity
-        zoom.damping = 18
+        zoom.damping = damping
         zoom.stiffness = 300
         zoom.mass = 1
         zoom.duration = zoom.settlingDuration
-
-        layer.add(zoom, forKey: "appear.zoom")
-        layer.add(CABasicAnimation.fade(from: 0, to: 1, duration: 0.18, timing: .easeOut), forKey: "appear.fade")
+        layer.add(zoom, forKey: key)
     }
 
     /// Fades the view in from transparent (e.g. a row's content that just appeared).

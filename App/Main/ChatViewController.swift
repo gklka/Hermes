@@ -725,6 +725,7 @@ final class ChatViewController: NSViewController {
         appearing = appearing.intersection(shown).union(fresh)
         shownKeys = shown
         shownThreadID = threadID
+        let reactionsBefore = sameChat ? Self.reactions(in: rows) : [:]
         rows = newRows
         tableView.reloadData()
         tableView.layoutSubtreeIfNeeded()
@@ -757,6 +758,9 @@ final class ChatViewController: NSViewController {
         if sameChat, !moved.isEmpty {
             slideReaders(moved, from: readerFramesBefore)
         }
+        if sameChat {
+            animateAddedReactions(since: reactionsBefore)
+        }
         // The spinner at the top is on screen without scrolling (the chat is short): no scroll
         // will ask for what's older, so it's asked for now.
         let importer = WebHistoryImporter.shared
@@ -769,6 +773,29 @@ final class ChatViewController: NSViewController {
                 autoLoadedOlder = threadID
                 DispatchQueue.main.async { [weak self] in self?.scrolled() }
             }
+        }
+    }
+
+    /// The reactions on each message shown, by message ID.
+    private static func reactions(in rows: [Row]) -> [String: Set<Reaction>] {
+        var reactions: [String: Set<Reaction>] = [:]
+        for case let .message(message, _) in rows {
+            reactions[message.id] = Set(message.reactions)
+        }
+        return reactions
+    }
+
+    /// Messages on screen that got a reaction since `before`: their badge pops in, or bounces.
+    private func animateAddedReactions(since before: [String: Set<Reaction>]) {
+        let visible = tableView.rows(in: tableView.visibleRect)
+        guard visible.length > 0 else { return }
+        for row in visible.location..<NSMaxRange(visible) {
+            guard case let .message(message, _) = rows[row],
+                  let old = before[message.id],
+                  !Set(message.reactions).isSubset(of: old),
+                  let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? MessageCellView
+            else { continue }
+            cell.animateReactionAdded(badgeWasShown: !old.isEmpty)
         }
     }
 }
