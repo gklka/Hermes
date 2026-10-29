@@ -7,6 +7,7 @@ final class AvatarView: NSView {
     private let imageLayer = CALayer()
     private let initialsLabel = NSTextField(labelWithString: "")
     private var currentURL: String?
+    private var currentName: String?
     /// The picture shown, and the pixel size it was drawn at for the layer.
     private var image: NSImage?
     private var drawnPixels = 0
@@ -71,27 +72,40 @@ final class AvatarView: NSView {
     func configure(name: String, url: String?) {
         initialsLabel.stringValue = RoundAvatar.initials(of: name)
         guard url != currentURL else { return }
+        // The same person with a new link (Facebook's change on every sync, and the web app's
+        // differ from the sync's): their picture stays until the new one is loaded, instead of
+        // blinking to the initials.
+        let keepsPicture = name == currentName && image != nil && url != nil
+        currentName = name
         currentURL = url
+        guard let url, let parsed = URL(string: url) else {
+            clear()
+            return
+        }
+        if let stored = ImageCache.shared.stored(parsed) {
+            // In memory or on disk (e.g. a reused cell): swap in place with no fade.
+            show(stored, animated: false)
+            return
+        }
+        if !keepsPicture { clear() }
+        Task { [weak self] in
+            let image = await ImageCache.shared.image(for: parsed)
+            guard let self, self.currentURL == url, let image else { return }
+            // Loaded asynchronously: fade it in (not over the person's previous picture).
+            self.show(image, animated: !keepsPicture)
+        }
+    }
+
+    /// No picture: the initials. No fade: this runs on cell reuse, where the old picture should
+    /// vanish at once.
+    private func clear() {
         image = nil
         drawnPixels = 0
-        // No fade: this runs on cell reuse, where the old picture should vanish at once.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         imageLayer.contents = nil
         CATransaction.commit()
         initialsLabel.isHidden = false
-        guard let url, let parsed = URL(string: url) else { return }
-        if let cached = ImageCache.shared.cached(parsed) {
-            // Already in memory (e.g. a reused cell): swap in place with no fade.
-            show(cached, animated: false)
-            return
-        }
-        Task { [weak self] in
-            let image = await ImageCache.shared.image(for: parsed)
-            guard let self, self.currentURL == url, let image else { return }
-            // Loaded asynchronously: fade it in.
-            self.show(image, animated: true)
-        }
     }
 
     private func show(_ image: NSImage, animated: Bool) {
