@@ -340,7 +340,11 @@ final class MessageCellView: NSTableCellView {
 
         alphaValue = message.status == .pending ? 0.6 : 1
         failedIcon.isHidden = message.status != .failed
-        toolTip = Formatters.messageTime(message.date) + (message.isEdited ? " (edited)" : "")
+        // Over the message itself, not the empty space beside it.
+        let time = Formatters.messageTime(message.date) + (message.isEdited ? " (edited)" : "")
+        for view in [bubble, attachmentsStack, linkCard] as [NSView] {
+            view.toolTip = time
+        }
     }
 
     /// The quote of the message replied to, on its sender's side (mine on the right). A reply on
@@ -629,7 +633,7 @@ final class MessageCellView: NSTableCellView {
         bubble.gradientColors = nil
         bubble.layer?.borderWidth = 0
         alphaValue = 1
-        toolTip = nil
+        bubble.toolTip = nil
         needsLayout = true
     }
 
