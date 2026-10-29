@@ -19,12 +19,25 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
     private static let storeID = UUID(uuidString: "6F1C2B7E-4E1A-4C55-9B7A-2D0E7F9A1C31")!
     static let messagesURL = URL(string: "https://www.facebook.com/messages/")!
 
+    /// The page always has a chat open (/messages/ opens the latest one), and the web app reads
+    /// new messages in a chat that's on screen: they'd be read before they notify here. So the
+    /// page is told it's hidden and unfocused. Not call popups (they have an opener and other paths).
+    private static let neverReadScript = WKUserScript(source: """
+    (() => {
+        if (window.opener || !location.pathname.startsWith('/messages')) return;
+        Object.defineProperty(Document.prototype, 'hidden', { configurable: true, get: () => true });
+        Object.defineProperty(Document.prototype, 'visibilityState', { configurable: true, get: () => 'hidden' });
+        Document.prototype.hasFocus = () => false;
+    })();
+    """, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+
     private init() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = WKWebsiteDataStore(forIdentifier: Self.storeID)
         if UserDefaults.standard.bool(forKey: "WebNetLog") {
             config.userContentController.addUserScript(WebDOMInspector.networkLogScript)
         }
+        config.userContentController.addUserScript(Self.neverReadScript)
         CallManager.install(in: config)
         WebCapture.install(in: config)
         webView = InvisibleWhenTransparentWebView(frame: NSRect(x: 0, y: 0, width: 1100, height: 800), configuration: config)
