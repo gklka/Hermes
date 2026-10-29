@@ -7,6 +7,17 @@ final class AvatarView: NSView {
     private let imageLayer = CALayer()
     private let initialsLabel = NSTextField(labelWithString: "")
     private var currentURL: String?
+    /// The picture shown, and the pixel size it was drawn at for the layer.
+    private var image: NSImage?
+    private var drawnPixels = 0
+    /// Pictures drawn at the size they're shown, by size and URL. Setting an NSImage as the
+    /// layer's contents redrew the full-size picture on the main thread for every new layer, which
+    /// made busy lists (the chat list and the Activity window during the first sync) slow.
+    private static let drawn: NSCache<NSString, CGImage> = {
+        let cache = NSCache<NSString, CGImage>()
+        cache.countLimit = 1000
+        return cache
+    }()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -44,12 +55,25 @@ final class AvatarView: NSView {
         imageLayer.frame = bounds
         CATransaction.commit()
         initialsLabel.font = .systemFont(ofSize: max(9, bounds.height * 0.4), weight: .medium)
+        if image != nil, pixels != drawnPixels { applyImage(animated: false) }
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        needsLayout = true
+    }
+
+    /// The picture's size in pixels: the view's, on its screen.
+    private var pixels: Int {
+        Int((max(bounds.width, bounds.height) * (window?.backingScaleFactor ?? 2)).rounded(.up))
     }
 
     func configure(name: String, url: String?) {
         initialsLabel.stringValue = RoundAvatar.initials(of: name)
         guard url != currentURL else { return }
         currentURL = url
+        image = nil
+        drawnPixels = 0
         // No fade: this runs on cell reuse, where the old picture should vanish at once.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -71,7 +95,27 @@ final class AvatarView: NSView {
     }
 
     private func show(_ image: NSImage, animated: Bool) {
-        let contents = image.layerContents(forContentsScale: window?.backingScaleFactor ?? 2)
+        self.image = image
+        initialsLabel.isHidden = true
+        applyImage(animated: animated)
+    }
+
+    /// Puts the picture in the layer, drawn at the view's size (again when that changes).
+    private func applyImage(animated: Bool) {
+        let pixels = pixels
+        // Not laid out yet: layout() draws it.
+        guard let image, let currentURL, pixels > 0 else { return }
+        drawnPixels = pixels
+        // Facebook's links change on every sync; ImageCache's key doesn't.
+        let key = "\(pixels)|\(URL(string: currentURL).map(ImageCache.key(for:)) ?? currentURL)" as NSString
+        let contents: CGImage
+        if let drawn = Self.drawn.object(forKey: key) {
+            contents = drawn
+        } else {
+            guard let drawn = Self.draw(image, pixels: pixels) else { return }
+            Self.drawn.setObject(drawn, forKey: key)
+            contents = drawn
+        }
         if animated {
             imageLayer.contents = contents
         } else {
@@ -80,7 +124,22 @@ final class AvatarView: NSView {
             imageLayer.contents = contents
             CATransaction.commit()
         }
-        initialsLabel.isHidden = true
+    }
+
+    /// The picture filling a square of the given size, like `.resizeAspectFill`.
+    private static func draw(_ image: NSImage, pixels: Int) -> CGImage? {
+        guard let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let context = CGContext(data: nil, width: pixels, height: pixels, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        let width = CGFloat(source.width), height = CGFloat(source.height)
+        let scale = CGFloat(pixels) / min(width, height)
+        let size = CGSize(width: width * scale, height: height * scale)
+        context.interpolationQuality = .high
+        context.draw(source, in: CGRect(x: (CGFloat(pixels) - size.width) / 2, y: (CGFloat(pixels) - size.height) / 2,
+                                        width: size.width, height: size.height))
+        return context.makeImage()
     }
 }
 

@@ -10,6 +10,15 @@ final class ActivityWindowController: NSWindowController, NSTableViewDataSource,
     private enum Row {
         case header(String)
         case item(WebHistoryImporter.ActivityItem)
+
+        /// Which row this is, apart from its changing details (progress, times), so a refresh
+        /// only inserts and removes the rows that come and go.
+        var id: String {
+            switch self {
+            case .header(let title): return "header|\(title)"
+            case .item(let item): return "\(item.section)|\(item.kind)|\(item.threadID ?? item.name ?? "")|\(item.title)"
+            }
+        }
     }
 
     private let tableView = NSTableView()
@@ -98,10 +107,15 @@ final class ActivityWindowController: NSWindowController, NSTableViewDataSource,
         timer = nil
     }
 
+    /// Runs every second while the panel is open and on every activity change, so it doesn't
+    /// reload the table: that recreated every row and redrew its picture each time (slow while
+    /// the first sync fills the panel). Rows that come and go are inserted and removed, and the
+    /// visible ones are updated in place.
     @objc private func refresh() {
         guard window?.isVisible == true else { return }
         let items = WebChatImporter.shared.activityItems + WebHistoryImporter.shared.activityItems
-        rows = []
+        let oldIDs = rows.map(\.id)
+        var rows: [Row] = []
         let sections: [(WebHistoryImporter.ActivityItem.Section, String)] = [(.upNext, "Up Next"), (.now, "Now"), (.done, "Done")]
         for (section, title) in sections {
             var inSection = items.filter { $0.section == section }
@@ -112,8 +126,29 @@ final class ActivityWindowController: NSWindowController, NSTableViewDataSource,
             rows.append(.header(title))
             rows += inSection.map { .item($0) }
         }
+        self.rows = rows
         emptyLabel.isHidden = !rows.isEmpty
-        tableView.reloadData()
+        let changes = rows.map(\.id).difference(from: oldIDs)
+        if !changes.isEmpty {
+            var removed = IndexSet(), inserted = IndexSet()
+            for change in changes {
+                switch change {
+                case .remove(let offset, _, _): removed.insert(offset)
+                case .insert(let offset, _, _): inserted.insert(offset)
+                }
+            }
+            tableView.beginUpdates()
+            tableView.removeRows(at: removed, withAnimation: [])
+            tableView.insertRows(at: inserted, withAnimation: [])
+            tableView.endUpdates()
+        }
+        var resized = IndexSet()
+        for row in Range(tableView.rows(in: tableView.visibleRect)) ?? 0..<0 where rows.indices.contains(row) {
+            guard case .item(let item) = rows[row],
+                  let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false) as? ActivityCellView else { continue }
+            if cell.configure(item) { resized.insert(row) }
+        }
+        if !resized.isEmpty { tableView.noteHeightOfRows(withIndexesChanged: resized) }
     }
 
     @objc private func openChat() {
@@ -254,7 +289,10 @@ private final class ActivityCellView: NSTableCellView {
         super.layout()
     }
 
-    func configure(_ item: WebHistoryImporter.ActivityItem) {
+    /// Returns whether the row's height may have changed (its status or progress bar).
+    @discardableResult
+    func configure(_ item: WebHistoryImporter.ActivityItem) -> Bool {
+        let oldStatus = statusLabel.stringValue, wasRunning = !progressBar.isHidden
         if let threadID = item.threadID {
             let conversation = ChatStore.shared.conversation(threadID)
             let name = conversation?.name ?? "Chat \(threadID)"
@@ -303,6 +341,7 @@ private final class ActivityCellView: NSTableCellView {
         nameLabel.textColor = past ? .secondaryLabelColor : .labelColor
         avatar.alphaValue = past ? 0.6 : 1
         symbol.alphaValue = past ? 0.6 : 1
+        return statusLabel.stringValue != oldStatus || running != wasRunning
     }
 
     /// "Older messages · 10:57, took 23 s".
