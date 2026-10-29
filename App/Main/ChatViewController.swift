@@ -39,6 +39,8 @@ final class ChatViewController: NSViewController {
     var rows: [Row] = []
     private var cancellables: Set<AnyCancellable> = []
     private var lastConversation: Conversation?
+    /// Checks for the user coming back while the chat on screen waits to be read.
+    private var idleTimer: Timer?
     private var lastBubbleMaxWidth: CGFloat = 0
 
     /// Measured row heights, for the current bubble width.
@@ -447,26 +449,66 @@ final class ChatViewController: NSViewController {
             .map { MentionCandidate(id: $0.id, name: $0.name, avatarURL: $0.avatarURL) }
     }
 
-    /// The chat is in front of the user: its window is the active app's key window, and showing.
+    /// The chat is in front of the user, who is there: shown, and the computer isn't idle (a
+    /// chat left open on an unattended Mac isn't being read).
     var isOnScreen: Bool {
+        isShown && !Self.isUserIdle
+    }
+
+    /// Its window is the active app's key window, and showing.
+    private var isShown: Bool {
         guard threadID != nil, let window = view.window else { return false }
         return NSApp.isActive && window.isKeyWindow && !window.isMiniaturized && window.occlusionState.contains(.visible)
     }
 
+    /// No keyboard, mouse or trackpad input for this long: the user is away.
+    private static let idleAfter: TimeInterval = 5 * 60
+
+    private static var isUserIdle: Bool {
+        let anyInput = CGEventType(rawValue: ~0) ?? .mouseMoved
+        return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput) > idleAfter
+    }
+
     @objc private func maybeBecameVisible(_ notification: Notification) {
         if let window = notification.object as? NSWindow, window !== view.window { return }
+        readIfOnScreen()
+    }
+
+    /// The chat is read now, and its notifications go.
+    private func readIfOnScreen() {
         guard isOnScreen, let threadID else { return }
         markReadIfVisible()
         Notifier.shared.clear(threadID: threadID)
     }
 
     func markReadIfVisible() {
-        guard let threadID, isOnScreen else { return }
+        guard let threadID, isShown else { return }
+        guard !Self.isUserIdle else {
+            readWhenUserReturns()
+            return
+        }
         // Its new reactions are seen too (they count in the Dock badge).
         store.clearUnseenReactions(threadID)
         guard !store.markedUnread.contains(threadID),
               let conversation = store.conversation(threadID), conversation.unreadCount > 0 else { return }
         store.markRead(threadID)
+    }
+
+    /// The chat on screen while the user is away: read once there's input again (and it's
+    /// still on screen).
+    private func readWhenUserReturns() {
+        guard idleTimer == nil else { return }
+        idleTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self, !Self.isUserIdle else {
+                    if self == nil { timer.invalidate() }
+                    return
+                }
+                timer.invalidate()
+                self.idleTimer = nil
+                self.readIfOnScreen()
+            }
+        }
     }
 
     private func updateEmptyState() {
