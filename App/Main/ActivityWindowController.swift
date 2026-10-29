@@ -12,18 +12,29 @@ final class ActivityWindowController: NSWindowController, NSTableViewDataSource,
         case item(WebHistoryImporter.ActivityItem)
 
         /// Which row this is, apart from its changing details (progress, times), so a refresh
-        /// only inserts and removes the rows that come and go.
+        /// only moves, inserts and removes the rows that change. An import keeps its ID from Up
+        /// Next to Now (so it moves there); a finished one is identified by when it ended.
         var id: String {
             switch self {
             case .header(let title): return "header|\(title)"
-            case .item(let item): return "\(item.section)|\(item.kind)|\(item.threadID ?? item.name ?? "")|\(item.title)"
+            case .item(let item):
+                let key = Self.key(of: item)
+                guard item.section == .done else { return "live|\(key)" }
+                return "done|\(key)|\(item.date?.timeIntervalSinceReferenceDate ?? 0)"
             }
+        }
+
+        /// The chat (or the chat list) an item is about.
+        static func key(of item: WebHistoryImporter.ActivityItem) -> String {
+            item.threadID ?? item.name ?? ""
         }
     }
 
     private let tableView = NSTableView()
     private let emptyLabel = NSTextField(labelWithString: "No Activity")
     private var rows: [Row] = []
+    /// The rows' IDs (Row.id, numbered where one repeats), as the table shows them.
+    private var rowIDs: [String] = []
     /// Counts down the retries and ages the times while the panel is open.
     private var timer: Timer?
 
@@ -114,7 +125,7 @@ final class ActivityWindowController: NSWindowController, NSTableViewDataSource,
     @objc private func refresh() {
         guard window?.isVisible == true else { return }
         let items = WebChatImporter.shared.activityItems + WebHistoryImporter.shared.activityItems
-        let oldIDs = rows.map(\.id)
+        let oldIDs = rowIDs
         var rows: [Row] = []
         let sections: [(WebHistoryImporter.ActivityItem.Section, String)] = [(.upNext, "Up Next"), (.now, "Now"), (.done, "Done")]
         for (section, title) in sections {
@@ -130,21 +141,20 @@ final class ActivityWindowController: NSWindowController, NSTableViewDataSource,
             rows.append(.header(title))
             rows += inSection.map { .item($0) }
         }
+        // A chat both running and queued again (e.g. refreshed while it's read): its rows need
+        // IDs of their own.
+        var counts: [String: Int] = [:]
+        let newIDs = rows.map { row in
+            let id = row.id
+            let count = counts[id, default: 0] + 1
+            counts[id] = count
+            return count > 1 ? "\(id)#\(count)" : id
+        }
         self.rows = rows
+        rowIDs = newIDs
         emptyLabel.isHidden = !rows.isEmpty
-        let changes = rows.map(\.id).difference(from: oldIDs)
-        if !changes.isEmpty {
-            var removed = IndexSet(), inserted = IndexSet()
-            for change in changes {
-                switch change {
-                case .remove(let offset, _, _): removed.insert(offset)
-                case .insert(let offset, _, _): inserted.insert(offset)
-                }
-            }
-            tableView.beginUpdates()
-            tableView.removeRows(at: removed, withAnimation: [])
-            tableView.insertRows(at: inserted, withAnimation: [])
-            tableView.endUpdates()
+        if newIDs != oldIDs {
+            animateChanges(from: oldIDs, to: newIDs)
         }
         var resized = IndexSet()
         for row in Range(tableView.rows(in: tableView.visibleRect)) ?? 0..<0 where rows.indices.contains(row) {
@@ -153,6 +163,20 @@ final class ActivityWindowController: NSWindowController, NSTableViewDataSource,
             if cell.configure(item) { resized.insert(row) }
         }
         if !resized.isEmpty { tableView.noteHeightOfRows(withIndexesChanged: resized) }
+    }
+
+    /// Animates the table from the old rows to the new ones. A finished import's row moves down
+    /// to Done (its ID changes there).
+    private func animateChanges(from old: [String], to new: [String]) {
+        var current = old
+        let newSet = Set(new), oldSet = Set(old)
+        for (index, id) in current.enumerated() where id.hasPrefix("live|") && !newSet.contains(id) {
+            let key = id.dropFirst("live|".count)
+            if let finished = new.first(where: { $0.hasPrefix("done|\(key)|") && !oldSet.contains($0) && !current.contains($0) }) {
+                current[index] = finished
+            }
+        }
+        tableView.animateRowChanges(from: current, to: new)
     }
 
     @objc private func openChat() {

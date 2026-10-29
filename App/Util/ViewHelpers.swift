@@ -109,6 +109,33 @@ extension NSAlert {
     }
 }
 
+extension NSTableView {
+    /// Brings the table from rows with the `old` IDs to rows with the `new` ones (each unique)
+    /// with animated moves, insertions and removals. The rows that stay keep their views.
+    func animateRowChanges(from old: [String], to new: [String]) {
+        var current = old
+        let newSet = Set(new)
+        beginUpdates()
+        // Each change applies to the rows as they are after the ones before.
+        for index in current.indices.reversed() where !newSet.contains(current[index]) {
+            current.remove(at: index)
+            removeRows(at: [index], withAnimation: .effectFade)
+        }
+        for (index, id) in new.enumerated() {
+            if index < current.count, current[index] == id { continue }
+            if let from = current[index...].firstIndex(of: id) {
+                current.remove(at: from)
+                current.insert(id, at: index)
+                moveRow(at: from, to: index)
+            } else {
+                current.insert(id, at: index)
+                insertRows(at: [index], withAnimation: .effectFade)
+            }
+        }
+        endUpdates()
+    }
+}
+
 /// facebook.com addresses the app opens.
 enum Facebook {
     static let origin = "https://www.facebook.com"
