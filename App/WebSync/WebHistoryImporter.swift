@@ -432,7 +432,8 @@ final class WebHistoryImporter {
         case .complete:
             needsRestore.remove(threadID)
             isRestoreNeeded = false
-            done.insert(threadID)
+            // Nothing imported yet (an empty chat): opening it reads it again.
+            if saved.coverage[threadID] != nil { done.insert(threadID) }
             result = .done
         case .needsRestore:
             needsRestore.insert(threadID)
@@ -582,6 +583,9 @@ final class WebHistoryImporter {
             updateCoverage(threadID, job: job, result: result, reachedStart: reachedStart)
             let summary = Self.summary(job: job, result: result, reachedStart: reachedStart, imported: imported.imported, hadCoverage: coverage != nil)
             guard job.mode == .latest, isRestoring else { return (.complete, summary) }
+            // Nothing new: the web app has all of it now (an empty chat is read again when it's
+            // opened, in case its history comes later).
+            if imported.imported == 0 { return (.complete, summary) }
             // Nothing older than last time: that's all there is.
             let oldestNow = result.messages.compactMap { Self.timestamp(ofDOMID: $0.domID) }.min()
             defer { oldest[threadID] = oldestNow }
