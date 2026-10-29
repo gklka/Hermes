@@ -203,6 +203,9 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         NotificationCenter.default.addObserver(
             self, selector: #selector(updateLoadingRow), name: WebHistoryImporter.activityDidChange, object: WebChatImporter.shared
         )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(updateRestoreBanner), name: WebHistoryImporter.activityDidChange, object: WebHistoryImporter.shared
+        )
         reload()
     }
 
@@ -213,8 +216,8 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
     /// ⌘1–⌘9: selects the nth chat in the list as it's shown (filtered and searched).
     func selectConversation(at index: Int) {
         guard index < rows.count else { return }
-        tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
-        tableView.scrollRowToVisible(index)
+        tableView.selectRowIndexes(IndexSet(integer: tableRow(ofChat: index)), byExtendingSelection: false)
+        tableView.scrollRowToVisible(tableRow(ofChat: index))
     }
 
     /// Three-finger swipe up/down: the chat above (-1) or below (1) the open one.
@@ -240,7 +243,7 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         }
         reload()
         if let index = rows.firstIndex(where: { $0.id == threadID }) {
-            tableView.scrollRowToVisible(index)
+            tableView.scrollRowToVisible(tableRow(ofChat: index))
         }
     }
 
@@ -260,6 +263,7 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
                 && (query.isEmpty || $0.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil)
         }
         showsLoadingRow = WebChatImporter.shared.isLoadingMoreChats && query.isEmpty
+        showsRestoreBanner = WebHistoryImporter.shared.isRestoreNeeded && query.isEmpty && filter != .requests
         tableView.reloadData()
         // A list too short to scroll can't reach its bottom: load more right away, as the web does.
         if query.isEmpty, filter == .all, listed > 0, tableView.bounds.height <= scrollView.contentView.bounds.height {
@@ -276,13 +280,34 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
             }
         }
         if let selectedID, let index = rows.firstIndex(where: { $0.id == selectedID }) {
-            tableView.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            tableView.selectRowIndexes(IndexSet(integer: tableRow(ofChat: index)), byExtendingSelection: false)
         }
     }
 
     private func reloadRow(_ threadID: String) {
         guard let index = rows.firstIndex(where: { $0.id == threadID }) else { return }
-        tableView.reloadData(forRowIndexes: IndexSet(integer: index), columnIndexes: IndexSet(integer: 0))
+        tableView.reloadData(forRowIndexes: IndexSet(integer: tableRow(ofChat: index)), columnIndexes: IndexSet(integer: 0))
+    }
+
+    /// The restore banner, the first row while the encrypted chats need the PIN (it scrolls
+    /// with the chats).
+    private var showsRestoreBanner = false
+    private lazy var restoreBanner = RestoreBannerView()
+
+    @objc private func updateRestoreBanner() {
+        let shows = WebHistoryImporter.shared.isRestoreNeeded && searchField.stringValue.isEmpty && filter != .requests
+        if shows != showsRestoreBanner { reload() }
+    }
+
+    /// The table row of the chat at `index` in `rows` (after the banner).
+    private func tableRow(ofChat index: Int) -> Int {
+        index + (showsRestoreBanner ? 1 : 0)
+    }
+
+    /// The index in `rows` of the chat in a table row; nil for the banner and the spinner.
+    private func chatIndex(ofRow row: Int) -> Int? {
+        let index = row - (showsRestoreBanner ? 1 : 0)
+        return rows.indices.contains(index) ? index : nil
     }
 
     @objc private func listedChatsChanged() {
@@ -296,7 +321,7 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         let loading = WebChatImporter.shared.isLoadingMoreChats && searchField.stringValue.isEmpty
         guard loading != showsLoadingRow else { return }
         showsLoadingRow = loading
-        let index = IndexSet(integer: rows.count)
+        let index = IndexSet(integer: tableRow(ofChat: rows.count))
         if loading {
             tableView.insertRows(at: index, withAnimation: .effectFade)
         } else {
@@ -326,9 +351,8 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        let row = tableView.clickedRow
-        guard row >= 0, row < rows.count else { return }
-        let conversation = rows[row]
+        guard let index = chatIndex(ofRow: tableView.clickedRow) else { return }
+        let conversation = rows[index]
         let unread = conversation.unreadCount > 0
         menu.addItem(item("Open in New Window", symbol: "macwindow.badge.plus", action: #selector(openInWindow(_:)), conversation))
         menu.addItem(item("Open on Web", symbol: "safari", action: #selector(openOnWeb(_:)), conversation))
@@ -384,9 +408,8 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
 
     /// Double-clicking a chat opens it in its own window.
     @objc private func doubleClicked(_ sender: Any?) {
-        let row = tableView.clickedRow
-        guard row >= 0, row < rows.count else { return }
-        ChatWindowController.show(threadID: rows[row].id)
+        guard let index = chatIndex(ofRow: tableView.clickedRow) else { return }
+        ChatWindowController.show(threadID: rows[index].id)
     }
 
     @objc private func toggleUnread(_ sender: NSMenuItem) {
@@ -425,7 +448,8 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
     }
 
     private func showCard(_ identifier: String, for conversation: Conversation) {
-        guard let row = rows.firstIndex(where: { $0.id == conversation.id }) else { return }
+        guard let index = rows.firstIndex(where: { $0.id == conversation.id }) else { return }
+        let row = tableRow(ofChat: index)
         tableView.scrollRowToVisible(row)
         ContactCards.shared.showCard(identifier, relativeTo: tableView.rect(ofRow: row), of: tableView)
     }
@@ -497,19 +521,25 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
     // MARK: - Table
 
     func numberOfRows(in tableView: NSTableView) -> Int {
-        rows.count + (showsLoadingRow ? 1 : 0)
+        tableRow(ofChat: rows.count) + (showsLoadingRow ? 1 : 0)
+    }
+
+    private func isBanner(_ row: Int) -> Bool {
+        showsRestoreBanner && row == 0
     }
 
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        row < rows.count ? tableView.rowHeight : 44
+        if isBanner(row) { return RestoreBannerView.height }
+        return chatIndex(ofRow: row) != nil ? tableView.rowHeight : 44
     }
 
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
-        row < rows.count
+        chatIndex(ofRow: row) != nil
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard row < rows.count else {
+        if isBanner(row) { return restoreBanner }
+        guard let index = chatIndex(ofRow: row) else {
             let spinner = NSProgressIndicator()
             spinner.style = .spinning
             spinner.controlSize = .small
@@ -529,18 +559,17 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
             cell.identifier = id
             return cell
         }()
-        let conversation = rows[row]
+        let conversation = rows[index]
         cell.configure(conversation, isTyping: !(store.typing[conversation.id]?.isEmpty ?? true), selfID: store.account?.id)
         return cell
     }
 
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        row < rows.count ? ConversationRowView() : NSTableRowView()
+        chatIndex(ofRow: row) != nil ? ConversationRowView() : NSTableRowView()
     }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
-        let row = tableView.selectedRow
-        let id = row >= 0 && row < rows.count ? rows[row].id : nil
+        let id = chatIndex(ofRow: tableView.selectedRow).map { rows[$0].id }
         guard id != selectedID else { return }
         selectedID = id
         onSelect?(id)

@@ -40,6 +40,9 @@ final class WebHistoryImporter {
 
     /// Chats whose history the web app couldn't show (not restored there with the PIN yet).
     private(set) var needsRestore: Set<String> = []
+    /// Whether the encrypted chats need restoring with the PIN: the last import that found out
+    /// couldn't show a chat's history (the chat list shows a banner for it). Posts activityDidChange.
+    private(set) var isRestoreNeeded = false
     /// Chats whose newest messages were imported since launch (opening them again doesn't).
     private var done: Set<String> = []
     /// Waiting to be imported, the next first.
@@ -194,6 +197,7 @@ final class WebHistoryImporter {
     func reset() {
         generation += 1
         needsRestore = []
+        isRestoreNeeded = false
         done = []
         queue = []
         current = nil
@@ -288,6 +292,8 @@ final class WebHistoryImporter {
         CoreBridge.shared.log("WebHistoryImporter: restore finished")
         restoredAt = Date()
         needsRestore = []
+        isRestoreNeeded = false
+        NotificationCenter.default.post(name: Self.activityDidChange, object: self)
         done = []
         tries = [:]
         oldest = [:]
@@ -298,7 +304,28 @@ final class WebHistoryImporter {
 
     /// The chats are loaded (at launch): soon after a restore, the recent chats' import goes on.
     func chatsLoaded() {
-        if isRestoring { importRecentChats() }
+        if isRestoring {
+            importRecentChats()
+        } else if restoredAt == nil {
+            checkRestore()
+        }
+    }
+
+    /// Finds out early whether the encrypted chats need the PIN (e.g. after a new login), so the
+    /// chat list can say so: the newest encrypted chat's latest messages are imported, unless an
+    /// import already is.
+    private func checkRestore() {
+        let generation = self.generation
+        Task {
+            // The chat list maps the chats to the web app's (and the chats have synced by then).
+            await WebChatImporter.shared.runOnce()
+            guard generation == self.generation, queue.isEmpty, current == nil,
+                  let newest = ChatStore.shared.conversations.first(where: { $0.isEncrypted && !$0.isGroup }),
+                  !done.contains(newest.id) else { return }
+            queue.append(Job(threadID: newest.id, mode: .latest, opened: false))
+            stateChanged(newest.id)
+            runQueue()
+        }
     }
 
     private func importRecentChats() {
@@ -362,13 +389,16 @@ final class WebHistoryImporter {
         switch outcome {
         case .complete:
             needsRestore.remove(threadID)
+            isRestoreNeeded = false
             done.insert(threadID)
             result = .done
         case .needsRestore:
             needsRestore.insert(threadID)
+            isRestoreNeeded = true
             result = .needsRestore
         case .moreMayCome:
             needsRestore.remove(threadID)
+            isRestoreNeeded = false
             let tried = tries[threadID, default: 0] + 1
             tries[threadID] = tried
             if tried < Self.maxTries {
