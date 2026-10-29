@@ -264,7 +264,20 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         }
         showsLoadingRow = WebChatImporter.shared.isLoadingMoreChats && query.isEmpty
         showsRestoreBanner = WebHistoryImporter.shared.isRestoreNeeded && query.isEmpty && filter != .requests
-        tableView.reloadData()
+        // Chats that arrive, move up or go are animated; another search, filter or request tab
+        // replaces the list.
+        let oldIDs = rowIDs
+        rowIDs = currentRowIDs()
+        let shown = "\(filter.rawValue)|\(requestTab)|\(query)"
+        if shown != shownList || view.window == nil {
+            shownList = shown
+            tableView.reloadData()
+        } else {
+            if rowIDs != oldIDs { tableView.animateRowChanges(from: oldIDs, to: rowIDs) }
+            // The rows that stayed show their chats' changes (new message, read, name).
+            let visible = tableView.rows(in: tableView.visibleRect)
+            tableView.reloadData(forRowIndexes: IndexSet(integersIn: Range(visible) ?? 0..<0), columnIndexes: IndexSet(integer: 0))
+        }
         // A list too short to scroll can't reach its bottom: load more right away, as the web does.
         if query.isEmpty, filter == .all, listed > 0, tableView.bounds.height <= scrollView.contentView.bounds.height {
             WebChatImporter.shared.loadMore()
@@ -299,6 +312,15 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         if shows != showsRestoreBanner { reload() }
     }
 
+    /// The table's rows by what they show (the banner, chats, the spinner), as it shows them.
+    private var rowIDs: [String] = []
+    /// The search, filter and request tab the table shows.
+    private var shownList = ""
+
+    private func currentRowIDs() -> [String] {
+        (showsRestoreBanner ? ["restore banner"] : []) + rows.map(\.id) + (showsLoadingRow ? ["loading row"] : [])
+    }
+
     /// The table row of the chat at `index` in `rows` (after the banner).
     private func tableRow(ofChat index: Int) -> Int {
         index + (showsRestoreBanner ? 1 : 0)
@@ -321,6 +343,7 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         let loading = WebChatImporter.shared.isLoadingMoreChats && searchField.stringValue.isEmpty
         guard loading != showsLoadingRow else { return }
         showsLoadingRow = loading
+        rowIDs = currentRowIDs()
         let index = IndexSet(integer: tableRow(ofChat: rows.count))
         if loading {
             tableView.insertRows(at: index, withAnimation: .effectFade)
