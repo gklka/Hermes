@@ -450,15 +450,21 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
     // MARK: - Memory
 
     /// Messenger's web app keeps growing while it stays open: after three days, its page used
-    /// 1.5 GB (and a little CPU all the time). Past this, it's loaded again once nothing uses it.
+    /// 1.5 GB (and a little CPU all the time), from about 750 MB when fresh. Past this, it's
+    /// loaded again once nothing uses it.
     private static let reloadFootprint: UInt64 = 1 << 30
+    /// A fresh page starts at about 750 MB; one that's soon big again isn't loaded again before this.
+    private static let reloadInterval: TimeInterval = 6 * 3600
     private var memoryTimer: Timer?
+    private var lastMemoryReload = Date.distantPast
 
     private func reloadIfTooBig() async {
         guard sessionSetup != nil, hasLoaded, !isBusy, window?.isVisible != true, !CallManager.shared.isInCall,
+              Date().timeIntervalSince(lastMemoryReload) > Self.reloadInterval,
               webView.url?.host == "www.facebook.com",
               let footprint = pageFootprint, footprint > Self.reloadFootprint else { return }
         CoreBridge.shared.log("WebSync: the page uses \(footprint >> 20) MB, loading it again")
+        lastMemoryReload = Date()
         try? await withExclusiveAccess(parks: false) {
             await reloadPage()
         }
