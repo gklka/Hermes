@@ -3,7 +3,7 @@
 # team-signed app, and only one registered copy, so the build folder copies are unregistered.
 set -e
 cd "$(dirname "$0")/.."
-: "${DEVELOPER_DIR:=/Applications/Xcode 27.1.app/Contents/Developer}"
+: "${DEVELOPER_DIR:=/Applications/Xcode.app/Contents/Developer}"
 export DEVELOPER_DIR
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 

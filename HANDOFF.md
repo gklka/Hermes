@@ -26,7 +26,7 @@ These come from the user's global `~/.claude/CLAUDE.md` plus feedback given duri
 
 1. Install Xcode 26+ and Go (`brew install go`). `Support/build-core.sh` adds `/opt/homebrew/bin` and `/usr/local/go/bin` to `PATH`.
 2. **Day to day: `Support/install.sh`.** It builds Release, installs it to `/Applications`, unregisters the build-folder copies, relaunches the app, and restarts `intelligenceflowd` (Siri/Shortcuts keep an app's old actions until it restarts). Siri and Shortcuts need a team-signed app with only one registered copy.
-   - `DEVELOPER_DIR` defaults to `/Applications/Xcode 27.1.app` in the script; override it on another machine.
+   - `DEVELOPER_DIR` defaults to `/Applications/Xcode.app` in the script; override it on another machine.
 3. Go checks:
    ```sh
    cd Core && CC="xcrun --sdk macosx clang" go vet . && go test -run 'TestSearchFold|TestParseAge|TestAvatarKey|TestWebMessageID|TestUnrestoredPlaceholder|TestWithoutEmoji' .
