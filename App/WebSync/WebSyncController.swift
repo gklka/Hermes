@@ -69,6 +69,12 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
         super.init(window: window)
         window.delegate = self
         webView.navigationDelegate = self
+        memoryTimer = Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                Task { await self.reloadIfTooBig() }
+            }
+        }
     }
 
     /// Keeps the web view rendering inside a visible window without showing it.
@@ -439,6 +445,37 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
         hasLoaded = false
         webView.load(URLRequest(url: Self.messagesURL))
         await withCheckedContinuation { loadWaiters.append($0) }
+    }
+
+    // MARK: - Memory
+
+    /// Messenger's web app keeps growing while it stays open: after three days, its page used
+    /// 1.5 GB (and a little CPU all the time). Past this, it's loaded again once nothing uses it.
+    private static let reloadFootprint: UInt64 = 1 << 30
+    private var memoryTimer: Timer?
+
+    private func reloadIfTooBig() async {
+        guard sessionSetup != nil, hasLoaded, !isBusy, window?.isVisible != true, !CallManager.shared.isInCall,
+              webView.url?.host == "www.facebook.com",
+              let footprint = pageFootprint, footprint > Self.reloadFootprint else { return }
+        CoreBridge.shared.log("WebSync: the page uses \(footprint >> 20) MB, loading it again")
+        try? await withExclusiveAccess(parks: false) {
+            await reloadPage()
+        }
+        if let footprint = pageFootprint {
+            CoreBridge.shared.log("WebSync: loaded again, the page uses \(footprint >> 20) MB")
+        }
+    }
+
+    /// The memory used by the page's process (WebKit's web content process), if WebKit says which.
+    private var pageFootprint: UInt64? {
+        guard webView.responds(to: NSSelectorFromString("_webProcessIdentifier")),
+              let pid = webView.value(forKey: "_webProcessIdentifier") as? Int32, pid > 0 else { return nil }
+        var info = rusage_info_v4()
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V4, $0) }
+        }
+        return result == 0 ? info.ri_phys_footprint : nil
     }
 
     // MARK: - WKNavigationDelegate

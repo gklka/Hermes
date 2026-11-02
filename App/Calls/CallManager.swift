@@ -22,6 +22,11 @@ final class CallManager: NSObject, WKUIDelegate, WKScriptMessageHandler {
 
     private var web: WebSyncController { .shared }
 
+    /// A call is ringing, starting or under way (the hidden page must stay as it is).
+    var isInCall: Bool {
+        !windows.isEmpty || pendingWindow != nil || incomingPanel != nil || answeredUntil > Date()
+    }
+
     /// Sets up the hidden web view's configuration (before its page loads).
     static func install(in config: WKWebViewConfiguration) {
         config.userContentController.addUserScript(WKUserScript(source: monitorScript, injectionTime: .atDocumentStart,
