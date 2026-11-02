@@ -352,6 +352,9 @@ final class ComposeView: NSView, NSTextViewDelegate {
         replyLabel.font = .systemFont(ofSize: 12)
         replyLabel.textColor = .secondaryLabelColor
         replyLabel.lineBreakMode = .byTruncatingTail
+        replyLabel.maximumNumberOfLines = 1
+        // A long quote is cut off rather than widening the window.
+        replyLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         let closeReply = NSButton()
         configure(closeReply, symbol: "xmark.circle.fill", label: "Cancel reply", action: #selector(cancelReply))
         for view in [replyLabel, closeReply] as [NSView] {
@@ -689,7 +692,8 @@ final class ComposeView: NSView, NSTextViewDelegate {
     }
 
     func showReply(to name: String, text: String) {
-        showBanner("Replying to \(name): \(text)")
+        let oneLine = text.split(whereSeparator: \.isNewline).joined(separator: " ")
+        showBanner("Replying to \(name): \(oneLine)")
     }
 
     /// Puts a sent message's text in the field to edit it; Return saves, Escape cancels.
@@ -710,6 +714,7 @@ final class ComposeView: NSView, NSTextViewDelegate {
         guard !replyBanner.isHidden else { return }
         setBanner(open: false) { [weak self] in
             self?.replyBanner.isHidden = true
+            self?.replyLabel.stringValue = ""
         }
     }
 
