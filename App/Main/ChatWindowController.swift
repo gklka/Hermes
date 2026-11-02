@@ -208,6 +208,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
         cancellables.removeAll()
+        chat.removeKeyMonitors()
         // Stops the typing indicator, as when switching chats.
         chat.show(threadID: nil)
         Self.open[threadID] = nil

@@ -119,6 +119,8 @@ final class ChatViewController: NSViewController {
     /// The sole selected message, for the actions that only make sense for one (edit, reply).
     var selectedMessageID: String? { selectedMessageIDs.count == 1 ? selectedMessageIDs.first : nil }
     var deselectMonitor: Any?
+    /// The typing and selection key handlers, removed when a chat window closes (`removeKeyMonitors`).
+    private var keyMonitors: [Any] = []
     /// Edited messages whose earlier versions are shown.
     var expandedEdits: Set<String> = []
     /// The attachment shown by each Quick Look item, to zoom from its picture in the chat.
@@ -260,16 +262,22 @@ final class ChatViewController: NSViewController {
 
         // Typing while no text field is active goes to the compose field. The event is returned,
         // so it's delivered to the field once it's focused (dead keys and input methods work too).
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        keyMonitors += [NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.shouldRedirectTyping(event) else { return event }
             self.compose.focus()
             return event
-        }
+        }].compactMap { $0 }
         // ⌘C, ⌘A, arrows, Esc and Delete act on the selected messages.
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        keyMonitors += [NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.handleSelectionKey(event) else { return event }
             return nil
-        }
+        }].compactMap { $0 }
+    }
+
+    /// A chat window closed: its key handlers would otherwise stay installed for good.
+    func removeKeyMonitors() {
+        keyMonitors.forEach(NSEvent.removeMonitor)
+        keyMonitors = []
     }
 
     private func storeChanged(_ change: ChatStore.Change) {
