@@ -375,9 +375,11 @@ func (c *Core) markRead(ctx context.Context, threadID string) error {
 		return nil
 	}
 	if t.Type.IsWhatsApp() {
-		err = c.sendE2EEReadReceipts(ctx, t)
+		if err = c.sendE2EEReadReceipts(ctx, t); err == nil {
+			c.sendE2EEReadWatermark(ctx, t, now)
+		}
 	} else {
-		err = c.sendFBReadReceipt(ctx, threadID, now)
+		err = c.sendFBReadReceipt(ctx, t, now)
 	}
 	if err != nil {
 		return err
@@ -386,15 +388,24 @@ func (c *Core) markRead(ctx context.Context, threadID string) error {
 	return nil
 }
 
-func (c *Core) sendFBReadReceipt(ctx context.Context, threadID string, ts int64) error {
+// sendFBReadReceipt moves the chat's read mark on Messenger's servers to ts: the official
+// apps' chat lists go by it (an encrypted chat's in the encrypted sync group).
+func (c *Core) sendFBReadReceipt(ctx context.Context, t *threadRow, ts int64) error {
 	cli, err := c.requireClient()
 	if err != nil {
 		return err
 	}
-	_, err = cli.ExecuteTasks(ctx, &socket.ThreadMarkReadTask{
-		ThreadId: c.fbThreadKey(threadID), LastReadWatermarkTs: ts, SyncGroup: syncGroupMain,
-	})
+	key, syncGroup := c.fbTaskTarget(t)
+	_, err = cli.ExecuteTasks(ctx, &socket.ThreadMarkReadTask{ThreadId: key, LastReadWatermarkTs: ts, SyncGroup: syncGroup})
 	return err
+}
+
+// sendE2EEReadWatermark moves an encrypted chat's read mark too (receipts alone don't, so the
+// official apps showed it unread, e.g. after sending from here). Failing isn't an error.
+func (c *Core) sendE2EEReadWatermark(ctx context.Context, t *threadRow, ts int64) {
+	if err := c.sendFBReadReceipt(ctx, t, ts); err != nil {
+		c.log.Warn().Err(err).Str("thread", t.ID).Msg("Failed to move the encrypted chat's read mark")
+	}
 }
 
 // sendE2EEReadReceipts marks the unread messages from others read, per sender (as receipts
