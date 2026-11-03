@@ -88,9 +88,27 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         guard let window else { return }
         window.title = conversation?.name ?? "Messenger"
         window.subtitle = Self.subtitle(for: conversation)
-        infoToolbarItem?.isHidden = conversation?.isGroup != true
-        callToolbarItems.forEach { $0.isHidden = conversation == nil }
-        pinnedToolbarItem?.isHidden = !hasPinnedMessages
+        chatButtons?.show(ChatToolbarButtons.kinds(for: conversation, hasPinnedMessages: hasPinnedMessages))
+        if let conversation, conversation.isMarketplace {
+            ChatStore.shared.prefetchListingURL(for: conversation.id)
+        }
+    }
+
+    // MARK: - Marketplace listing (also used by chat windows)
+
+    /// Opens the listing in the browser; the chat on facebook.com if the listing can't be found.
+    static func openListing(threadID: String) {
+        Task {
+            let store = ChatStore.shared
+            var url = await store.listingURL(for: threadID)
+            if url == nil { url = await store.webURL(for: threadID) }
+            if let url { NSWorkspace.shared.open(url) }
+        }
+    }
+
+    @objc func openListing(_ sender: Any?) {
+        guard let conversation = split.selectedConversation, conversation.isMarketplace else { return }
+        Self.openListing(threadID: conversation.id)
     }
 
     /// Whether the open chat has pinned messages (so the toolbar shows the pin button).
@@ -243,17 +261,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
 
     private static let newMessageItem = NSToolbarItem.Identifier("newMessage")
     private static let filterItemID = NSToolbarItem.Identifier("filter")
-    private static let infoItem = NSToolbarItem.Identifier("info")
-    private static let pinnedItemID = NSToolbarItem.Identifier("pinned")
     private weak var filterItem: NSMenuToolbarItem?
     private weak var newMessageToolbarItem: NSToolbarItem?
-    private weak var infoToolbarItem: NSToolbarItem?
-    private weak var pinnedToolbarItem: NSToolbarItem?
-    private var callToolbarItems: [NSToolbarItem] = []
+    private weak var chatButtons: ChatToolbarButtons?
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.toggleSidebar, .flexibleSpace, Self.filterItemID, Self.newMessageItem, .sidebarTrackingSeparator, .flexibleSpace,
-         Self.pinnedItemID, CallManager.audioCallItem, CallManager.videoCallItem, Self.infoItem]
+         ChatToolbarButtons.itemID]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -289,30 +303,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
             filterItem = item
             updateFilterItem()
             return item
-        case Self.infoItem:
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "Members")
-            item.label = "Members"
-            item.toolTip = "Members"
-            item.target = self
-            item.action = #selector(showMembers(_:))
-            item.isHidden = split.selectedConversation?.isGroup != true
-            infoToolbarItem = item
-            return item
-        case Self.pinnedItemID:
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned Messages")
-            item.label = "Pinned"
-            item.toolTip = "Pinned Messages"
-            item.target = self
-            item.action = #selector(showPinnedMessages(_:))
-            item.isHidden = !hasPinnedMessages
-            pinnedToolbarItem = item
-            return item
-        case CallManager.audioCallItem, CallManager.videoCallItem:
-            let item = CallManager.toolbarItem(itemIdentifier, target: self)
-            item.isHidden = split.selectedConversation == nil
-            callToolbarItems.append(item)
+        case ChatToolbarButtons.itemID:
+            let (item, buttons) = ChatToolbarButtons.makeItem(target: self)
+            buttons.show(ChatToolbarButtons.kinds(for: split.selectedConversation, hasPinnedMessages: hasPinnedMessages))
+            chatButtons = buttons
             return item
         default:
             return nil

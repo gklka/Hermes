@@ -77,21 +77,6 @@ final class CallManager: NSObject, WKUIDelegate, WKScriptMessageHandler {
         }
     }
 
-    static let audioCallItem = NSToolbarItem.Identifier("audioCall")
-    static let videoCallItem = NSToolbarItem.Identifier("videoCall")
-
-    /// The chat toolbars' call buttons; `target` implements startAudioCall(_:) and startVideoCall(_:).
-    static func toolbarItem(_ identifier: NSToolbarItem.Identifier, target: AnyObject) -> NSToolbarItem {
-        let video = identifier == videoCallItem
-        let item = NSToolbarItem(itemIdentifier: identifier)
-        item.image = NSImage(systemSymbolName: video ? "video" : "phone", accessibilityDescription: video ? "Video Call" : "Audio Call")
-        item.label = video ? "Video Call" : "Audio Call"
-        item.toolTip = item.label
-        item.target = target
-        item.action = video ? NSSelectorFromString("startVideoCall:") : NSSelectorFromString("startAudioCall:")
-        return item
-    }
-
     private func add(_ window: CallWindowController) {
         windows.append(window)
         window.onClose = { [weak self, weak window] in

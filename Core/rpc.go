@@ -167,6 +167,13 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return nil, c.renameThread(ctx, p.ThreadID, p.Text)
 	case "threads.refreshTheme":
 		return nil, c.refreshTheme(ctx, p.ThreadID)
+	case "threads.marketplaceListing":
+		// A Marketplace chat's listing on facebook.com.
+		url, err := c.marketplaceListingURL(ctx, p.ThreadID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]string{"url": url}, nil
 	case "threads.subscribePresence":
 		return nil, c.subscribePresence(ctx, p.ThreadID)
 	case "users.block":

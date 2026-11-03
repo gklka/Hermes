@@ -333,6 +333,36 @@ final class ChatStore {
         return path.isEmpty ? nil : path
     }
 
+    private var listingURLs: [String: URL] = [:]
+    private var listingFetches: [String: Task<URL?, Never>] = [:]
+
+    /// A Marketplace chat's listing on facebook.com (read from the chat's banner once, then kept).
+    func listingURL(for threadID: String) async -> URL? {
+        if let url = listingURLs[threadID] { return url }
+        if let fetch = listingFetches[threadID] { return await fetch.value }
+        let fetch = Task { () -> URL? in
+            struct Result: Decodable { let url: String }
+            let result = try? await core.call("threads.marketplaceListing", ThreadParams(threadID: threadID), as: Result.self)
+            return result.flatMap { URL(string: $0.url) }
+        }
+        listingFetches[threadID] = fetch
+        let url = await fetch.value
+        listingFetches[threadID] = nil
+        if let url { listingURLs[threadID] = url }
+        return url
+    }
+
+    private var listingPrefetched: Set<String> = []
+
+    /// Looks up the listing ahead of time, so its button opens it right away. A failed lookup
+    /// (e.g. before connecting) is tried again the next time the chat's toolbar updates.
+    func prefetchListingURL(for threadID: String) {
+        guard connectionState == .connected, listingPrefetched.insert(threadID).inserted else { return }
+        Task {
+            if await listingURL(for: threadID) == nil { listingPrefetched.remove(threadID) }
+        }
+    }
+
     // MARK: - Search
 
     /// The chat's stored messages containing the text (ignoring case and accents), oldest

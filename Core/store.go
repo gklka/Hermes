@@ -184,6 +184,7 @@ const (
 	kvPollVoters  = "pollvoters:"  // poll → the newest card its voters were taken from (ms)
 	kvPollQ       = "pollq:"       // poll → its question
 	kvPinned      = "pinned:"      // chat → its pinned messages (JSON, newest pin first)
+	kvListing     = "listing:"     // Marketplace chat → its listing's page on facebook.com
 )
 
 // pinnedEntry is one pinned message: its ID and when it was pinned (ms).

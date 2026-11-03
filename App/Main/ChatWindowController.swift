@@ -117,8 +117,10 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         header.subtitleLabel.stringValue = subtitle
         header.subtitleLabel.isHidden = subtitle.isEmpty
         header.isSubtitleClickable = conversation?.isGroup == true
-        infoToolbarItem?.isHidden = conversation?.isGroup != true
-        pinnedToolbarItem?.isHidden = !hasPinnedMessages
+        chatButtons?.show(ChatToolbarButtons.kinds(for: conversation, hasPinnedMessages: hasPinnedMessages))
+        if conversation?.isMarketplace == true {
+            ChatStore.shared.prefetchListingURL(for: threadID)
+        }
         if let conversation {
             header.avatar.configure(conversation, selfID: ChatStore.shared.account?.id)
         }
@@ -128,10 +130,13 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
 
     private let header = ChatHeaderView()
     private static let headerItem = NSToolbarItem.Identifier("chatHeader")
-    private static let infoItem = NSToolbarItem.Identifier("info")
-    private static let pinnedItemID = NSToolbarItem.Identifier("pinned")
-    private weak var infoToolbarItem: NSToolbarItem?
-    private weak var pinnedToolbarItem: NSToolbarItem?
+    private weak var chatButtons: ChatToolbarButtons?
+
+    /// The storefront button: the Marketplace chat's listing on facebook.com.
+    @objc func openListing(_ sender: Any?) {
+        guard conversation?.isMarketplace == true else { return }
+        MainWindowController.openListing(threadID: threadID)
+    }
 
     /// The info button, or the "3 people" subtitle: the group chat's members.
     @objc func showMembers(_ sender: Any?) {
@@ -149,7 +154,7 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [Self.headerItem, .flexibleSpace, Self.pinnedItemID, CallManager.audioCallItem, CallManager.videoCallItem, Self.infoItem]
+        [Self.headerItem, .flexibleSpace, ChatToolbarButtons.itemID]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -158,30 +163,11 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
-        if itemIdentifier == Self.infoItem {
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: "Members")
-            item.label = "Members"
-            item.toolTip = "Members"
-            item.target = self
-            item.action = #selector(showMembers(_:))
-            item.isHidden = conversation?.isGroup != true
-            infoToolbarItem = item
+        if itemIdentifier == ChatToolbarButtons.itemID {
+            let (item, buttons) = ChatToolbarButtons.makeItem(target: self)
+            buttons.show(ChatToolbarButtons.kinds(for: conversation, hasPinnedMessages: hasPinnedMessages))
+            chatButtons = buttons
             return item
-        }
-        if itemIdentifier == Self.pinnedItemID {
-            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-            item.image = NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned Messages")
-            item.label = "Pinned"
-            item.toolTip = "Pinned Messages"
-            item.target = self
-            item.action = #selector(showPinnedMessages(_:))
-            item.isHidden = !hasPinnedMessages
-            pinnedToolbarItem = item
-            return item
-        }
-        if itemIdentifier == CallManager.audioCallItem || itemIdentifier == CallManager.videoCallItem {
-            return CallManager.toolbarItem(itemIdentifier, target: self)
         }
         guard itemIdentifier == Self.headerItem else { return nil }
         let item = NSToolbarItem(itemIdentifier: itemIdentifier)
