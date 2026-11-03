@@ -535,7 +535,13 @@ final class ChatStore {
         notify(.conversations)
     }
 
+    /// Unread, or with reactions you haven't seen: marked in the chat list and the Dock badge.
+    func isUnread(_ conversation: Conversation) -> Bool {
+        conversation.unreadCount > 0 || unseenReactions[conversation.id] != nil
+    }
+
     func markRead(_ threadID: String) {
+        clearUnseenReactions(threadID)
         markedUnread.remove(threadID)
         guard var conversation = conversationsByID[threadID], conversation.unreadCount > 0 else { return }
         conversation.unreadCount = 0
@@ -564,7 +570,7 @@ final class ChatStore {
 
     /// Mark as Read / Mark as Unread (the menus).
     func toggleRead(_ conversation: Conversation) {
-        if conversation.unreadCount > 0 {
+        if isUnread(conversation) {
             markRead(conversation.id)
         } else {
             setUnread(true, threadID: conversation.id)

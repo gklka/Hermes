@@ -22,9 +22,7 @@ final class DockBadge {
     }
 
     private func update() {
-        let unread = store.conversations.count {
-            !$0.isMuted && ($0.unreadCount > 0 || store.unseenReactions[$0.id] != nil)
-        }
+        let unread = store.conversations.count { !$0.isMuted && store.isUnread($0) }
         let label = unread > 0 ? "\(unread)" : nil
         if NSApp.dockTile.badgeLabel != label {
             NSApp.dockTile.badgeLabel = label

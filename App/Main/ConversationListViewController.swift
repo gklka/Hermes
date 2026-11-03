@@ -379,7 +379,7 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         menu.removeAllItems()
         guard let index = chatIndex(ofRow: tableView.clickedRow) else { return }
         let conversation = rows[index]
-        let unread = conversation.unreadCount > 0
+        let unread = store.isUnread(conversation)
         menu.addItem(item("Open in New Window", symbol: "macwindow.badge.plus", action: #selector(openInWindow(_:)), conversation))
         menu.addItem(item("Open on Web", symbol: "safari", action: #selector(openOnWeb(_:)), conversation))
         menu.addItem(.separator())
@@ -586,7 +586,8 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
             return cell
         }()
         let conversation = rows[index]
-        cell.configure(conversation, isTyping: !(store.typing[conversation.id]?.isEmpty ?? true), selfID: store.account?.id)
+        cell.configure(conversation, isUnread: store.isUnread(conversation),
+                       isTyping: !(store.typing[conversation.id]?.isEmpty ?? true), selfID: store.account?.id)
         return cell
     }
 
@@ -709,14 +710,14 @@ final class ConversationCellView: NSTableCellView {
         super.layout()
     }
 
-    func configure(_ conversation: Conversation, isTyping: Bool, selfID: String?) {
+    func configure(_ conversation: Conversation, isUnread: Bool, isTyping: Bool, selfID: String?) {
         nameLabel.stringValue = conversation.name
         // Long names (groups listing their members) are cut off; hovering shows them whole.
         nameLabel.toolTip = conversation.realName ?? conversation.name
         dateLabel.stringValue = Formatters.listTimestamp(conversation.lastActivityDate)
         dateLabel.toolTip = Formatters.exact(conversation.lastActivityDate)
         avatar.configure(conversation, selfID: selfID)
-        unreadDot.isHidden = conversation.unreadCount == 0
+        unreadDot.isHidden = !isUnread
         mutedIcon.isHidden = !conversation.isMuted
         mutedLeading.constant = conversation.isMuted ? 4 : 0
         mutedCollapsed.isActive = !conversation.isMuted
@@ -735,7 +736,7 @@ final class ConversationCellView: NSTableCellView {
         } else {
             snippetLabel.stringValue = conversation.snippet
         }
-        nameLabel.font = .systemFont(ofSize: 13, weight: conversation.unreadCount > 0 ? .bold : .semibold)
+        nameLabel.font = .systemFont(ofSize: 13, weight: isUnread ? .bold : .semibold)
         // Set here too (not only in backgroundStyle.didSet): a reused cell may keep the same
         // style, so didSet wouldn't fire and the previous row's colors would linger.
         updateTextColors()

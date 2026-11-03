@@ -98,7 +98,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The picture as loaded for the chat list.
             let picture = conversation.avatarURL.flatMap(URL.init(string:)).flatMap { ImageCache.shared.cached($0) }
             item.image = RoundAvatar.image(picture, name: conversation.name, size: 18)
-            if conversation.unreadCount > 0 || store.unseenReactions[conversation.id] != nil {
+            if store.isUnread(conversation) {
                 item.attributedTitle = NSAttributedString(
                     string: conversation.name,
                     attributes: [.font: NSFontManager.shared.convert(.menuFont(ofSize: 0), toHaveTrait: .boldFontMask)]
