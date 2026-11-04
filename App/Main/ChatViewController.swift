@@ -108,6 +108,12 @@ final class ChatViewController: NSViewController {
     /// Older pages loaded while looking for the pending message, and the most to load.
     var revealPagesLoaded = 0
     var revealPageLimit = 40
+    /// New messages scroll the chat: it was at the bottom when it was last scrolled. Rows
+    /// growing (a picture loading) move the bottom without a scroll, so this is kept, not
+    /// measured each time.
+    var followsBottom = true
+    /// The visible area's size at the last scroll, to tell a resize from a scroll.
+    var lastClipSize: NSSize = .zero
 
     // MARK: State of the message actions (+MessageActions)
 
@@ -735,7 +741,7 @@ final class ChatViewController: NSViewController {
     /// in, rows that moved glide, statuses fade, read pictures fly to their new message, and a
     /// message replacing the typing bubble grows out of it.
     func reload(scrollToBottom forceBottom: Bool = false) {
-        let wasAtBottom = isScrolledToBottom
+        let wasAtBottom = followsBottom
         let anchor = forceBottom || wasAtBottom ? nil : scrollAnchor()
 
         // Heights depend on the bubble width; old messages' heights are kept (also across chats).

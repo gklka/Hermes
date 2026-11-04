@@ -296,7 +296,7 @@ extension ChatViewController: MessageCellDelegate {
         }
         let oldHeight = rowHeights.removeValue(forKey: rows[row])
         guard tableView(tableView, heightOfRow: row) != oldHeight else { return }
-        let wasAtBottom = isScrolledToBottom
+        let wasAtBottom = followsBottom
         // Rows below the screen don't move what's shown.
         let anchor = wasAtBottom ? nil : scrollAnchor(below: row)
         NSAnimationContext.runAnimationGroup { context in

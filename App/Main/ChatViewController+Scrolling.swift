@@ -3,8 +3,28 @@ import AppKit
 // MARK: - Scrolling
 
 extension ChatViewController {
+    /// Where the visible area starts with the last row just above the compose bar, which
+    /// overlaps the bottom (content inset).
+    var bottomOriginY: CGFloat {
+        let insets = scrollView.contentInsets
+        return max(-insets.top, tableView.bounds.height + insets.bottom - scrollView.contentView.bounds.height)
+    }
+
+    /// Within 20 pt of the bottom.
     var isScrolledToBottom: Bool {
-        scrollView.contentView.bounds.maxY >= tableView.bounds.height - 40
+        scrollView.contentView.bounds.minY >= bottomOriginY - 20
+    }
+
+    /// A scroll decides whether new messages scroll the chat; a resize (of the window) keeps
+    /// it at the bottom if they did.
+    func updateFollowsBottom() {
+        let size = scrollView.contentView.bounds.size
+        if size != lastClipSize {
+            lastClipSize = size
+            if followsBottom, !isScrolledToBottom { scrollToBottom() }
+        } else {
+            followsBottom = isScrolledToBottom
+        }
     }
 
     /// The first message on screen and how far its top is from the top of the visible area.
@@ -43,11 +63,9 @@ extension ChatViewController {
     func scrollToBottom() {
         guard !rows.isEmpty else { return }
         let clip = scrollView.contentView
-        // The last row just above the compose bar, which overlaps the bottom (content inset).
-        let insets = scrollView.contentInsets
-        let bottom = tableView.bounds.height + insets.bottom - clip.bounds.height
-        clip.setBoundsOrigin(NSPoint(x: clip.bounds.origin.x, y: max(-insets.top, bottom)))
+        clip.setBoundsOrigin(NSPoint(x: clip.bounds.origin.x, y: bottomOriginY))
         scrollView.reflectScrolledClipView(clip)
+        followsBottom = true
     }
 
     /// Gradient themes span the visible chat, so visible bubbles are realigned as it scrolls.
@@ -60,6 +78,7 @@ extension ChatViewController {
 
     /// Near the top, older messages are loaded (from the store, or Messenger's history).
     @objc func scrolled() {
+        updateFollowsBottom()
         alignGradients()
         guard let threadID, !isLoadingOlder, searchResults == nil, scrollView.contentView.bounds.minY < 200, !rows.isEmpty else { return }
         isLoadingOlder = true
@@ -117,10 +136,11 @@ extension ChatViewController {
         // While the chat's first page is still loading, keep it pending: the reload that
         // finishes the open scrolls to the message once more, over its final row positions.
         if openingThread == nil { pendingReveal = nil }
-        // In the middle of the view, with the messages around it.
+        // In the middle of the view, with the messages around it. The newest one goes above the
+        // compose bar, at the bottom, so new messages scroll the chat again.
         let rect = tableView.rect(ofRow: row)
         let visible = scrollView.contentView.bounds
-        let y = min(max(0, rect.midY - visible.height / 2), max(0, tableView.bounds.height - visible.height))
+        let y = min(max(-scrollView.contentInsets.top, rect.midY - visible.height / 2), bottomOriginY)
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.3
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
