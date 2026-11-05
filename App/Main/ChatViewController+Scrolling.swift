@@ -136,11 +136,14 @@ extension ChatViewController {
         // While the chat's first page is still loading, keep it pending: the reload that
         // finishes the open scrolls to the message once more, over its final row positions.
         if openingThread == nil { pendingReveal = nil }
-        // In the middle of the view, with the messages around it. The newest one goes above the
-        // compose bar, at the bottom, so new messages scroll the chat again.
+        // In the middle of the view between the toolbar and the compose bar (content insets,
+        // both overlap the messages), with the messages around it. The newest one goes above
+        // the compose bar, at the bottom, so new messages scroll the chat again.
         let rect = tableView.rect(ofRow: row)
         let visible = scrollView.contentView.bounds
-        let y = min(max(-scrollView.contentInsets.top, rect.midY - visible.height / 2), bottomOriginY)
+        let insets = scrollView.contentInsets
+        let centered = rect.midY - (visible.height + insets.top - insets.bottom) / 2
+        let y = min(max(-insets.top, centered), bottomOriginY)
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.3
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
