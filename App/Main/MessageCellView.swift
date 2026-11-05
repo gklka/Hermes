@@ -458,7 +458,9 @@ final class MessageCellView: NSTableCellView {
             : (layout.outgoingColors.last ?? BubbleColors.outgoing).withAlphaComponent(0.35)
         textView.selectedTextAttributes = [.backgroundColor: selection]
         let insets = jumbo ? NSEdgeInsetsZero : BubbleMetrics.textInsets
-        textView.maxWidth = layout.maxWidth - BubbleMetrics.textInsets.left - BubbleMetrics.textInsets.right
+        // The column's width (configureReply narrows it for a reply's thread line), not the
+        // layout's: wrapped at the full width, a reply's lines ran past its bubble.
+        textView.maxWidth = widthConstraint.constant - BubbleMetrics.textInsets.left - BubbleMetrics.textInsets.right
         textView.setText(Self.attributed(text, font: font, color: color, italic: message.isUnsent,
                                          mentions: message.isUnsent ? [] : message.mentions ?? []))
         textInsets[0].constant = insets.left
