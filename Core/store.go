@@ -864,6 +864,18 @@ func (s *Store) SetAttachmentLocalPath(messageID, attachmentID, path string) {
 	_, _ = s.db.Exec(`UPDATE messages SET attachments=? WHERE id=?`, string(data), messageID)
 }
 
+func (s *Store) SetAttachmentPreviewURL(messageID, attachmentID, previewURL string) {
+	m := s.GetMessage(messageID)
+	if m == nil {
+		return
+	}
+	if a := m.attachment(attachmentID); a != nil {
+		a.PreviewURL = previewURL
+	}
+	data, _ := json.Marshal(m.Attachments)
+	_, _ = s.db.Exec(`UPDATE messages SET attachments=? WHERE id=?`, string(data), messageID)
+}
+
 // MARK: - Reactions
 
 // Reaction is the person's current reaction to the message, or "".

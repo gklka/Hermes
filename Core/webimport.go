@@ -277,6 +277,31 @@ func importedBeforeLinks(m *messageRow) bool {
 	return true
 }
 
+// fillLinkPicture gives a card stored without its picture (by an older version, which didn't
+// load encrypted cards' pictures) the web chat's. Reports whether it did.
+func (c *Core) fillLinkPicture(m *messageRow, links []webLink) bool {
+	for i, link := range links {
+		if link.Image == nil {
+			continue
+		}
+		for j := range m.Attachments {
+			a := &m.Attachments[j]
+			if a.Kind != kindLink || a.PreviewURL != "" || a.WA != nil {
+				continue
+			}
+			path, err := c.saveWebImage(m.ID, 100+i, *link.Image)
+			if err != nil {
+				c.log.Warn().Err(err).Str("message_id", m.ID).Msg("Failed to save a link's picture")
+				return false
+			}
+			a.PreviewURL = (&url.URL{Scheme: "file", Path: path}).String()
+			a.Width, a.Height = link.Image.Width, link.Image.Height
+			return true
+		}
+	}
+	return false
+}
+
 // webMessageID splits the web app's message element ID into the real end-to-end message ID and
 // its timestamp. Messenger message IDs are offline threading IDs: milliseconds << 22 | random.
 func webMessageID(domID string) (id string, timestampMs int64, ok bool) {
@@ -366,6 +391,9 @@ func (c *Core) importWebMessages(threadID string, messages []webMessage) apiMess
 			if len(wm.Images) > 0 && importedBeforeLinks(existing) && existing.SenderID != sender {
 				existing.SenderID = sender
 				existing.WASender = sender + "@msgr"
+				changed = true
+			}
+			if c.fillLinkPicture(existing, wm.Links) {
 				changed = true
 			}
 			if changed {

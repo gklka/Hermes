@@ -3,9 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"time"
 
 	"go.mau.fi/whatsmeow"
+	"go.mau.fi/whatsmeow/proto/armadilloutil"
 	"go.mau.fi/whatsmeow/proto/waArmadilloApplication"
+	"go.mau.fi/whatsmeow/proto/waCommon"
 	"go.mau.fi/whatsmeow/proto/waConsumerApplication"
 	"go.mau.fi/whatsmeow/proto/waMediaTransport"
 	waTypes "go.mau.fi/whatsmeow/types"
@@ -75,6 +79,8 @@ func (c *Core) handleFBMessage(evt *events.FBMessage) {
 	senderID := sender.User
 	ts := evt.Info.Timestamp.UnixMilli()
 	cs := newChangeSet()
+	// A card's encrypted picture, loaded once the message is stored.
+	var linkPicture string
 	row := &messageRow{
 		ID:        evt.Info.ID,
 		ThreadID:  threadID,
@@ -131,6 +137,12 @@ func (c *Core) handleFBMessage(evt *events.FBMessage) {
 						link.URL = "https://www.facebook.com/messages/t/" + threadID
 					}
 				}
+				if image := xmaPreviewImage(x.GetPreviews()); image != nil {
+					link.WA = waAttachment(link.ID, kindImage, image.GetIntegral().GetTransport(), whatsmeow.MediaImage).WA
+					link.Width = int(image.GetAncillary().GetWidth())
+					link.Height = int(image.GetAncillary().GetHeight())
+					linkPicture = link.ID
+				}
 				row.Attachments = append(row.Attachments, link)
 			}
 		} else {
@@ -153,6 +165,34 @@ func (c *Core) handleFBMessage(evt *events.FBMessage) {
 	cs.message(row.ID)
 	cs.thread(threadID)
 	c.flush(cs)
+	if linkPicture != "" {
+		go c.loadLinkPicture(row.ID, linkPicture)
+	}
+}
+
+// xmaPreviewImage is a card's picture (encrypted, on WhatsApp's servers), or nil.
+func xmaPreviewImage(previews []*waCommon.SubProtocol) *waMediaTransport.ImageTransport {
+	for _, raw := range previews {
+		image, err := armadilloutil.Unmarshal(&waMediaTransport.ImageTransport{}, raw, 2)
+		if err == nil && image.GetIntegral().GetTransport().GetIntegral().GetDirectPath() != "" {
+			return image
+		}
+	}
+	return nil
+}
+
+// loadLinkPicture downloads an encrypted card's picture into the media folder; the card then
+// shows it from there (previewURL, a file URL, as for the web importer's links).
+func (c *Core) loadLinkPicture(messageID, attachmentID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	path, err := c.downloadMedia(ctx, messageID, attachmentID)
+	if err != nil {
+		c.log.Warn().Err(err).Str("message_id", messageID).Msg("Failed to load an encrypted link's picture")
+		return
+	}
+	c.store.SetAttachmentPreviewURL(messageID, attachmentID, (&url.URL{Scheme: "file", Path: path}).String())
+	c.emitMessage(messageID)
 }
 
 // fillConsumerContent converts the message body; returns false for unsupported content.
