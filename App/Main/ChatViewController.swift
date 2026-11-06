@@ -296,6 +296,8 @@ final class ChatViewController: NSViewController {
             typingChanged()
             reload()
         case .conversations:
+            // A new reaction in this chat (an unseen one is noted in the store).
+            if store.unseenReactions[threadID] != nil { markReadIfVisible() }
             // Participant names / read markers or the theme may have changed. Other updates
             // (snippet, activity time, unread) happen constantly while syncing and don't change
             // the chat, so they don't reload it.
@@ -501,10 +503,12 @@ final class ChatViewController: NSViewController {
             readWhenUserReturns()
             return
         }
-        // Its new reactions are seen too (they count in the Dock badge).
-        store.clearUnseenReactions(threadID)
-        guard !store.markedUnread.contains(threadID),
-              let conversation = store.conversation(threadID), conversation.unreadCount > 0 else { return }
+        // Its new reactions are seen too (they count in the Dock badge); marked unread, only here.
+        guard !store.markedUnread.contains(threadID) else {
+            store.clearUnseenReactions(threadID)
+            return
+        }
+        guard let conversation = store.conversation(threadID), store.isUnread(conversation) else { return }
         store.markRead(threadID)
     }
 

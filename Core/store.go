@@ -777,6 +777,14 @@ func (s *Store) ListMessages(threadID string, before int64, limit int) []*messag
 	return out
 }
 
+// LatestFromOthers returns the newest message from other people, if any.
+func (s *Store) LatestFromOthers(threadID, selfID string) []*messageRow {
+	return s.queryMessages(`
+		SELECT `+messageColumns+` FROM messages
+		WHERE thread_id=? AND sender_id<>? AND is_system=0
+		ORDER BY timestamp DESC LIMIT 1`, threadID, selfID)
+}
+
 // UnreadFromOthers returns messages from other people newer than the thread's read marker.
 func (s *Store) UnreadFromOthers(threadID, selfID string, since int64) []*messageRow {
 	return s.queryMessages(`

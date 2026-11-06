@@ -512,7 +512,8 @@ final class ChatStore {
 
     /// Chats with reactions to your messages you haven't seen, with the newest one's time (ms).
     /// Messenger doesn't count reactions as unread and doesn't sync seeing them; the Dock badge
-    /// counts them (DockBadge). Kept across launches.
+    /// counts them (DockBadge). Seeing them reads the chat (`markRead`), which other devices
+    /// running Hermes get as a read at or after them. Kept across launches.
     private(set) var unseenReactions: [String: Int64] =
         (UserDefaults.standard.dictionary(forKey: unseenReactionsKey) as? [String: Int64]) ?? [:] {
         didSet { UserDefaults.standard.set(unseenReactions, forKey: Self.unseenReactionsKey) }
@@ -541,12 +542,19 @@ final class ChatStore {
     }
 
     func markRead(_ threadID: String) {
+        let hadUnseenReactions = unseenReactions[threadID] != nil
         clearUnseenReactions(threadID)
         markedUnread.remove(threadID)
-        guard var conversation = conversationsByID[threadID], conversation.unreadCount > 0 else { return }
-        conversation.unreadCount = 0
-        conversationsByID[threadID] = conversation
-        resortConversations()
+        guard var conversation = conversationsByID[threadID] else { return }
+        if conversation.unreadCount > 0 {
+            conversation.unreadCount = 0
+            conversationsByID[threadID] = conversation
+            resortConversations()
+        } else if !hadUnseenReactions {
+            return
+        }
+        // Also when only reactions were new: the read moves past them, so the other devices
+        // running Hermes clear them too ("threadRead").
         post("threads.markRead", ThreadParams(threadID: threadID))
     }
 
@@ -717,9 +725,9 @@ final class ChatStore {
 
         case "reaction":
             guard let event = core.decodeEvent(ReactionEvent.self, from: payload) else { return }
-            if Notifier.shared.isThreadVisible?(event.threadID) != true {
-                noteUnseenReaction(event)
-            }
+            // Also in the chat on screen, which marks it read (ChatViewController), so the
+            // other devices learn it was seen.
+            noteUnseenReaction(event)
             reactionEvents.send(event)
 
         case "threadRead":

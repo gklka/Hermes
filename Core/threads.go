@@ -415,8 +415,14 @@ func (c *Core) sendE2EEReadReceipts(ctx context.Context, t *threadRow) error {
 	if err != nil {
 		return err
 	}
+	unread := c.store.UnreadFromOthers(t.ID, c.selfID(), t.LastRead)
+	if len(unread) == 0 {
+		// Only reactions were new (the app reads the chat for them): the newest message again,
+		// so our other devices get a receipt from now, after the reactions, and clear them.
+		unread = c.store.LatestFromOthers(t.ID, c.selfID())
+	}
 	bySender := map[string][]waTypes.MessageID{}
-	for _, m := range c.store.UnreadFromOthers(t.ID, c.selfID(), t.LastRead) {
+	for _, m := range unread {
 		if m.WASender != "" {
 			bySender[m.WASender] = append(bySender[m.WASender], m.ID)
 		}

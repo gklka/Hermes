@@ -353,7 +353,6 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     private func markRead(_ threadID: String) async {
         guard await store.waitUntilReady() else { return }
         store.markRead(threadID)
-        store.clearUnseenReactions(threadID)
         clear(threadID: threadID)
     }
 }
