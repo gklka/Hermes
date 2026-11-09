@@ -8,7 +8,7 @@ import WebKit
 ///
 /// The file holds secrets (session tokens, backup keys): keep it local.
 ///
-/// Enable with: defaults write com.kristofgruber.Hermes WebCapture -bool YES (then relaunch).
+/// Enable with: defaults write hu.lka.gk.Hermes WebCapture -bool YES (then relaunch).
 /// It also makes the web view inspectable in Safari's Develop menu (for workers, which this
 /// can't see into).
 final class WebCapture: NSObject, WKScriptMessageHandler {

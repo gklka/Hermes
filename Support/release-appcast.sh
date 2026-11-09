@@ -15,7 +15,8 @@ if [ ! -f "$DMG" ] || [ ! -s "$NOTES" ]; then
     exit 1
 fi
 BIN=build/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin
-PLIST=build/DerivedData/Build/Products/Release/Hermes.app/Contents/Info.plist
+# The released app (APP, release.sh sets it), by default the last Release build.
+PLIST=${APP:-build/DerivedData/Build/Products/Release/Hermes.app}/Contents/Info.plist
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$PLIST")
 BUILD=$(/usr/libexec/PlistBuddy -c "Print CFBundleVersion" "$PLIST")
 MIN_OS=$(/usr/libexec/PlistBuddy -c "Print LSMinimumSystemVersion" "$PLIST")

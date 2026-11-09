@@ -7,5 +7,13 @@
 	<array>
 		<string>$(APP_GROUP_ID)</string>
 	</array>
+	<!-- The hardened runtime (needed for notarization) allows these only when asked for:
+	     calls (CallManager) and contact cards (ContactCards). -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>com.apple.security.device.camera</key>
+	<true/>
+	<key>com.apple.security.personal-information.addressbook</key>
+	<true/>
 </dict>
 </plist>
