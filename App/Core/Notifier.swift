@@ -6,8 +6,9 @@ import UserNotifications
 
 /// Posts a notification for each new incoming message, with the sender's profile picture.
 /// The picture is shown as the notification's avatar (a communication notification, like
-/// Messages) when the system allows it, otherwise as an image attachment. (macOS has no API for
-/// a group picture, so group notifications show the sender.)
+/// Messages, badged with the app icon) when the system allows it, otherwise as an image
+/// attachment. macOS can't give a group notification a picture (a generic one shows), so a
+/// group's message is posted as the sender's, with the group's name as the subtitle.
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     static let shared = Notifier()
 
@@ -209,8 +210,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         case noCommunicationEntitlement
     }
 
-    /// Communication notifications need an entitlement that requires a provisioning profile.
-    /// With the current ad-hoc signing it's absent, and the picture is attached instead.
+    /// Communication notifications need an entitlement that requires a provisioning profile (a
+    /// paid team). Without it (e.g. built with a free team) the picture is attached instead.
     private static let canUseCommunicationNotifications: Bool = {
         guard let task = SecTaskCreateFromSelf(nil) else { return false }
         let value = SecTaskCopyValueForEntitlement(task, "com.apple.developer.usernotifications.communication" as CFString, nil)
@@ -231,21 +232,16 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             contactIdentifier: nil,
             customIdentifier: senderID
         )
-        // A group needs its other members as recipients to be shown as a group.
-        var recipients: [INPerson]?
-        if groupName != nil, let conversation = store.conversation(threadID) {
-            recipients = conversation.participants.filter { $0.id != senderID }.map {
-                INPerson(
-                    personHandle: INPersonHandle(value: $0.id, type: .unknown), nameComponents: nil,
-                    displayName: $0.name, image: nil, contactIdentifier: nil, customIdentifier: $0.id
-                )
-            }
+        // Not as a group (see above): from the sender, the group's name under it.
+        if let groupName {
+            content.title = senderName
+            content.subtitle = groupName
         }
         let intent = INSendMessageIntent(
-            recipients: recipients,
+            recipients: nil,
             outgoingMessageType: .outgoingMessageText,
             content: body,
-            speakableGroupName: groupName.map { INSpeakableString(spokenPhrase: $0) },
+            speakableGroupName: nil,
             conversationIdentifier: threadID,
             serviceName: nil,
             sender: person,

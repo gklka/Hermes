@@ -1,6 +1,8 @@
 #!/bin/sh
 # Builds Release, installs it to /Applications and relaunches it. Siri and Shortcuts need a
 # team-signed app, and only one registered copy, so the build folder copies are unregistered.
+# Signing is automatic: Xcode makes the provisioning profile (-allowProvisioningUpdates), which
+# communication notifications need.
 set -e
 cd "$(dirname "$0")/.."
 : "${DEVELOPER_DIR:=/Applications/Xcode.app/Contents/Developer}"
@@ -16,7 +18,7 @@ else
 fi
 xcodebuild -project Hermes.xcodeproj -scheme Hermes -configuration Release \
     -destination "$DESTINATION" \
-    -derivedDataPath build/DerivedData build 2>&1 | grep -E "error: |\*\* BUILD"
+    -derivedDataPath build/DerivedData -allowProvisioningUpdates build 2>&1 | grep -E "error: |\*\* BUILD"
 BUILT=build/DerivedData/Build/Products/Release/Hermes.app
 codesign --verify --strict "$BUILT"
 

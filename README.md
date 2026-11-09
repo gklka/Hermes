@@ -81,7 +81,7 @@ AppKit UI (App/)  ──JSON over C calls──▶  Go core (Core/, static lib)
 
 Requires Xcode 26+ and Go (`brew install go`).
 
-1. Create `Support/Signing.local.xcconfig` with your own bundle ID prefix and Apple developer team (see `Support/Signing.xcconfig`).
+1. Create `Support/Signing.local.xcconfig` with your own bundle ID prefix and Apple developer team (see `Support/Signing.xcconfig`). Signing is automatic; with a free (personal) team, remove the communication notifications entitlement from `Support/Hermes.entitlements` (it needs a paid one; notifications then attach the sender's picture instead).
 2. Build the `Hermes` scheme. The "Build Go Core" phase runs `Support/build-core.sh`, which produces `Core/build/libmmcore.a` before Swift compiles.
 3. `Support/install.sh` builds Release and installs it to `/Applications` (Shortcuts and Spotlight need the installed, team-signed copy).
 

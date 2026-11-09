@@ -15,5 +15,9 @@
 	<true/>
 	<key>com.apple.security.personal-information.addressbook</key>
 	<true/>
+	<!-- Notifications with the sender's picture, badged with the app icon (Notifier). Needs a
+	     provisioning profile, so a paid team; with a free one, remove it. -->
+	<key>com.apple.developer.usernotifications.communication</key>
+	<true/>
 </dict>
 </plist>

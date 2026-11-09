@@ -26,7 +26,7 @@ EXPORT=build/export
 rm -rf "$ARCHIVE" "$EXPORT"
 xcodebuild -project Hermes.xcodeproj -scheme Hermes -configuration Release \
     -destination generic/platform=macOS -derivedDataPath build/DerivedData \
-    -archivePath "$ARCHIVE" archive 2>&1 | grep -E "error: |\*\* ARCHIVE"
+    -archivePath "$ARCHIVE" -allowProvisioningUpdates archive 2>&1 | grep -E "error: |\*\* ARCHIVE"
 [ -d "$ARCHIVE" ] || exit 1
 
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$ARCHIVE/Products/Applications/Hermes.app/Contents/Info.plist")
