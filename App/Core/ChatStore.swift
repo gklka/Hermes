@@ -786,6 +786,10 @@ final class ChatStore {
         // Only keep messages for threads the UI has opened; the list view only needs the snippet.
         guard var list = messagesByThread[message.threadID] else { return }
         if let index = list.firstIndex(where: { $0.id == message.id }) {
+            // Updates (a reaction, an edit) don't carry the local echo's ID; keep it, as the chat
+            // knows the message by it (a new key would make it zoom in again as if arriving).
+            var message = message
+            if message.pendingID == nil { message.pendingID = list[index].pendingID }
             list[index] = message
         } else {
             // A confirmed outgoing message carries the ID of its local echo; replace the echo.
