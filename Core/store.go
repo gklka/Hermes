@@ -605,6 +605,25 @@ func (s *Store) RemoveParticipant(threadID, userID string) {
 	_, _ = s.db.Exec(`DELETE FROM participants WHERE thread_id=? AND user_id=?`, threadID, userID)
 }
 
+// KeepParticipants removes everyone from the chat who isn't in `userIDs` (its full member list),
+// returning whether anyone was removed.
+func (s *Store) KeepParticipants(threadID string, userIDs []string) bool {
+	if len(userIDs) == 0 {
+		return false
+	}
+	args := []any{threadID}
+	for _, id := range userIDs {
+		args = append(args, id)
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(userIDs)), ",")
+	res, err := s.db.Exec(`DELETE FROM participants WHERE thread_id=? AND user_id NOT IN (`+placeholders+`)`, args...)
+	if err != nil {
+		return false
+	}
+	n, _ := res.RowsAffected()
+	return n > 0
+}
+
 // SetReadWatermark moves the person's read position on (a read receipt), adding them to the
 // chat if needed; their nickname is kept.
 func (s *Store) SetReadWatermark(threadID, userID string, ts int64) {

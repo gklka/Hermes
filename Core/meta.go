@@ -203,6 +203,27 @@ func (c *Core) handleThreadTables(tbl *table.LSTable, cs *changeSet) {
 		c.store.AddParticipant(id, id64(p.ContactId), p.Nickname, p.ReadWatermarkTimestampMs)
 		cs.thread(id)
 	}
+	// A chat synced in full (LSDeleteThenInsertThread, e.g. the chat list after reconnecting)
+	// comes with all its members: anyone else left or was removed while the removal itself
+	// wasn't received (LSRemoveParticipantFromThread only comes live).
+	// Only a list with you in it is taken as complete.
+	if self := c.selfID(); len(tbl.LSDeleteThenInsertThread) > 0 && self != "" {
+		members := map[string][]string{}
+		for _, p := range tbl.LSAddParticipantIdToGroupThread {
+			id := c.threadID(p.ThreadKey)
+			members[id] = append(members[id], id64(p.ContactId))
+		}
+		for _, t := range tbl.LSDeleteThenInsertThread {
+			id := c.threadID(t.ThreadKey)
+			if !slices.Contains(members[id], self) {
+				continue
+			}
+			if c.store.KeepParticipants(id, members[id]) {
+				c.log.Debug().Str("thread_id", id).Msg("Removed members missing from the synced member list")
+				cs.thread(id)
+			}
+		}
+	}
 	for _, p := range tbl.LSRemoveParticipantFromThread {
 		id := c.threadID(p.ThreadKey)
 		c.store.RemoveParticipant(id, id64(p.ParticipantId))
