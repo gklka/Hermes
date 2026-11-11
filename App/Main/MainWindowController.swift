@@ -1,7 +1,7 @@
 import AppKit
 import Combine
 
-final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindowDelegate, NSMenuItemValidation {
+final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindowDelegate, NSMenuItemValidation, NSToolbarItemValidation {
     private let split: MainSplitViewController
     private var cancellables: Set<AnyCancellable> = []
 
@@ -29,6 +29,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
 
         let toolbar = NSToolbar(identifier: "MainToolbar")
         toolbar.displayMode = .iconOnly
+        toolbar.allowsUserCustomization = true
+        toolbar.autosavesConfiguration = true
         toolbar.delegate = self
         window.toolbar = toolbar
         window.toolbarStyle = .unified
@@ -244,6 +246,15 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         return true
     }
 
+    func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
+        guard let action = ToolbarAction(item.itemIdentifier) else { return true }
+        let conversation = split.selectedConversation
+        if action == .toggleUnread {
+            ToolbarAction.updateUnreadItem(item, unread: (conversation?.unreadCount ?? 0) > 0)
+        }
+        return !action.needsChat || conversation != nil
+    }
+
     /// The filter icon is filled while a filter other than "All" is active.
     private func updateFilterItem() {
         let symbol = split.filter == .all ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill"
@@ -271,10 +282,15 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar)
+        [.toggleSidebar, .sidebarTrackingSeparator, Self.filterItemID, Self.newMessageItem, ChatToolbarButtons.itemID]
+            + ToolbarAction.allCases.map(\.identifier) + [.space, .flexibleSpace]
     }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        if let action = ToolbarAction(itemIdentifier) {
+            return action.makeItem(target: self)
+        }
+        // The customization palette's copies aren't kept (they'd replace the toolbar's).
         switch itemIdentifier {
         case Self.newMessageItem:
             let item = NSToolbarItem(itemIdentifier: itemIdentifier)
@@ -283,8 +299,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
             item.toolTip = "New Chat (⌘N)"
             item.target = self
             item.action = #selector(newChat(_:))
-            item.isHidden = split.isSidebarCollapsed
-            newMessageToolbarItem = item
+            if flag {
+                item.isHidden = split.isSidebarCollapsed
+                newMessageToolbarItem = item
+            }
             return item
         case Self.filterItemID:
             let menu = NSMenu()
@@ -299,12 +317,19 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
             item.showsIndicator = false
             item.label = "Filter"
             item.toolTip = "Filter Conversations"
-            item.isHidden = split.isSidebarCollapsed
-            filterItem = item
-            updateFilterItem()
+            item.image = NSImage(systemSymbolName: "line.3.horizontal.decrease.circle", accessibilityDescription: "Filter")
+            if flag {
+                item.isHidden = split.isSidebarCollapsed
+                filterItem = item
+                updateFilterItem()
+            }
             return item
         case ChatToolbarButtons.itemID:
             let (item, buttons) = ChatToolbarButtons.makeItem(target: self)
+            guard flag else {
+                buttons.show(ChatToolbarButtons.paletteKinds)
+                return item
+            }
             buttons.show(ChatToolbarButtons.kinds(for: split.selectedConversation, hasPinnedMessages: hasPinnedMessages))
             chatButtons = buttons
             return item

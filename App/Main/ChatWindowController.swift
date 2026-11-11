@@ -3,7 +3,7 @@ import Combine
 
 /// A chat in its own window, without the sidebar: double-click a chat in the list (or its context
 /// menu's Open in New Window). One window per chat; opening it again brings it to the front.
-final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation, NSToolbarDelegate {
+final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation, NSToolbarDelegate, NSToolbarItemValidation {
     private static var open: [String: ChatWindowController] = [:]
 
     static func show(threadID: String) {
@@ -52,6 +52,9 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         let toolbar = NSToolbar(identifier: "ChatWindowToolbar")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
+        // Shared by every chat window: customizing one changes them all.
+        toolbar.allowsUserCustomization = true
+        toolbar.autosavesConfiguration = true
         window.toolbar = toolbar
         window.delegate = self
         // Each chat keeps its window's frame; a new one cascades from the key window.
@@ -158,23 +161,47 @@ final class ChatWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        toolbarDefaultItemIdentifiers(toolbar)
+        [Self.headerItem, ChatToolbarButtons.itemID] + ToolbarAction.chatWindow.map(\.identifier) + [.space, .flexibleSpace]
     }
 
+    // The customization palette's copies get their own views (the toolbar's would move there).
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        if let action = ToolbarAction(itemIdentifier) {
+            return action.makeItem(target: self)
+        }
         if itemIdentifier == ChatToolbarButtons.itemID {
             let (item, buttons) = ChatToolbarButtons.makeItem(target: self)
+            guard flag else {
+                buttons.show(ChatToolbarButtons.paletteKinds)
+                return item
+            }
             buttons.show(ChatToolbarButtons.kinds(for: conversation, hasPinnedMessages: hasPinnedMessages))
             chatButtons = buttons
             return item
         }
         guard itemIdentifier == Self.headerItem else { return nil }
         let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-        item.view = header
+        if flag {
+            item.view = header
+        } else {
+            let sample = ChatHeaderView()
+            sample.nameLabel.stringValue = "Chat Name"
+            sample.subtitleLabel.stringValue = "Active now"
+            item.view = sample
+        }
         item.label = "Chat"
+        item.paletteLabel = "Chat Name"
         item.isBordered = false
         return item
+    }
+
+    func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
+        guard let action = ToolbarAction(item.itemIdentifier) else { return true }
+        if action == .toggleUnread {
+            ToolbarAction.updateUnreadItem(item, unread: (conversation?.unreadCount ?? 0) > 0)
+        }
+        return !action.needsChat || conversation != nil
     }
 
     /// Page Up/Down, Home and End scroll the messages even while the message field has the focus.

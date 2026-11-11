@@ -55,6 +55,7 @@ final class ChatToolbarButtons: NSView {
         let item = NSToolbarItem(itemIdentifier: itemID)
         item.view = view
         item.label = "Chat"
+        item.paletteLabel = "Calls, Members and Pins"
         item.isBordered = false
         return (item, view)
     }
@@ -112,6 +113,9 @@ final class ChatToolbarButtons: NSView {
         }
         glass.isHidden = kinds.isEmpty
     }
+
+    /// What the item shows in the Customize Toolbar sheet.
+    static let paletteKinds: Set<Kind> = [.audioCall, .videoCall, .members]
 
     /// The buttons a chat has.
     static func kinds(for conversation: Conversation?, hasPinnedMessages: Bool) -> Set<Kind> {
