@@ -72,6 +72,32 @@ final class LoginWindowController: NSWindowController, WKNavigationDelegate {
 
     // MARK: - WKNavigationDelegate
 
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+        // Facebook's "Verify with Google" check signs in to Google, which refuses web views
+        // ("This browser or app may not be secure"), so send them to a real browser for it.
+        if let host = navigationAction.request.url?.host?.lowercased(), host == "google.com" || host.hasSuffix(".google.com") {
+            showGoogleSignInAlert()
+            return .cancel
+        }
+        return .allow
+    }
+
+    private func showGoogleSignInAlert() {
+        guard let window, window.attachedSheet == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Finish this check in your browser"
+        alert.informativeText = "Facebook wants you to confirm it's you with Google, but Google doesn't allow signing in inside apps. Log in on facebook.com in your browser and finish the check there, then try again here."
+        alert.addButton(withTitle: "Open in Browser")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            if response == .alertFirstButtonReturn, let url = URL(string: "https://www.facebook.com/") {
+                NSWorkspace.shared.open(url)
+            }
+            // Back to the start, for the next try.
+            self?.webView.load(URLRequest(url: Self.loginURL))
+        }
+    }
+
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         checkCookies()
     }
