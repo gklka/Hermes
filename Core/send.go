@@ -225,7 +225,7 @@ func (c *Core) sendE2EE(
 	cs.thread(t.ID)
 	c.flush(cs)
 	// Sending reads the chat, as with Facebook messages (sendFBTask), also in the official apps.
-	go c.sendE2EEReadWatermark(context.Background(), t, row.Timestamp)
+	go c.sendE2EEReadWatermark(context.Background(), t, readMarkAfterSending(resp.Timestamp))
 	return nil
 }
 

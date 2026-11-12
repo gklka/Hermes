@@ -408,6 +408,14 @@ func (c *Core) sendE2EEReadWatermark(ctx context.Context, t *threadRow, ts int64
 	}
 }
 
+// readMarkAfterSending is the read mark for an encrypted chat after one of your messages, sent
+// at `sent` (whole seconds, as the encrypted connection reports it): now, but at least the end of
+// that second. Messenger counts a chat unread while its last activity, the message's exact
+// server time, is after the mark, also when the message is yours.
+func readMarkAfterSending(sent time.Time) int64 {
+	return max(time.Now().UnixMilli(), sent.Truncate(time.Second).UnixMilli()+999)
+}
+
 // sendE2EEReadReceipts marks the unread messages from others read, per sender (as receipts
 // on the encrypted connection name the messages). A receipt that fails isn't an error.
 func (c *Core) sendE2EEReadReceipts(ctx context.Context, t *threadRow) error {

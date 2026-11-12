@@ -160,6 +160,10 @@ func (c *Core) handleFBMessage(evt *events.FBMessage) {
 		}
 	}
 
+	newest := true
+	if t := c.store.GetThread(threadID); t != nil {
+		newest = ts >= t.LastActivity
+	}
 	c.store.PutMessage(row)
 	c.store.BumpThread(threadID, ts, snippetFor(row.Text, len(row.Attachments) > 0), senderID)
 	cs.message(row.ID)
@@ -168,6 +172,22 @@ func (c *Core) handleFBMessage(evt *events.FBMessage) {
 	if linkPicture != "" {
 		go c.loadLinkPicture(row.ID, linkPicture)
 	}
+	c.readAfterOwnMessage(threadID, senderID, evt.Info.Timestamp, newest)
+}
+
+// readAfterOwnMessage moves an encrypted chat's read mark past a message you just sent from
+// another device: the official apps don't always (a second message sent right after the first
+// left the chat unread in Messenger). Only for the chat's newest message, sent just now (not
+// ones caught up on after reconnecting, which others may have answered).
+func (c *Core) readAfterOwnMessage(threadID, senderID string, sent time.Time, newest bool) {
+	if senderID != c.selfID() || !newest || time.Since(sent) > time.Minute {
+		return
+	}
+	t := c.store.GetThread(threadID)
+	if t == nil || t.IsRequest() {
+		return
+	}
+	go c.sendE2EEReadWatermark(context.Background(), t, readMarkAfterSending(sent))
 }
 
 // xmaPreviewImage is a card's picture (encrypted, on WhatsApp's servers), or nil.
