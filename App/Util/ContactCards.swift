@@ -42,7 +42,7 @@ final class ContactCards {
     }
 
     /// Whether access to the contacts hasn't been asked for yet (the menu item asks).
-    var canAsk: Bool { CNContactStore.authorizationStatus(for: .contacts) == .notDetermined }
+    var canAsk: Bool { !DemoMode.isOn && CNContactStore.authorizationStatus(for: .contacts) == .notDetermined }
 
     private var isAuthorized: Bool { CNContactStore.authorizationStatus(for: .contacts) == .authorized }
 

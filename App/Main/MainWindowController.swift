@@ -2,7 +2,8 @@ import AppKit
 import Combine
 
 final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindowDelegate, NSMenuItemValidation, NSToolbarItemValidation {
-    private let split: MainSplitViewController
+    let split: MainSplitViewController
+    var chatViewController: ChatViewController { split.chatViewController }
     private var cancellables: Set<AnyCancellable> = []
 
     init() {
@@ -342,6 +343,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
 final class MainSplitViewController: NSSplitViewController {
     private let list = ConversationListViewController()
     private let chat = ChatViewController()
+    /// For demo mode's scenes (DemoDirector).
+    var chatViewController: ChatViewController { chat }
 
     var onConversationChanged: ((Conversation?) -> Void)?
     var onSidebarCollapsedChanged: (() -> Void)?

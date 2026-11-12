@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hermes for Mac</title>
+<meta name="description" content="Hermes is a free, open-source Mac app for Facebook Messenger, written in Swift and AppKit to look and feel like Apple's Messages.">
+<meta name="color-scheme" content="light dark">
+<meta property="og:title" content="Hermes: Messenger, as a real Mac app">
+<meta property="og:description" content="A free, open-source Messenger client for macOS, made to feel like Apple's Messages.">
+<meta property="og:image" content="https://gklka.github.io/Hermes/images/hero-light.webp">
+<link rel="icon" type="image/png" href="images/favicon.png">
+<link rel="apple-touch-icon" href="images/icon.png">
+<style>
+  :root {
+    --bg: #fbfbfd;
+    --bg-alt: #f2f2f7;
+    --card: #ffffff;
+    --text: #1d1d1f;
+    --muted: #6e6e73;
+    --line: rgba(0, 0, 0, 0.08);
+    --accent: #0a7cff;
+    --accent-2: #7b3fe4;
+    --accent-ink: #ffffff;
+    --chip: rgba(10, 124, 255, 0.1);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 30px rgba(0, 0, 0, 0.06);
+    --radius: 22px;
+    --max: 1180px;
+    /* Apple's system colors (light appearance). */
+    --sys-red: #ff3b30;
+    --sys-orange: #ff9500;
+    --sys-green: #34c759;
+    --sys-teal: #30b0c7;
+    --sys-blue: #007aff;
+    --sys-indigo: #5856d6;
+    --sys-purple: #af52de;
+    --sys-brown: #a2845e;
+    --sys-graphite: #8e8e93;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0b0b0f;
+      --bg-alt: #141419;
+      --card: #1c1c22;
+      --text: #f5f5f7;
+      --muted: #a1a1a6;
+      --line: rgba(255, 255, 255, 0.1);
+      --accent: #3d9bff;
+      --accent-2: #a77bff;
+      --chip: rgba(61, 155, 255, 0.16);
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 30px rgba(0, 0, 0, 0.35);
+      --sys-red: #ff453a;
+      --sys-orange: #ff9f0a;
+      --sys-green: #30d158;
+      --sys-teal: #40c8e0;
+      --sys-blue: #0a84ff;
+      --sys-indigo: #5e5ce6;
+      --sys-purple: #bf5af2;
+      --sys-brown: #ac8e68;
+      --sys-graphite: #98989d;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0b0b0f;
+    --bg-alt: #141419;
+    --card: #1c1c22;
+    --text: #f5f5f7;
+    --muted: #a1a1a6;
+    --line: rgba(255, 255, 255, 0.1);
+    --accent: #3d9bff;
+    --accent-2: #a77bff;
+    --chip: rgba(61, 155, 255, 0.16);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 30px rgba(0, 0, 0, 0.35);
+    --sys-red: #ff453a;
+    --sys-orange: #ff9f0a;
+    --sys-green: #30d158;
+    --sys-teal: #40c8e0;
+    --sys-blue: #0a84ff;
+    --sys-indigo: #5e5ce6;
+    --sys-purple: #bf5af2;
+    --sys-brown: #ac8e68;
+    --sys-graphite: #98989d;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 17px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  img { max-width: 100%; height: auto; display: block; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  h1, h2, h3 {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    margin: 0;
+  }
+  .wrap { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
+  kbd {
+    font: 600 0.82em/1 -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-bottom-width: 2px;
+    border-radius: 7px;
+    padding: 0.28em 0.5em;
+    white-space: nowrap;
+  }
+
+  /* Navigation */
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    background: color-mix(in srgb, var(--bg) 78%, transparent);
+    border-bottom: 1px solid var(--line);
+  }
+  nav .wrap { display: flex; align-items: center; gap: 24px; height: 56px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--text); font-weight: 650; font-size: 18px; }
+  .brand:hover { text-decoration: none; }
+  .brand img { width: 30px; height: 30px; }
+  nav .links { display: flex; gap: 22px; margin-left: auto; align-items: center; font-size: 14px; }
+  nav .links a { color: var(--muted); }
+  nav .links a:hover { color: var(--text); text-decoration: none; }
+  nav .links .pill { color: var(--accent-ink); background: var(--accent); padding: 6px 14px; border-radius: 999px; font-weight: 600; }
+  nav .links .pill:hover { color: var(--accent-ink); filter: brightness(1.08); }
+  @media (max-width: 720px) { nav .links .hide-s { display: none; } }
+
+  /* Hero */
+  .hero { text-align: center; padding: 80px 0 24px; position: relative; }
+  .hero::before {
+    content: ""; position: absolute; inset: -120px 0 auto; height: 720px; z-index: -1;
+    background:
+      radial-gradient(40% 50% at 30% 30%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 70%),
+      radial-gradient(35% 45% at 72% 25%, color-mix(in srgb, var(--accent-2) 18%, transparent), transparent 70%);
+    filter: blur(10px);
+  }
+  .hero .icon { width: 128px; height: 128px; margin: 0 auto 22px; filter: drop-shadow(0 10px 24px rgba(10, 124, 255, 0.28)); }
+  .hero h1 { font-size: clamp(42px, 7vw, 76px); font-weight: 750; }
+  .hero h1 .grad {
+    background: linear-gradient(100deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero p.lead { font-size: clamp(18px, 2.2vw, 23px); color: var(--muted); max-width: 720px; margin: 22px auto 0; }
+  .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 34px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 13px 24px; border-radius: 999px; font-weight: 600; font-size: 17px;
+    transition: transform 0.15s ease, filter 0.15s ease;
+  }
+  .btn:hover { text-decoration: none; transform: translateY(-1px); }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 35%, transparent); }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn.secondary { background: var(--chip); color: var(--accent); }
+  .btn svg { width: 19px; height: 19px; }
+  .meta { margin-top: 18px; font-size: 14px; color: var(--muted); }
+  .meta span + span::before { content: "·"; margin: 0 8px; }
+
+  .shot-hero { margin: 46px auto 0; max-width: 1180px; position: relative; }
+  .shot-hero img { width: 100%; }
+  .theme-toggle {
+    display: inline-flex; margin: 8px auto 0; padding: 4px; border-radius: 999px;
+    background: var(--bg-alt); border: 1px solid var(--line); gap: 2px;
+  }
+  .theme-toggle button {
+    border: 0; background: transparent; color: var(--muted); font: 600 13px/1 inherit; font-family: inherit;
+    padding: 8px 16px; border-radius: 999px; cursor: pointer;
+  }
+  .theme-toggle button[aria-pressed="true"] { background: var(--card); color: var(--text); box-shadow: var(--shadow); }
+
+  /* Highlights strip */
+  .strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin: 54px auto 0; }
+  .strip div { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px 20px; box-shadow: var(--shadow); }
+  .strip b { display: block; font-size: 16px; }
+  .strip small { color: var(--muted); font-size: 14px; }
+  @media (max-width: 860px) { .strip { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 480px) { .strip { grid-template-columns: 1fr; } .hero { padding-top: 48px; } }
+
+  /* Sections */
+  section { padding: 110px 0 0; }
+  .eyebrow { display: inline-block; font-size: 13px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); margin-bottom: 14px; }
+  .section-head { text-align: center; max-width: 760px; margin: 0 auto 56px; }
+  .section-head h2 { font-size: clamp(34px, 5vw, 52px); font-weight: 720; }
+  .section-head p { color: var(--muted); font-size: 20px; margin: 18px 0 0; }
+
+  .feature {
+    display: grid; grid-template-columns: 5fr 7fr; gap: 48px; align-items: center;
+    margin: 0 0 90px;
+  }
+  .feature.flip { grid-template-columns: 7fr 5fr; }
+  .feature.flip .text { order: 2; }
+  .feature h3 { font-size: clamp(28px, 3.4vw, 38px); font-weight: 700; margin-bottom: 16px; }
+  .feature p { color: var(--muted); margin: 0 0 14px; }
+  .feature ul { list-style: none; padding: 0; margin: 18px 0 0; }
+  .feature li { position: relative; padding-left: 26px; margin: 9px 0; }
+  .feature li::before {
+    content: ""; position: absolute; left: 2px; top: 0.55em; width: 12px; height: 12px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  }
+  .shot { cursor: zoom-in; margin: -4% -5%; }
+  .shot img { width: 100%; }
+  @media (max-width: 900px) {
+    .feature, .feature.flip { grid-template-columns: 1fr; gap: 18px; }
+    .feature.flip .text { order: 0; }
+    .shot { margin: 0 -6%; }
+  }
+
+  /* Gallery */
+  .gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 28px; }
+  .gallery figure {
+    margin: 0; background: var(--bg-alt); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 10px 10px 22px; overflow: hidden;
+  }
+  .gallery figure .shot { margin: -2% -3% 0; }
+  .gallery figcaption { padding: 0 16px; }
+  .gallery figcaption b { display: block; font-size: 20px; letter-spacing: -0.01em; }
+  .gallery figcaption span { color: var(--muted); font-size: 15px; }
+  @media (max-width: 760px) { .gallery { grid-template-columns: 1fr; } }
+
+  /* Mac integration grid */
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 24px; box-shadow: var(--shadow); }
+  /* Like System Settings' icons: one of Apple's system colors each, lit slightly from above. */
+  .tile .glyph {
+    --c: var(--sys-blue);
+    width: 42px; height: 42px; border-radius: 10px; display: grid; place-items: center; margin-bottom: 14px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--c) 82%, #fff), var(--c));
+    box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.12);
+  }
+  .glyph.red { --c: var(--sys-red); }
+  .glyph.orange { --c: var(--sys-orange); }
+  .glyph.green { --c: var(--sys-green); }
+  .glyph.teal { --c: var(--sys-teal); }
+  .glyph.blue { --c: var(--sys-blue); }
+  .glyph.indigo { --c: var(--sys-indigo); }
+  .glyph.purple { --c: var(--sys-purple); }
+  .glyph.brown { --c: var(--sys-brown); }
+  .glyph.graphite { --c: var(--sys-graphite); }
+  /* SF Symbols, rendered white (Support/Demo/symbols.swift). */
+  .tile .glyph img { width: 26px; height: 26px; }
+  .tile b { display: block; font-size: 18px; margin-bottom: 6px; letter-spacing: -0.01em; }
+  .tile p { margin: 0; color: var(--muted); font-size: 15px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .grid { grid-template-columns: 1fr; } }
+
+  .keys { display: flex; flex-wrap: wrap; gap: 10px 22px; justify-content: center; margin-top: 40px; color: var(--muted); font-size: 15px; }
+  .keys span { display: inline-flex; gap: 8px; align-items: center; }
+
+  /* Never */
+  .never { background: var(--bg-alt); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 90px 0; margin-top: 110px; }
+  .never .section-head { margin-bottom: 40px; }
+  .never-list { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+  .never-list div { text-align: center; padding: 22px 12px; border-radius: 18px; background: var(--card); border: 1px solid var(--line); }
+  .never-list b { display: block; font-size: 17px; }
+  .never-list b s { text-decoration-thickness: 2px; text-decoration-color: #ff453a; }
+  .never-list small { color: var(--muted); font-size: 14px; }
+  .free { text-align: center; margin-top: 34px; font-size: 20px; }
+  .free strong { background: linear-gradient(100deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  @media (max-width: 900px) { .never-list { grid-template-columns: repeat(2, 1fr); } }
+
+  /* How it works */
+  .how { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .how .tile { box-shadow: none; }
+  @media (max-width: 900px) { .how { grid-template-columns: 1fr; } }
+
+  /* Download */
+  .download { text-align: center; padding: 110px 0 40px; }
+  .download .icon { width: 96px; height: 96px; margin: 0 auto 20px; }
+  .download h2 { font-size: clamp(34px, 5vw, 52px); font-weight: 720; }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; max-width: 900px; margin: 40px auto 0; text-align: left; }
+  .steps div { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 18px 20px; }
+  .steps i { font-style: normal; font-weight: 700; color: var(--accent); margin-right: 6px; }
+  .steps p { margin: 6px 0 0; color: var(--muted); font-size: 15px; }
+  @media (max-width: 760px) { .steps { grid-template-columns: 1fr; } }
+
+  .caution {
+    max-width: 900px; margin: 70px auto 0; padding: 26px 30px; border-radius: 20px;
+    background: color-mix(in srgb, #ff9f0a 10%, var(--card)); border: 1px solid color-mix(in srgb, #ff9f0a 35%, transparent);
+  }
+  .caution b { display: block; margin-bottom: 8px; font-size: 18px; }
+  .caution ul { margin: 0; padding-left: 20px; color: var(--muted); font-size: 15px; }
+  .caution li { margin: 6px 0; }
+
+  footer { border-top: 1px solid var(--line); margin-top: 80px; padding: 34px 0 50px; color: var(--muted); font-size: 13px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 24px; justify-content: space-between; }
+  footer a { color: var(--muted); text-decoration: underline; }
+
+  /* Lightbox */
+  dialog {
+    border: 0; padding: 0; background: transparent; max-width: 96vw; max-height: 94vh;
+  }
+  dialog::backdrop { background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(6px); }
+  dialog img { max-width: 96vw; max-height: 94vh; width: auto; cursor: zoom-out; }
+
+  .reveal { opacity: 0; transform: translateY(24px); transition: opacity 0.7s ease, transform 0.7s ease; }
+  .reveal.in { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .reveal { opacity: 1; transform: none; transition: none; }
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#"><img src="images/icon.png" alt="" width="30" height="30">Hermes</a>
+    <div class="links">
+      <a class="hide-s" href="#features">Features</a>
+      <a class="hide-s" href="#mac">Mac integration</a>
+      <a class="hide-s" href="#how">How it works</a>
+      <a href="https://github.com/gklka/Hermes">GitHub</a>
+      <a class="pill" href="#download">Download</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <img class="icon" src="images/icon.png" alt="Hermes app icon" width="128" height="128">
+    <h1>Messenger, as a<br><span class="grad">real Mac app.</span></h1>
+    <p class="lead">Hermes is a free, open-source Facebook Messenger client written in Swift and AppKit. No Electron, no web page in a window: it looks and feels like Apple's Messages.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/gklka/Hermes/releases/latest">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14"/></svg>
+        Download for Mac
+      </a>
+      <a class="btn secondary" href="https://github.com/gklka/Hermes">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.26 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+        Source on GitHub
+      </a>
+    </div>
+    <div class="meta"><span>macOS 26 or later</span><span>Apple silicon &amp; Intel</span><span>Notarized by Apple</span><span>Free, forever</span></div>
+
+    <div class="shot-hero reveal">
+      <picture id="hero-picture">
+        <source id="hero-dark-source" srcset="images/hero-dark.webp" media="(prefers-color-scheme: dark)">
+        <img id="hero-img" src="images/hero-light.webp" width="2520" height="1840"
+             alt="Hermes showing a chat with a photo, a link preview, a reply, tapbacks, a read picture and the typing bubble, next to the chat list">
+      </picture>
+    </div>
+    <div class="theme-toggle" role="group" aria-label="Screenshot appearance">
+      <button type="button" data-mode="light">Light</button>
+      <button type="button" data-mode="dark">Dark</button>
+    </div>
+
+    <div class="strip">
+      <div><b>Native AppKit</b><small>Liquid Glass, source-list sidebar, Messages-style bubbles</small></div>
+      <div><b>Encrypted chats</b><small>1:1, group and end-to-end encrypted, with full history</small></div>
+      <div><b>Calls</b><small>Audio and video, with an incoming call banner</small></div>
+      <div><b>Fast and local</b><small>Messages stored on your Mac, chats open instantly</small></div>
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Built like Messages</span>
+      <h2>Everything you chat with,<br>the way a Mac does it.</h2>
+      <p>Replies, tapbacks, polls, themes and calls, drawn with Apple's own controls. Every screenshot here is the real app, running on made-up chats.</p>
+    </div>
+
+    <div class="feature reveal">
+      <div class="text">
+        <h3>Tapbacks, replies and read pictures.</h3>
+        <p>Double-click a message to react, just like in Messages. Replies show their quote with a line to the message they answer.</p>
+        <ul>
+          <li>Tapbacks and every quick reaction Messenger has</li>
+          <li>Pictures of who has read up to where</li>
+          <li>The typing bubble turns into the message when it arrives</li>
+          <li>Link previews, photos with Quick Look, drag and drop</li>
+        </ul>
+      </div>
+      <div class="shot"><img src="images/tapbacks.webp" width="2520" height="1840" loading="lazy" alt="The tapback picker over a message in a chat"></div>
+    </div>
+
+    <div class="feature flip reveal">
+      <div class="text">
+        <h3>Polls, themes and @mentions.</h3>
+        <p>Group polls look like they do in Messages: a bubble per choice that grows with its votes and shows who voted. Click to vote, or add a choice.</p>
+        <ul>
+          <li>Each chat's Messenger theme, gradients included</li>
+          <li>Tag people with @ in group chats</li>
+          <li>Light and dark mode</li>
+        </ul>
+      </div>
+      <div class="shot"><img src="images/hero-dark.webp" width="2520" height="1840" loading="lazy" alt="A group chat in dark mode with a poll, a gradient theme and reactions"></div>
+    </div>
+
+    <div class="feature reveal">
+      <div class="text">
+        <h3>Audio and video calls.</h3>
+        <p>Calls ring with a banner in the corner of your screen, like a system notification. Missed and finished calls show up in the chat as cards with Call Back.</p>
+        <ul>
+          <li>Start a call from the toolbar</li>
+          <li>Shared locations as maps</li>
+          <li>Shared posts, reels and stories as rich cards</li>
+        </ul>
+      </div>
+      <div class="shot"><img src="images/calls.webp" width="2600" height="1920" loading="lazy" alt="An incoming video call banner over a chat with call cards and a shared location"></div>
+    </div>
+
+    <div class="feature flip reveal">
+      <div class="text">
+        <h3>Chats in their own windows.</h3>
+        <p>Double-click any chat to open it in a window of its own, with its picture, name and buttons in the title bar. The toolbars are customizable, in the main window and in chat windows.</p>
+        <ul>
+          <li>Full menus and keyboard shortcuts</li>
+          <li>Three-finger swipes between chats</li>
+          <li>Chats open instantly: messages are stored on your Mac</li>
+        </ul>
+      </div>
+      <div class="shot"><img src="images/window.webp" width="2520" height="1840" loading="lazy" alt="A group chat in its own window over the main window"></div>
+    </div>
+
+    <div class="gallery reveal">
+      <figure>
+        <div class="shot"><img src="images/find.webp" width="2520" height="1840" loading="lazy" alt="Find in Chat showing the messages that match"></div>
+        <figcaption><b>Find in Chat</b><span>Searches the whole chat, fetching older history from Messenger as it goes.</span></figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img src="images/edits.webp" width="2520" height="1840" loading="lazy" alt="An edited message with its earlier version shown"></div>
+        <figcaption><b>Edit and unsend</b><span>Edit your messages with <kbd>⌘E</kbd>, and see what an edited message said before.</span></figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img src="images/cards.webp" width="2520" height="1840" loading="lazy" alt="A chat with a shared Instagram reel and a PDF file"></div>
+        <figcaption><b>Files and shared posts</b><span>Files open in Quick Look; reels and posts show as cards.</span></figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img src="images/requests.webp" width="2520" height="1840" loading="lazy" alt="Message requests with Accept, Delete and Block"></div>
+        <figcaption><b>Message requests</b><span>Messenger's You May Know and Spam lists, with Accept, Delete and Block.</span></figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img src="images/members.webp" width="2520" height="1840" loading="lazy" alt="A group's members in a sheet"></div>
+        <figcaption><b>Groups</b><span>See a group's members, add people, rename, mute or leave.</span></figcaption>
+      </figure>
+      <figure>
+        <div class="shot"><img src="images/hero-light.webp" width="2520" height="1840" loading="lazy" alt="The main window in light mode"></div>
+        <figcaption><b>Encrypted chats</b><span>End-to-end encrypted chats with their history and themes, once you've entered your PIN.</span></figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="mac">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">At home on your Mac</span>
+      <h2>Works with the rest of macOS.</h2>
+      <p>Hermes plugs into the system the way Apple's own apps do.</p>
+    </div>
+    <div class="grid reveal">
+      <div class="tile">
+        <div class="glyph red"><img src="images/symbols/bell.badge.fill.png" alt=""></div>
+        <b>Notifications</b>
+        <p>With the sender's picture, Reply right from the banner, and Mark as Read.</p>
+      </div>
+      <div class="tile">
+        <div class="glyph indigo"><img src="images/symbols/square.2.layers.3d.fill.png" alt=""></div>
+        <b>Shortcuts</b>
+        <p>Send messages and files, edit or unsend the last one, mark chats read or unread.</p>
+      </div>
+      <div class="tile">
+        <div class="glyph graphite"><img src="images/symbols/magnifyingglass.png" alt=""></div>
+        <b>Spotlight</b>
+        <p>Your messages show up in Spotlight; pick one to jump right to it.</p>
+      </div>
+      <div class="tile">
+        <div class="glyph blue"><img src="images/symbols/square.and.arrow.up.png" alt=""></div>
+        <b>Share menu</b>
+        <p>Share pictures, files and links to a chat from any app.</p>
+      </div>
+      <div class="tile">
+        <div class="glyph teal"><img src="images/symbols/widget.small.png" alt=""></div>
+        <b>Widget</b>
+        <p>Your recent chats on the desktop. Click one to open it.</p>
+      </div>
+      <div class="tile">
+        <div class="glyph purple"><img src="images/symbols/dock.rectangle.png" alt=""></div>
+        <b>Dock badge and menu</b>
+        <p>Unread count on the icon; your recent chats in its menu.</p>
+      </div>
+      <div class="tile">
+        <div class="glyph brown"><img src="images/symbols/person.crop.circle.png" alt=""></div>
+        <b>Contacts</b>
+        <p>Contact cards from your Contacts, and their nicknames if you prefer.</p>
+      </div>
+      <div class="tile">
+        <div class="glyph green"><img src="images/symbols/arrow.triangle.2.circlepath.png" alt=""></div>
+        <b>Updates itself</b>
+        <p>New versions come from the GitHub releases, notarized by Apple.</p>
+      </div>
+      <div class="tile">
+        <div class="glyph orange"><img src="images/symbols/circle.lefthalf.filled.png" alt=""></div>
+        <b>Light and dark</b>
+        <p>Follows your Mac's appearance, with Liquid Glass throughout.</p>
+      </div>
+    </div>
+    <div class="keys reveal" aria-label="Keyboard shortcuts">
+      <span><kbd>⌘N</kbd> New message</span>
+      <span><kbd>⌘F</kbd> Find a chat</span>
+      <span><kbd>⌥⌘F</kbd> Find in chat</span>
+      <span><kbd>⌘E</kbd> Edit message</span>
+      <span><kbd>⌘L</kbd> Like</span>
+      <span><kbd>⌘1</kbd>–<kbd>⌘9</kbd> Pick a chat</span>
+    </div>
+  </div>
+</section>
+
+<div class="never">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Just messaging</span>
+      <h2>What Hermes will never have.</h2>
+      <p>Hermes is for talking to people. These won't be added, ever.</p>
+    </div>
+    <div class="never-list reveal">
+      <div><b><s>Meta AI</s></b><small>No AI chats or suggestions</small></div>
+      <div><b><s>Ads</s></b><small>No sponsored messages</small></div>
+      <div><b><s>Chat heads</s></b><small>No bubbles over other apps</small></div>
+      <div><b><s>Stories</s></b><small>No viewing or posting</small></div>
+      <div><b><s>Profile settings</s></b><small>Use facebook.com for that</small></div>
+    </div>
+    <p class="free reveal">Hermes is free and will <strong>always remain completely free</strong>.<br><small style="color: var(--muted); font-size: 16px;">No paid version, no subscriptions, no in-app purchases.</small></p>
+  </div>
+</div>
+
+<section id="how">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <span class="eyebrow">Open source</span>
+      <h2>How it works.</h2>
+      <p>A Swift app on top of a Go core, built on the open-source libraries behind the mautrix Messenger bridge.</p>
+    </div>
+    <div class="how reveal">
+      <div class="tile">
+        <b>Native UI</b>
+        <p>Swift and AppKit, with the same controls, sheets, menus and Liquid Glass as Apple's own apps.</p>
+      </div>
+      <div class="tile">
+        <b>Messenger's protocol</b>
+        <p>A Go core speaks Messenger's web protocol through <a href="https://github.com/mautrix/meta">mautrix-meta</a>, and handles encrypted chats with <a href="https://github.com/tulir/whatsmeow">whatsmeow</a>.</p>
+      </div>
+      <div class="tile">
+        <b>Your data stays on your Mac</b>
+        <p>Messages, keys and your session are stored locally and go only to Meta's servers. No analytics, no other servers.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="download" id="download">
+  <div class="wrap">
+    <img class="icon reveal" src="images/icon.png" alt="" width="96" height="96">
+    <h2 class="reveal">Get Hermes.</h2>
+    <div class="cta reveal">
+      <a class="btn primary" href="https://github.com/gklka/Hermes/releases/latest">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14"/></svg>
+        Download the latest version
+      </a>
+    </div>
+    <div class="meta">macOS 26 or later, on an Apple silicon or Intel Mac</div>
+    <div class="steps reveal">
+      <div><i>1</i><b>Install</b><p>Open the DMG and drag Hermes to Applications.</p></div>
+      <div><i>2</i><b>Log in</b><p>Sign in with your Facebook account on facebook.com's own login page.</p></div>
+      <div><i>3</i><b>Restore</b><p>Choose Restore Encrypted Chats… and enter your Messenger PIN once.</p></div>
+    </div>
+
+    <div class="caution reveal">
+      <b>Before you use it</b>
+      <ul>
+        <li><strong>Not affiliated with Meta.</strong> Hermes is an independent, learning-purpose project, not made, endorsed or supported by Meta Platforms, Inc. Facebook and Messenger are trademarks of Meta Platforms, Inc.</li>
+        <li><strong>It may break Facebook's Terms.</strong> Meta's <a href="https://www.facebook.com/terms.php">Terms of Service</a> don't allow unofficial tools without permission, and Meta can restrict accounts it believes break them. Use it only with an account you're willing to risk.</li>
+        <li><strong>No warranty.</strong> It can stop working at any time if Meta changes its service. Don't rely on it for anything important.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>Hermes is free software under the <a href="https://github.com/gklka/Hermes/blob/main/LICENSE">GNU AGPL v3.0</a>.</span>
+    <span>Sample chats in the screenshots are made up; photos from <a href="https://unsplash.com">Unsplash</a>.</span>
+  </div>
+</footer>
+
+<dialog id="lightbox" aria-label="Screenshot"><img alt=""></dialog>
+
+<script>
+  // Screenshots open larger on click.
+  const lightbox = document.getElementById("lightbox");
+  const big = lightbox.querySelector("img");
+  document.querySelectorAll(".shot img, #hero-img").forEach((img) => {
+    img.style.cursor = "zoom-in";
+    img.addEventListener("click", () => {
+      big.src = img.currentSrc || img.src;
+      big.alt = img.alt;
+      lightbox.showModal();
+    });
+  });
+  lightbox.addEventListener("click", () => lightbox.close());
+
+  // The hero screenshot follows the system appearance until a button picks one.
+  const source = document.getElementById("hero-dark-source");
+  const buttons = document.querySelectorAll(".theme-toggle button");
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)");
+  function show(mode) {
+    source.media = mode === "dark" ? "all" : "not all";
+    buttons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === mode)));
+  }
+  function followSystem() {
+    buttons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === (prefersDark.matches ? "dark" : "light"))));
+  }
+  followSystem();
+  prefersDark.addEventListener("change", followSystem);
+  buttons.forEach((b) => b.addEventListener("click", () => show(b.dataset.mode)));
+
+  // Sections fade in as they scroll into view.
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add("in");
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { rootMargin: "0px 0px -8% 0px" });
+  document.querySelectorAll(".reveal").forEach((el) => observer.observe(el));
+</script>
+</body>
+</html>

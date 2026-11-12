@@ -3,8 +3,9 @@ import Foundation
 /// The app's data folder, Application Support/Hermes: the core's databases, media and
 /// log, and the app's own caches.
 enum AppData {
-    nonisolated static let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Hermes", isDirectory: true)
+    nonisolated static let folder = DemoMode.folder
+        ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Hermes", isDirectory: true)
 }
 
 /// Thin JSON-RPC bridge to the Go core.
@@ -35,6 +36,10 @@ final class CoreBridge {
 
     func start(dataDirectory: URL) {
         try? FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+        if DemoMode.isOn {
+            DemoCore.shared.start()
+            return
+        }
         dataDirectory.path.withCString { path in
             MMStart(UnsafeMutablePointer(mutating: path), coreCallback)
         }
@@ -57,6 +62,9 @@ final class CoreBridge {
         nextID += 1
         let id = nextID
         let request = try encoder.encode(Request(id: id, method: method, params: params))
+        if DemoMode.isOn {
+            return DemoCore.shared.respond(method, try encoder.encode(params))
+        }
         let json = String(decoding: request, as: UTF8.self)
         return try await withCheckedThrowingContinuation { continuation in
             pending[id] = continuation

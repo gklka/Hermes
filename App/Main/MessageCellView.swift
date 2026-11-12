@@ -52,6 +52,8 @@ final class MessageCellView: NSTableCellView {
     private let bubble = BubbleView()
     private let textView = MessageTextView()
     private let reactionsBadge = ReactionsBadge()
+    /// For demo mode's scenes (DemoDirector).
+    var bubbleView: NSView { bubble }
     private let avatar = AvatarView()
     /// Clicking offers to resend or delete the message.
     private let failedIcon = NSButton()

@@ -7,7 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = ChatStore.shared
     /// Updates from the GitHub releases (Info.plist's SUFeedURL), checked daily and from
     /// Hermes › Check for Updates….
-    private let updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+    private let updater = SPUStandardUpdaterController(startingUpdater: !DemoMode.isOn, updaterDelegate: nil, userDriverDelegate: nil)
     private var mainWindowController: MainWindowController?
     private var loginWindowController: LoginWindowController?
     private var cancellables: Set<AnyCancellable> = []
@@ -37,6 +37,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .store(in: &cancellables)
 
         store.start()
+        if DemoMode.isOn {
+            // Sample chats only: no network, notifications or system integration.
+            DemoDirector.shared.start()
+            return
+        }
         ConnectionWatcher.shared.start()
 
         Notifier.shared.onOpenThread = { [weak self] threadID, messageID in
@@ -167,6 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 didLoadConversations = true
                 Task {
                     await store.loadConversations()
+                    guard !DemoMode.isOn else { return }
                     WebHistoryImporter.shared.chatsLoaded()
                     // Launched by choosing a chat in Spotlight.
                     if let target = spotlightTarget {
@@ -174,6 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         mainWindowController?.select(threadID: target.threadID, revealing: target.messageID)
                     }
                 }
+                guard !DemoMode.isOn else { return }
                 WebChatImporter.shared.start()
                 SpotlightIndex.shared.start()
                 ShareSupport.shared.start()

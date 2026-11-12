@@ -124,6 +124,7 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
     /// (without loading anything) when the app isn't logged in.
     @discardableResult
     func start(showWindow: Bool) async -> Bool {
+        guard !DemoMode.isOn else { return false }
         if sessionSetup == nil {
             sessionSetup = Task { await setUpSession() }
         }

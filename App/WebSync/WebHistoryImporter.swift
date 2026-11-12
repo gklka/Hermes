@@ -259,7 +259,7 @@ final class WebHistoryImporter {
 
     /// The chat was opened: what's new in it is imported next.
     func importHistory(threadID: String) {
-        guard !done.contains(threadID), current?.threadID != threadID else { return }
+        guard !DemoMode.isOn, !done.contains(threadID), current?.threadID != threadID else { return }
         enqueueFirst(Job(threadID: threadID, mode: .latest))
     }
 
