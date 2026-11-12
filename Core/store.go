@@ -312,6 +312,12 @@ func (s *Store) ContactName(id string) string {
 	return name
 }
 
+func (s *Store) ContactAvatarURL(id string) string {
+	var url string
+	_ = s.db.QueryRow(`SELECT avatar_url FROM contacts WHERE id=?`, id).Scan(&url)
+	return url
+}
+
 // MARK: - Threads
 
 // Thread folders, as Messenger names them.

@@ -9,8 +9,6 @@ enum MainMenu {
         appMenu.addItem(withTitle: "About \(appName)", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
         appMenu.addItem(withTitle: "Check for Updates…", action: #selector(AppDelegate.checkForUpdates(_:)), keyEquivalent: "")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "Log Out", action: #selector(AppDelegate.logOut(_:)), keyEquivalent: "")
-        appMenu.addItem(.separator())
         let services = NSMenu()
         appMenu.addItem(withTitle: "Services", action: nil, keyEquivalent: "").submenu = services
         NSApp.servicesMenu = services
@@ -27,6 +25,8 @@ enum MainMenu {
         fileMenu.addItem(withTitle: "New Chat…", action: #selector(MainWindowController.newChat(_:)), keyEquivalent: "n")
         fileMenu.addItem(withTitle: "Open Chat…", action: #selector(MainWindowController.newMessage(_:)), keyEquivalent: "o")
         fileMenu.addItem(withTitle: "Restore Encrypted Chats…", action: #selector(AppDelegate.showWebSync(_:)), keyEquivalent: "")
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(withTitle: "Add Account…", action: #selector(AppDelegate.addAccount(_:)), keyEquivalent: "")
         fileMenu.addItem(.separator())
         fileMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         main.addItem(withTitle: "File", action: nil, keyEquivalent: "").submenu = fileMenu
@@ -72,6 +72,10 @@ enum MainMenu {
         let export = conversationMenu.addItem(withTitle: "Export Chat…", action: #selector(MainWindowController.exportChat(_:)), keyEquivalent: "e")
         export.keyEquivalentModifierMask = [.command, .shift]
         main.addItem(withTitle: "Chat", action: nil, keyEquivalent: "").submenu = conversationMenu
+
+        let accountMenu = NSMenu(title: "Account")
+        accountMenu.delegate = AccountMenu.shared
+        main.addItem(withTitle: "Account", action: nil, keyEquivalent: "").submenu = accountMenu
 
         let windowMenu = NSMenu(title: "Window")
         windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")

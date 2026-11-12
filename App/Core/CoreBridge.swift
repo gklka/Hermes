@@ -1,11 +1,9 @@
 import Foundation
 
-/// The app's data folder, Application Support/Hermes: the core's databases, media and
-/// log, and the app's own caches.
+/// The active account's data folder (Accounts), Application Support/Hermes for the first one:
+/// the core's databases, media and log, and the app's own caches.
 enum AppData {
-    nonisolated static let folder = DemoMode.folder
-        ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Hermes", isDirectory: true)
+    nonisolated static let folder = DemoMode.folder ?? Accounts.folder(for: Accounts.active)
 }
 
 /// Thin JSON-RPC bridge to the Go core.

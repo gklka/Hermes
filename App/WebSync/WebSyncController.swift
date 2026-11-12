@@ -15,8 +15,8 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
     private var hasLoaded = false
     private var loadWaiters: [CheckedContinuation<Void, Never>] = []
 
-    /// Fixed so the restored web app state survives relaunches.
-    private static let storeID = UUID(uuidString: "6F1C2B7E-4E1A-4C55-9B7A-2D0E7F9A1C31")!
+    /// The active account's (Accounts), fixed so the restored web app state survives relaunches.
+    private static let storeID = Accounts.webStoreID
     /// Messenger's "new message" page: the chat list, and no chat open (see `park`).
     static let idlePath = "/messages/new/"
     static let messagesURL = URL(string: "https://www.facebook.com\(idlePath)")!
@@ -405,9 +405,10 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
 
     private func resetDataIfNeeded() async {
         let defaults = UserDefaults.standard
-        guard defaults.integer(forKey: "WebDataVersion") < Self.dataVersion else { return }
+        let key = Accounts.defaultsKey("WebDataVersion")
+        guard defaults.integer(forKey: key) < Self.dataVersion else { return }
         await deleteData()
-        defaults.set(Self.dataVersion, forKey: "WebDataVersion")
+        defaults.set(Self.dataVersion, forKey: key)
     }
 
     func load(_ url: URL) {

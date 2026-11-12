@@ -130,6 +130,12 @@ func (c *Core) setState(state, errMsg string) {
 	c.mu.Lock()
 	account := c.account
 	c.mu.Unlock()
+	// The account often comes without a picture; your contact entry has it.
+	if account != nil && account.AvatarURL == "" && c.store != nil {
+		withPicture := *account
+		withPicture.AvatarURL = c.store.ContactAvatarURL(account.ID)
+		account = &withPicture
+	}
 	emitEvent("state", apiState{State: state, Account: account, Error: errMsg})
 }
 

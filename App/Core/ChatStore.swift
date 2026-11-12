@@ -508,7 +508,7 @@ final class ChatStore {
 
     // MARK: - Unseen reactions
 
-    private static let unseenReactionsKey = "UnseenReactions"
+    private static let unseenReactionsKey = Accounts.defaultsKey("UnseenReactions")
 
     /// Chats with reactions to your messages you haven't seen, with the newest one's time (ms).
     /// Messenger doesn't count reactions as unread and doesn't sync seeing them; the Dock badge

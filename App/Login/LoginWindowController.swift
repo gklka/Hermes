@@ -3,9 +3,11 @@ import WebKit
 
 /// Shows facebook.com's own login page in a web view. Once the session cookies
 /// appear, they're handed to the Go core, which takes over from there.
-final class LoginWindowController: NSWindowController, WKNavigationDelegate {
+final class LoginWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate {
     private let onCookies: ([String: String]) -> Void
     private let webView: WKWebView
+    /// The user agent the core uses (Facebook's pages get it).
+    private var coreUserAgent: String?
     private let statusLabel = NSTextField(labelWithString: "")
     private var didSubmit = false
 
@@ -30,6 +32,7 @@ final class LoginWindowController: NSWindowController, WKNavigationDelegate {
         super.init(window: window)
 
         webView.navigationDelegate = self
+        webView.uiDelegate = self
 
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
@@ -55,6 +58,7 @@ final class LoginWindowController: NSWindowController, WKNavigationDelegate {
         Task {
             // Use the same user agent the core will use, so Meta sees one consistent "browser".
             if let userAgent = await ChatStore.shared.userAgent() {
+                coreUserAgent = userAgent
                 webView.customUserAgent = userAgent
             }
             webView.load(URLRequest(url: Self.loginURL))
@@ -73,13 +77,42 @@ final class LoginWindowController: NSWindowController, WKNavigationDelegate {
     // MARK: - WKNavigationDelegate
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
-        // Facebook's "Verify with Google" check signs in to Google, which refuses web views
-        // ("This browser or app may not be secure"), so send them to a real browser for it.
-        if let host = navigationAction.request.url?.host?.lowercased(), host == "google.com" || host.hasSuffix(".google.com") {
+        guard navigationAction.targetFrame?.isMainFrame != false, let url = navigationAction.request.url else { return .allow }
+        let host = url.host?.lowercased() ?? ""
+        let isGoogle = host == "google.com" || host.hasSuffix(".google.com")
+        // Google turned the sign-in down after all: finish the check in a real browser.
+        if isGoogle, url.path.contains("/signin/rejected") {
             showGoogleSignInAlert()
             return .cancel
         }
+        // Facebook's "Verify with Google" check signs in to Google, which refuses web views
+        // ("This browser or app may not be secure") and browsers that don't add up (a Chrome
+        // user agent on WebKit): Google's pages get Safari's, Facebook's the core's again.
+        let userAgent = isGoogle ? Self.safariUserAgent : coreUserAgent
+        guard let userAgent, webView.customUserAgent != userAgent else { return .allow }
+        webView.customUserAgent = userAgent
+        // This request already has the old one: load it again with the new one.
+        if isGoogle, navigationAction.request.httpMethod ?? "GET" == "GET" {
+            webView.load(navigationAction.request)
+            return .cancel
+        }
         return .allow
+    }
+
+    /// The installed Safari's user agent: WebKit's own (this is WebKit), as Safari sends it.
+    private static let safariUserAgent: String? = {
+        let info = NSDictionary(contentsOfFile: "/Applications/Safari.app/Contents/Info.plist")
+        let version = info?["CFBundleShortVersionString"] as? String ?? "26.0"
+        return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/\(version) Safari/605.1.15"
+    }()
+
+    // MARK: - WKUIDelegate
+
+    /// Links and pop-ups for a new window (Google's sign-in can use one) open here instead.
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        webView.load(navigationAction.request)
+        return nil
     }
 
     private func showGoogleSignInAlert() {

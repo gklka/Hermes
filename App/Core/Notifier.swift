@@ -181,6 +181,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         var finalContent: UNNotificationContent = content
         do {
             guard Self.canUseCommunicationNotifications else { throw NotifierError.noCommunicationEntitlement }
+            // A communication notification is donated to Siri, which only knows the main account.
+            guard Accounts.isMain else { throw NotifierError.notMainAccount }
             finalContent = try await communicationContent(
                 content, threadID: threadID, senderID: senderID, senderName: senderName, body: body,
                 avatar: avatar, groupName: isGroup ? conversation?.name : nil
@@ -208,6 +210,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     private enum NotifierError: Error {
         case noCommunicationEntitlement
+        case notMainAccount
     }
 
     /// Communication notifications need an entitlement that requires a provisioning profile (a

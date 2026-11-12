@@ -72,7 +72,7 @@ final class WebHistoryImporter {
     private static let backgroundBatchSize = 40
     /// For this long after a restore, the web app may still be downloading the history.
     private static let restoringPeriod: TimeInterval = 30 * 60
-    private static let restoredAtKey = "WebRestoredAt"
+    private static let restoredAtKey = Accounts.defaultsKey("WebRestoredAt")
 
     // MARK: - Kept across launches
 
@@ -102,7 +102,7 @@ final class WebHistoryImporter {
         var reachedStart: Set<String> = []
     }
 
-    private static let savedKey = "WebHistoryImporterState"
+    private static let savedKey = Accounts.defaultsKey("WebHistoryImporterState")
 
     private var saved: Saved {
         didSet {
@@ -125,7 +125,7 @@ final class WebHistoryImporter {
         var retryAt: [String: Date] = [:]
     }
 
-    private static let pendingKey = "WebHistoryImporterPending"
+    private static let pendingKey = Accounts.defaultsKey("WebHistoryImporterPending")
 
     private func savePending() {
         let pending = Pending(jobs: (current.map { [$0] } ?? []) + queue, retryAt: retryAt)

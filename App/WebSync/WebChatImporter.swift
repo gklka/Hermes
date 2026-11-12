@@ -137,7 +137,7 @@ final class WebChatImporter {
 
     /// Posted when `listedChats` changes.
     static let listedChatsDidChange = Notification.Name("WebChatImporterListedChatsDidChange")
-    private static let listedChatsKey = "WebListedChats"
+    private static let listedChatsKey = Accounts.defaultsKey("WebListedChats")
 
     /// How many chats (of any kind) the web list has loaded: the sidebar shows as many, like
     /// the web app. 0 while unknown. Kept across launches until the first read after launch.

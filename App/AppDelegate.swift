@@ -29,6 +29,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = MainMenu.build()
+        Accounts.cleanUp()
+        // Switched accounts to open a chat (from Spotlight or the widget).
+        spotlightTarget = Accounts.takeChatToOpen()
 
         store.changes
             .sink { [weak self] change in
@@ -66,6 +69,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if identifier.hasPrefix(entityPrefix) {
             identifier.removeFirst(entityPrefix.count)
         }
+        // Spotlight has the main account's chats.
+        guard Accounts.isMain else {
+            if let main = Accounts.main { Accounts.switchTo(main.key, openingChat: identifier) }
+            return true
+        }
         let parts = identifier.split(separator: "|", maxSplits: 1).map(String.init)
         let target = (threadID: parts[0], messageID: parts.count > 1 ? parts[1] : nil)
         if didLoadConversations, mainWindowController != nil {
@@ -78,6 +86,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// `hermes://share?id=…` from the share extension (ShareSupport).
     func application(_ application: NSApplication, open urls: [URL]) {
+        // The widget and the share extension have the main account's chats: switch to it (a
+        // share waits in the Outbox until then).
+        if !Accounts.isMain, let main = Accounts.main {
+            let chat = urls.lazy.filter { $0.host() == ShareHandoff.chatHost }
+                .compactMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "id" }?.value }
+                .first
+            Accounts.switchTo(main.key, openingChat: chat)
+            return
+        }
         for url in urls {
             // The widget opens a chat with hermes://chat?id=<thread ID>.
             if url.host() == ShareHandoff.chatHost,
@@ -151,8 +168,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Logged out, or the session ended: nothing of the account stays on screen,
             // searchable or offered, and nothing reads its web app any more.
             didLoadConversations = false
-            SpotlightIndex.shared.clear()
-            ShareSupport.shared.clear()
+            if Accounts.isMain {
+                SpotlightIndex.shared.clear()
+                ShareSupport.shared.clear()
+            }
             Notifier.shared.reset()
             WebChatImporter.shared.stop()
             WebHistoryImporter.shared.reset()
@@ -168,11 +187,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Only the first time: reconnecting (e.g. after a network change) leaves a closed
             // window closed.
             if mainWindowController == nil { showMain() }
+            if let account = store.account, !DemoMode.isOn {
+                Accounts.recordLogin(account)
+                // Only the main account is in Spotlight, the share sheet and the widget.
+                if Accounts.isMain {
+                    SpotlightIndex.shared.start()
+                    ShareSupport.shared.start()
+                }
+            }
             if !didLoadConversations {
                 didLoadConversations = true
                 Task {
                     await store.loadConversations()
                     guard !DemoMode.isOn else { return }
+                    if let account = store.account {
+                        await Accounts.savePicture(of: account)
+                    }
                     WebHistoryImporter.shared.chatsLoaded()
                     // Launched by choosing a chat in Spotlight.
                     if let target = spotlightTarget {
@@ -182,8 +212,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 guard !DemoMode.isOn else { return }
                 WebChatImporter.shared.start()
-                SpotlightIndex.shared.start()
-                ShareSupport.shared.start()
             }
         }
     }
@@ -192,6 +220,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if loginWindowController == nil {
             loginWindowController = LoginWindowController { [weak self] cookies in
                 guard let self else { return }
+                // An account that's already on this Mac: switch to it instead.
+                if let userID = cookies["c_user"], let existing = Accounts.existing(userID: userID) {
+                    Accounts.switchTo(existing.key)
+                    return
+                }
                 Task {
                     do {
                         try await self.store.login(cookies: cookies)
@@ -238,15 +271,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updater.checkForUpdates(sender)
     }
 
-    /// Asks first: logging out deletes the account's chats from this Mac.
+    /// File › Add Account…: relaunches with a new account, which shows the login.
+    @objc func addAccount(_ sender: Any?) {
+        Accounts.add()
+    }
+
+    /// An account in the Account menu: relaunches with it.
+    @objc func switchAccount(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String, key != Accounts.active else { return }
+        Accounts.switchTo(key)
+    }
+
+    /// Asks first: logging out deletes the account and its chats from this Mac.
     @objc func logOut(_ sender: Any?) {
         guard let window = NSApp.keyWindow ?? mainWindowController?.window else {
             Task { await logOutNow() }
             return
         }
+        var detail = "The account and its chats are removed from this Mac. To use it again, add it with File › Add Account…, then restore your encrypted chats with your PIN."
+        // As Accounts.loggedOut picks it: the main account, or the next one.
+        let others = Accounts.loggedIn.filter { $0.key != Accounts.active }
+        if let next = others.first(where: { Accounts.isMainAccount($0) }) ?? others.first, let name = next.name {
+            detail += "\n\nHermes then switches to \(name)."
+        }
         NSAlert.confirm(
-            "Log out of Messenger?",
-            detail: "Your chats are removed from this Mac. After logging back in, you'll need your PIN to restore your encrypted chats.",
+            "Log out of \(store.account?.name ?? "Messenger")?",
+            detail: detail,
             button: "Log Out", in: window
         ) { [weak self] in
             await self?.logOutNow()
@@ -254,14 +304,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Logging out also deletes the account's web app session (and its restored encrypted
-    /// chats), the copies of sent files and the link previews.
+    /// chats), the copies of sent files and the link previews, then the account itself:
+    /// Hermes switches to another one, or shows the login if it was the only one.
     private func logOutNow() async {
+        if Accounts.isMain {
+            SpotlightIndex.shared.clear()
+            ShareSupport.shared.clear()
+        }
         await store.logout()
         await WebSyncController.shared.endSession(deletingData: true)
         OutgoingMedia.clear()
         LinkPreviews.shared.clear()
         ImageCache.shared.clear()
         LocationCardView.clearCache()
+        if let next = Accounts.loggedOut() {
+            Accounts.switchTo(next.key)
+        }
     }
 }
 
@@ -269,6 +327,10 @@ extension AppDelegate: NSMenuItemValidation {
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(togglePreferNicknames(_:)) {
             menuItem.state = ContactCards.shared.prefersNicknames ? .on : .off
+        }
+        if menuItem.action == #selector(logOut(_:)) {
+            menuItem.title = store.account.map { "Log Out \($0.name)…" } ?? "Log Out…"
+            return store.account != nil
         }
         return true
     }

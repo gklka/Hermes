@@ -12,7 +12,7 @@ enum RenameMigration {
         guard let newID = Bundle.main.bundleIdentifier, newID.hasSuffix(".Hermes") else { return }
         let prefix = String(newID.dropLast("Hermes".count))
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        move(support.appendingPathComponent(oldName, isDirectory: true), to: AppData.folder)
+        move(support.appendingPathComponent(oldName, isDirectory: true), to: Accounts.root)
 
         // Newest first: the web data comes from the first one that has it, settings from all
         // (a key already set isn't overwritten).

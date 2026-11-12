@@ -345,11 +345,13 @@ enum ReadReaction {
 @available(macOS 27.0, *)
 enum MessagingIntentError: Error, CustomLocalizedStringResourceConvertible {
     case notReady
+    case otherAccount
     case unsupported(String)
 
     var localizedStringResource: LocalizedStringResource {
         switch self {
         case .notReady: "Hermes isn't logged in."
+        case .otherAccount: "Hermes is using another account. Switch to your main account in the Account menu."
         case .unsupported(let reason): "\(reason)"
         }
     }
@@ -363,6 +365,8 @@ enum IntentSupport {
     /// Waits for the app to be logged in with its chats loaded (it may just have been launched
     /// to run the intent).
     static func ready() async throws {
+        // Only the main account is in Siri and Shortcuts (Accounts).
+        guard Accounts.isMain else { throw MessagingIntentError.otherAccount }
         guard await store.waitUntilReady(seconds: 30) else { throw MessagingIntentError.notReady }
     }
 
