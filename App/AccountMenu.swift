@@ -8,9 +8,12 @@ final class AccountMenu: NSObject, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         let accounts = Accounts.loggedIn
-        for account in accounts {
+        for (index, account) in accounts.enumerated() {
             let name = account.name ?? "Account"
-            let item = NSMenuItem(title: name, action: #selector(AppDelegate.switchAccount(_:)), keyEquivalent: "")
+            // ⇧⌘1–⇧⌘9 (AppKit fills the menu in to find a key equivalent, so they work while it's closed).
+            let key = index < 9 ? "\(index + 1)" : ""
+            let item = NSMenuItem(title: name, action: #selector(AppDelegate.switchAccount(_:)), keyEquivalent: key)
+            item.keyEquivalentModifierMask = [.command, .shift]
             item.representedObject = account.key
             item.state = account.key == Accounts.active ? .on : .off
             let picture = NSImage(contentsOf: Accounts.pictureFile(for: account.key))
