@@ -18,6 +18,8 @@ final class AccountMenu: NSObject, NSMenuDelegate {
             item.state = account.key == Accounts.active ? .on : .off
             let picture = NSImage(contentsOf: Accounts.pictureFile(for: account.key))
             item.image = RoundAvatar.image(picture, name: name, size: 20)
+            // macOS 27 hides menu items' images unless asked to show them.
+            if #available(macOS 27.0, *) { item.preferredImageVisibility = .visible }
             if accounts.count > 1, Accounts.isMainAccount(account) {
                 item.subtitle = "Main account, in Spotlight, Siri and Shortcuts"
             }

@@ -10,26 +10,7 @@ enum RoundAvatar {
         return letters.isEmpty ? "?" : String(letters).uppercased()
     }
 
-    /// As a bitmap (at 2x): menus are drawn outside the app, which leaves out images that are
-    /// only drawing code.
     static func image(_ picture: NSImage?, name: String, size: CGFloat) -> NSImage {
-        let drawn = drawing(picture, name: name, size: size)
-        let scale: CGFloat = 2
-        guard let rep = NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: Int(size * scale), pixelsHigh: Int(size * scale), bitsPerSample: 8,
-            samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
-        ) else { return drawn }
-        rep.size = drawn.size
-        NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        drawn.draw(in: NSRect(origin: .zero, size: drawn.size))
-        NSGraphicsContext.restoreGraphicsState()
-        let image = NSImage(size: drawn.size)
-        image.addRepresentation(rep)
-        return image
-    }
-
-    private static func drawing(_ picture: NSImage?, name: String, size: CGFloat) -> NSImage {
         NSImage(size: NSSize(width: size, height: size), flipped: false) { rect in
             NSBezierPath(ovalIn: rect).addClip()
             if let picture {

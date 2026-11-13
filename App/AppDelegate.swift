@@ -120,6 +120,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // The picture as loaded for the chat list.
             let picture = conversation.avatarURL.flatMap(URL.init(string:)).flatMap { ImageCache.shared.cached($0) }
             item.image = RoundAvatar.image(picture, name: conversation.name, size: 18)
+            // macOS 27 hides menu items' images unless asked to show them.
+            if #available(macOS 27.0, *) { item.preferredImageVisibility = .visible }
             if store.isUnread(conversation) {
                 item.attributedTitle = NSAttributedString(
                     string: conversation.name,
