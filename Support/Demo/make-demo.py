@@ -255,11 +255,26 @@ shutil.copy(os.path.join(images, "forest.jpg"), os.path.join(previews, digest + 
 with open(os.path.join(previews, digest + ".json"), "w") as f:
     json.dump({"title": "Hiking - Yosemite National Park (U.S. National Park Service)", "site": "nps.gov", "hasImage": True}, f)
 
+# The Account menu's accounts (a shared family Mac): their pictures where Accounts keeps them.
+from PIL import Image
+
+accounts = [("", "100", "Alex Morgan", "dog.jpg"), ("jamie", "120", "Jamie Morgan", "moraine.jpg"),
+            ("sam", "121", "Sam Morgan", "beach.jpg")]
+for key, _, _, picture in accounts:
+    account_folder = os.path.join(folder, "Accounts", key) if key else folder
+    os.makedirs(account_folder, exist_ok=True)
+    with Image.open(os.path.join(images, picture)) as source:
+        side = min(source.size)
+        left, top = (source.width - side) // 2, (source.height - side) // 2
+        source.crop((left, top, left + side, top + side)).resize((128, 128)).save(os.path.join(account_folder, "account.png"))
+
 contacts = [person(u) for u in people if u != ME]
 presence = [{"userID": E, "isOnline": True, "lastSeen": 0}, {"userID": M, "isOnline": False, "lastSeen": ago(25)}]
 # 1:1 chats' presence is keyed by thread ID (the other person's ID).
 conversations.sort(key=lambda c: -c["lastActivity"])
 with open(os.path.join(folder, "demo.json"), "w") as f:
     json.dump({"account": {"id": ME, "name": people[ME][0]}, "conversations": conversations,
-               "messages": messages, "contacts": contacts, "presence": presence}, f, ensure_ascii=False, indent=1)
+               "messages": messages, "contacts": contacts, "presence": presence,
+               "accounts": [{"key": k, "userID": u, "name": n} for k, u, n, _ in accounts]},
+              f, ensure_ascii=False, indent=1)
 print(folder)

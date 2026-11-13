@@ -38,6 +38,8 @@ SCENES = {
     "window": ["appearance light", *MAIN, f"select {EMMA}", f"window {GROUP}", "wait 300", "size 540 720"],
     "members": ["appearance dark", *MAIN, f"select {GROUP}", "wait 1000", "members"],
     "edits": ["appearance light", *MAIN, f"select {EMMA}", "wait 1000", "edits m8"],
+    # Menus are drawn in the Mac's appearance (not the app's): take it with the Mac in dark mode.
+    "accounts": ["appearance dark", *MAIN, f"select {EMMA}", "wait 1500", "accountmenu"],
 }
 
 
@@ -55,8 +57,8 @@ def wait_for(path, seconds=30):
 
 def windows(tool, pid):
     found = [json.loads(line) for line in run([tool, str(pid)]).splitlines() if line.strip()]
-    # Real windows: not the menu bar's or the invisible ones.
-    return [w for w in found if w["alpha"] > 0 and w["width"] > 40 and w["height"] > 40 and w["layer"] < 100]
+    # Real windows and open menus (layer 101): not the menu bar's or the invisible ones.
+    return [w for w in found if w["alpha"] > 0 and w["width"] > 40 and w["height"] > 40 and (w["layer"] < 100 or w["layer"] == 101)]
 
 
 def shadow_for(window, scale):
@@ -138,7 +140,8 @@ def main():
                 file = os.path.join(work, f"{name}-{i}.png")
                 subprocess.run(["screencapture", "-x", "-o", f"-l{window['id']}", file], check=True)
                 image = Image.open(file).convert("RGBA")
-                if image.width / window["width"] not in (1, 2, 3):
+                # Menus are glass over what's behind them, which their own picture leaves out.
+                if image.width / window["width"] not in (1, 2, 3) or window["layer"] == 101:
                     # A popover or sheet comes out as its parent window: take what's on screen
                     # there instead (it's over that window, which is what's around it).
                     region = f"-R{window['x']},{window['y']},{window['width']},{window['height']}"

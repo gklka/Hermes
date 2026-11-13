@@ -21,6 +21,14 @@ final class DemoCore {
         let messages: [String: [ChatMessage]]
         var contacts: [Participant]?
         var presence: [PresenceEvent]?
+        var accounts: [DemoAccount]?
+    }
+
+    /// An account in the Account menu.
+    private struct DemoAccount: Decodable {
+        let key: String
+        let userID: String
+        let name: String
     }
 
     private var data: Data?
@@ -34,6 +42,9 @@ final class DemoCore {
         } catch {
             NSLog("Demo: couldn't read demo.json: \(error)")
         }
+        Accounts.showDemo((data?.accounts ?? []).map {
+            StoredAccount(key: $0.key, webStoreID: UUID(), userID: $0.userID, name: $0.name)
+        })
         emit("state", State(state: "connected", account: data?.account))
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             for presence in self?.data?.presence ?? [] {
@@ -123,12 +134,17 @@ final class DemoDirector {
     static let shared = DemoDirector()
 
     private var timer: Timer?
+    /// The menu `accountmenu` opened (it stays open until `closewindows`).
+    private var openMenu: NSMenu?
 
     func start() {
         guard DemoMode.isOn else { return }
-        timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 0.2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
         }
+        // Also while a menu is open.
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     private var commandFile: URL? { DemoMode.folder?.appendingPathComponent("command") }
@@ -193,7 +209,23 @@ final class DemoDirector {
             if let message = DemoCore.shared.message(argument) { chat?.messageCellDidToggleEdits(message) }
         case "window":
             ChatWindowController.show(threadID: argument)
+        case "accountmenu":
+            // The Account menu, open over the main window's chat (its menu bar isn't in the picture).
+            // It's drawn outside the app, in the Mac's appearance, not the app's.
+            guard let menu = NSApp.mainMenu?.item(withTitle: "Account")?.submenu,
+                  let content = main?.window?.contentView else { return }
+            openMenu = menu
+            NSApp.activate()
+            // Low enough that all of its window (shadow included) is over the main window.
+            let point = NSPoint(x: Double(argument) ?? 340, y: content.bounds.height - 110)
+            // It runs until it's closed, so after this command returns; from the run loop, not
+            // the main queue, which would be blocked meanwhile (and with it the director).
+            RunLoop.main.perform(inModes: [.default]) {
+                MainActor.assumeIsolated { _ = menu.popUp(positioning: nil, at: point, in: content) }
+            }
         case "closewindows":
+            openMenu?.cancelTracking()
+            openMenu = nil
             ChatWindowController.closeAll()
             for window in NSApp.windows where window is NSPanel { window.orderOut(nil) }
             for window in NSApp.windows {

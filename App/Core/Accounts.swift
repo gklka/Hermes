@@ -24,7 +24,7 @@ nonisolated enum Accounts {
     private static let removedWebStoresKey = "RemovedWebStores"
     private static var defaults: UserDefaults { .standard }
 
-    static let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    static let root = DemoMode.folder ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Hermes", isDirectory: true)
     /// The web view's data store from before there were accounts.
     private static let firstWebStoreID = UUID(uuidString: "6F1C2B7E-4E1A-4C55-9B7A-2D0E7F9A1C31")!
@@ -84,6 +84,14 @@ nonisolated enum Accounts {
         list[index].name = account.name
         all = list
         if main == nil { defaults.set(active, forKey: mainKey) }
+    }
+
+    /// Demo mode's sample accounts (their pictures are in their folders already); the first is
+    /// the active and main one.
+    static func showDemo(_ accounts: [StoredAccount]) {
+        guard DemoMode.isOn, let first = accounts.first else { return }
+        all = accounts
+        defaults.set(first.key, forKey: mainKey)
     }
 
     /// Saves the account's picture for the Account menu.
