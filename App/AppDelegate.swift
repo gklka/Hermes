@@ -148,19 +148,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func dockNewMessage(_ sender: Any?) {
-        showMain()
+        showMain(followToCurrentSpace: true)
         NSApp.activate()
         mainWindowController?.newMessage(sender)
     }
 
     @objc private func dockNewChat(_ sender: Any?) {
-        showMain()
+        showMain(followToCurrentSpace: true)
         NSApp.activate()
         mainWindowController?.newChat(sender)
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { mainWindowController?.showWindow(nil) }
+        if !flag { mainWindowController?.showOnCurrentSpace() }
         return true
     }
 
@@ -241,16 +241,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !Self.quietLaunch { NSApp.activate() }
     }
 
-    private func showMain() {
+    private func showMain(followToCurrentSpace: Bool = false) {
         if mainWindowController == nil {
             mainWindowController = MainWindowController()
         }
-        present(mainWindowController)
+        if followToCurrentSpace {
+            mainWindowController?.showOnCurrentSpace()
+        } else {
+            present(mainWindowController)
+        }
     }
 
     /// Brings the main window forward with the chat (scrolled to the message) open.
     func openChat(_ threadID: String, revealing messageID: String? = nil) {
-        showMain()
+        showMain(followToCurrentSpace: true)
         mainWindowController?.select(threadID: threadID, revealing: messageID)
         NSApp.activate()
     }
