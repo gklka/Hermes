@@ -258,7 +258,9 @@ func fillConsumerContent(row *messageRow, content *waConsumerApplication.Consume
 		if err != nil {
 			return false
 		}
-		row.Attachments = append(row.Attachments, waAttachment(attachmentID(), kindAudio, transport.GetIntegral().GetTransport(), whatsmeow.MediaAudio))
+		a := waAttachment(attachmentID(), kindAudio, transport.GetIntegral().GetTransport(), whatsmeow.MediaAudio)
+		a.Filename = a.ID + extensionFor(a.MimeType)
+		row.Attachments = append(row.Attachments, a)
 	case content.GetDocumentMessage() != nil:
 		doc := content.GetDocumentMessage()
 		transport, err := doc.Decode()
