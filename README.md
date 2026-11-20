@@ -2,6 +2,8 @@
 
 An unofficial, learning-purpose macOS client for Facebook Messenger with a native AppKit UI modeled on Apple's Messages.
 
+**Website: [gklka.github.io/Hermes](https://gklka.github.io/Hermes/)**
+
 > **Not affiliated with Meta.** This is an independent project. It is not made, endorsed or supported by Meta Platforms, Inc. Facebook, Messenger and their logos are trademarks of Meta Platforms, Inc.
 
 <p align="center"><img src="docs/screenshot.png" alt="Hermes showing a chat list and a conversation with a link preview, a tapback and the typing bubble" width="760"></p>
