@@ -18,9 +18,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
         window.minSize = NSSize(width: 640, height: 420)
         window.title = "Messenger"
         window.isReleasedWhenClosed = false
-        // Reopen on the Space you're on now (like Messages), instead of switching back to the
-        // Space where it was last shown.
-        window.collectionBehavior.insert(.moveToActiveSpace)
+        // Stay on its Space. moveToActiveSpace made the window follow the active Space on every
+        // activation — including the implicit re-activation during a Space switch — so returning
+        // to this Space relocated the window to the one you just left and hid it.
         window.contentViewController = split
         window.setContentSize(NSSize(width: 1040, height: 720))
         window.center()
@@ -205,6 +205,21 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
     /// Opens a chat (e.g. from a notification); with `messageID`, scrolls to that message and selects it.
     func select(threadID: String, revealing messageID: String? = nil) {
         split.select(threadID: threadID, revealing: messageID)
+    }
+
+    /// Brings the window to the Space you're on now, for an explicit user action: a Dock click, a
+    /// notification, or Spotlight. The window otherwise stays on its Space, so switching Spaces
+    /// doesn't relocate it. moveToActiveSpace is applied only for this call — left on permanently,
+    /// it made the window follow the active Space on every activation, including the re-activation
+    /// during a Space switch, which hid it.
+    func showOnCurrentSpace() {
+        guard let window else { return }
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        showWindow(nil)
+        // Drop the flag next runloop so a later Space-switch activation can't relocate the window.
+        DispatchQueue.main.async { [weak self] in
+            self?.window?.collectionBehavior.remove(.moveToActiveSpace)
+        }
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
