@@ -453,32 +453,60 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
 
     /// Messenger's web app keeps growing while it stays open: after three days, its page used
     /// 1.5 GB (and a little CPU all the time), from about 750 MB when fresh. Past this, it's
-    /// loaded again once nothing uses it.
+    /// loaded again in a new process once nothing uses it (loading it again in the same process
+    /// freed almost nothing: 1159 → 1067 MB).
     private static let reloadFootprint: UInt64 = 1 << 30
     /// A fresh page starts at about 750 MB; one that's soon big again isn't loaded again before this.
     private static let reloadInterval: TimeInterval = 6 * 3600
     private var memoryTimer: Timer?
     private var lastMemoryReload = Date.distantPast
+    /// Set while the page's process is ended on purpose (`restartPage`).
+    private var isRestartingProcess = false
 
     private func reloadIfTooBig() async {
         guard sessionSetup != nil, hasLoaded, !isBusy, window?.isVisible != true, !CallManager.shared.isInCall,
               Date().timeIntervalSince(lastMemoryReload) > Self.reloadInterval,
               webView.url?.host == "www.facebook.com",
               let footprint = pageFootprint, footprint > Self.reloadFootprint else { return }
-        CoreBridge.shared.log("WebSync: the page uses \(footprint >> 20) MB, loading it again")
+        CoreBridge.shared.log("WebSync: the page uses \(footprint >> 20) MB, loading it again in a new process")
         lastMemoryReload = Date()
         try? await withExclusiveAccess(parks: false) {
-            await reloadPage()
+            await restartPage()
         }
         if let footprint = pageFootprint {
             CoreBridge.shared.log("WebSync: loaded again, the page uses \(footprint >> 20) MB")
         }
     }
 
-    /// The memory used by the page's process (WebKit's web content process), if WebKit says which.
-    private var pageFootprint: UInt64? {
+    /// Ends the page's process and waits until Messenger has loaded in a new one
+    /// (`webViewWebContentProcessDidTerminate` loads it). Loads it again in the same process
+    /// if the process can't be ended.
+    private func restartPage() async {
+        guard let pid = pageProcess else {
+            await reloadPage()
+            return
+        }
+        hasLoaded = false
+        isRestartingProcess = true
+        guard kill(pid, SIGKILL) == 0 else {
+            CoreBridge.shared.log("WebSync: couldn't end the page's process (errno \(errno))")
+            isRestartingProcess = false
+            await reloadPage()
+            return
+        }
+        await withCheckedContinuation { loadWaiters.append($0) }
+    }
+
+    /// WebKit's web content process showing the page, if WebKit says which.
+    private var pageProcess: pid_t? {
         guard webView.responds(to: NSSelectorFromString("_webProcessIdentifier")),
               let pid = webView.value(forKey: "_webProcessIdentifier") as? Int32, pid > 0 else { return nil }
+        return pid
+    }
+
+    /// The memory used by the page's process.
+    private var pageFootprint: UInt64? {
+        guard let pid = pageProcess else { return nil }
         var info = rusage_info_v4()
         let result = withUnsafeMutablePointer(to: &info) {
             $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V4, $0) }
@@ -496,6 +524,19 @@ final class WebSyncController: NSWindowController, WKNavigationDelegate, NSWindo
             waiters.forEach { $0.resume() }
         }
         WebDOMInspector.pageDidLoad(self)
+    }
+
+    /// The page's process ended (`restartPage`, or it crashed or was killed for memory):
+    /// Messenger is loaded again in a new one, unless the session has ended.
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        let expected = isRestartingProcess
+        isRestartingProcess = false
+        guard sessionSetup != nil else { return }
+        if !expected {
+            CoreBridge.shared.log("WebSync: the page's process ended; loading it again")
+        }
+        hasLoaded = false
+        webView.load(URLRequest(url: Self.messagesURL))
     }
 }
 
