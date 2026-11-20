@@ -64,12 +64,27 @@ func (c *Core) downloadMedia(ctx context.Context, messageID, attachmentID string
 	if ext == "" {
 		ext = extensionFor(firstNonEmpty(att.MimeType, http.DetectContentType(data)))
 	}
-	name := strings.NewReplacer("/", "_", ":", "_", "$", "_", ".", "_").Replace(messageID + "-" + attachmentID)
+	name := mediaFileBase(messageID, attachmentID)
 	path := filepath.Join(c.mediaDir(), name+ext)
 	if err = os.WriteFile(path, data, 0o600); err != nil {
 		return "", err
 	}
 	c.store.SetAttachmentLocalPath(messageID, attachmentID, path)
+	return path, nil
+}
+
+func mediaFileBase(messageID, attachmentID string) string {
+	return strings.NewReplacer("/", "_", ":", "_", "$", "_", ".", "_").Replace(messageID + "-" + attachmentID)
+}
+
+func (c *Core) saveVideoThumbnail(messageID, attachmentID string, data []byte) (string, error) {
+	path := filepath.Join(c.mediaDir(), mediaFileBase(messageID, attachmentID)+"-thumbnail.jpg")
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return "", err
+	}
 	return path, nil
 }
 

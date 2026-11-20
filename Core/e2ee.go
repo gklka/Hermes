@@ -160,6 +160,7 @@ func (c *Core) handleFBMessage(evt *events.FBMessage) {
 		}
 	}
 
+	c.prepareVideoThumbnails(row)
 	newest := true
 	if t := c.store.GetThread(threadID); t != nil {
 		newest = ts >= t.LastActivity
@@ -169,6 +170,11 @@ func (c *Core) handleFBMessage(evt *events.FBMessage) {
 	cs.message(row.ID)
 	cs.thread(threadID)
 	c.flush(cs)
+	for _, attachment := range row.Attachments {
+		if attachment.Kind == kindVideo && attachment.ThumbnailWA != nil && attachment.PreviewURL == "" {
+			go c.loadVideoThumbnail(row.ID, attachment.ID)
+		}
+	}
 	if linkPicture != "" {
 		go c.loadLinkPicture(row.ID, linkPicture)
 	}
@@ -215,6 +221,64 @@ func (c *Core) loadLinkPicture(messageID, attachmentID string) {
 	c.emitMessage(messageID)
 }
 
+func (c *Core) prepareVideoThumbnails(row *messageRow) {
+	if old := c.store.GetMessage(row.ID); old != nil {
+		for i := range row.Attachments {
+			if row.Attachments[i].Kind == kindVideo {
+				if previous := old.attachment(row.Attachments[i].ID); previous != nil && previous.PreviewURL != "" {
+					row.Attachments[i].PreviewURL = previous.PreviewURL
+				}
+			}
+		}
+	}
+	for i := range row.Attachments {
+		attachment := &row.Attachments[i]
+		if attachment.Kind != kindVideo || attachment.PreviewURL != "" || len(attachment.thumbnail) == 0 {
+			continue
+		}
+		path, err := c.saveVideoThumbnail(row.ID, attachment.ID, attachment.thumbnail)
+		if err != nil {
+			c.log.Warn().Err(err).Str("message_id", row.ID).Str("attachment_id", attachment.ID).
+				Msg("Failed to save an encrypted video's thumbnail")
+			continue
+		}
+		attachment.PreviewURL = (&url.URL{Scheme: "file", Path: path}).String()
+	}
+}
+
+func (c *Core) loadVideoThumbnail(messageID, attachmentID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	message := c.store.GetMessage(messageID)
+	if message == nil {
+		return
+	}
+	attachment := message.attachment(attachmentID)
+	if attachment == nil || attachment.PreviewURL != "" || attachment.ThumbnailWA == nil {
+		return
+	}
+	e2ee, err := waitForConnection(ctx, c, c.requireE2EE)
+	if err != nil {
+		c.log.Warn().Err(err).Str("message_id", messageID).Str("attachment_id", attachmentID).
+			Msg("Failed to connect to load an encrypted video's thumbnail")
+		return
+	}
+	data, err := e2ee.Download(ctx, attachment.ThumbnailWA)
+	if err != nil {
+		c.log.Warn().Err(err).Str("message_id", messageID).Str("attachment_id", attachmentID).
+			Msg("Failed to download an encrypted video's thumbnail")
+		return
+	}
+	path, err := c.saveVideoThumbnail(messageID, attachmentID, data)
+	if err != nil {
+		c.log.Warn().Err(err).Str("message_id", messageID).Str("attachment_id", attachmentID).
+			Msg("Failed to save an encrypted video's thumbnail")
+		return
+	}
+	c.store.SetAttachmentPreviewURL(messageID, attachmentID, (&url.URL{Scheme: "file", Path: path}).String())
+	c.emitMessage(messageID)
+}
+
 // fillConsumerContent converts the message body; returns false for unsupported content.
 func fillConsumerContent(row *messageRow, content *waConsumerApplication.ConsumerApplication_Content) bool {
 	attachmentID := func() string { return fmt.Sprintf("%s-%d", row.ID, len(row.Attachments)) }
@@ -250,6 +314,9 @@ func fillConsumerContent(row *messageRow, content *waConsumerApplication.Consume
 			kind = kindGIF
 		}
 		a := waAttachment(attachmentID(), kind, transport.GetIntegral().GetTransport(), whatsmeow.MediaVideo)
+		if kind == kindVideo {
+			a.thumbnail, a.ThumbnailWA = videoThumbnailInfo(transport)
+		}
 		a.Width, a.Height = int(transport.GetAncillary().GetWidth()), int(transport.GetAncillary().GetHeight())
 		row.Attachments = append(row.Attachments, a)
 		row.Text = video.GetCaption().GetText()
@@ -293,6 +360,24 @@ func fillConsumerContent(row *messageRow, content *waConsumerApplication.Consume
 		return false
 	}
 	return true
+}
+
+func videoThumbnailInfo(transport *waMediaTransport.VideoTransport) ([]byte, *waMediaInfo) {
+	thumbnail := transport.GetIntegral().GetTransport().GetAncillary().GetThumbnail()
+	if thumbnail == nil {
+		return nil, nil
+	}
+	var downloadableMedia *waMediaInfo
+	if downloadable := thumbnail.GetDownloadableThumbnail(); downloadable != nil {
+		downloadableMedia = &waMediaInfo{
+			MediaType:  string(whatsmeow.MediaImage),
+			Key:        downloadable.GetMediaKey(),
+			SHA256:     downloadable.GetFileSHA256(),
+			EncSHA256:  downloadable.GetFileEncSHA256(),
+			DirectPath: downloadable.GetDirectPath(),
+		}
+	}
+	return thumbnail.GetJPEGThumbnail(), downloadableMedia
 }
 
 // addLocation adds a shared-location card; returns false (so the caller can fall back to text) when

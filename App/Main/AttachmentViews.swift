@@ -565,15 +565,21 @@ final class AttachmentView: NSView, NSDraggingSource {
 
         if attachment.kind == .video {
             addPlayButton()
-            // Facebook gives video thumbnails; encrypted videos have none.
             if let preview = attachment.previewURL, let url = URL(string: preview) {
                 if let cached = ImageCache.shared.cached(url) {
                     imageView.image = cached
                     return
                 }
                 Task { [weak self] in
-                    self?.imageView.image = await ImageCache.shared.image(for: url)
+                    guard let self else { return }
+                    if let image = await ImageCache.shared.image(for: url) {
+                        self.imageView.image = image
+                    } else {
+                        self.showVideoThumbnailIfAvailable()
+                    }
                 }
+            } else {
+                showVideoThumbnailIfAvailable()
             }
             return
         }
@@ -612,16 +618,24 @@ final class AttachmentView: NSView, NSDraggingSource {
         let type = UTType(filenameExtension: ext) ?? attachment.mimeType.flatMap { UTType(mimeType: $0) } ?? .data
         icon.image = NSWorkspace.shared.icon(for: type)
         guard let url = ChatStore.shared.downloadedFile(for: attachment, in: message) else { return }
-        let side = Self.fileIconSize
+        loadQuickLookThumbnail(from: url, size: CGSize(width: Self.fileIconSize, height: Self.fileIconSize), into: icon)
+    }
+
+    private func showVideoThumbnailIfAvailable() {
+        guard let url = ChatStore.shared.downloadedFile(for: attachment, in: message) else { return }
+        loadQuickLookThumbnail(from: url, size: CGSize(width: 320, height: 320), into: imageView)
+    }
+
+    private func loadQuickLookThumbnail(from url: URL, size: CGSize, into imageView: NSImageView) {
         let request = QLThumbnailGenerator.Request(
             fileAt: url,
-            size: CGSize(width: side, height: side),
+            size: size,
             scale: window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2,
             representationTypes: .thumbnail
         )
-        Task { [weak icon] in
+        Task { [weak imageView] in
             guard let thumbnail = try? await QLThumbnailGenerator.shared.generateBestRepresentation(for: request) else { return }
-            icon?.image = thumbnail.nsImage
+            imageView?.image = thumbnail.nsImage
         }
     }
 

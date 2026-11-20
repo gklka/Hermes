@@ -671,7 +671,9 @@ type waMediaInfo struct {
 
 type storedAttachment struct {
 	apiAttachment
-	WA *waMediaInfo `json:"wa,omitempty"`
+	WA          *waMediaInfo `json:"wa,omitempty"`
+	ThumbnailWA *waMediaInfo `json:"thumbnailWA,omitempty"`
+	thumbnail   []byte
 }
 
 type messageRow struct {
