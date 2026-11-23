@@ -425,6 +425,15 @@ final class WebHistoryImporter {
         case failed
     }
 
+    /// The page showed no messages, or placeholders instead of them. Right after it loads, the
+    /// web app can still be decrypting (and shows its "couldn't restore" placeholder meanwhile),
+    /// so once restored here, the chat is read again a few times before the PIN is asked for.
+    private func notRestoredOutcome(_ threadID: String) -> Outcome {
+        if isRestoring { return .moreMayCome }
+        if restoredAt != nil, tries[threadID, default: 0] + 1 < Self.maxTries { return .moreMayCome }
+        return .needsRestore
+    }
+
     private func finish(_ job: Job, _ outcome: Outcome, summary: String) {
         let threadID = job.threadID
         let result: Record.Result
@@ -432,6 +441,7 @@ final class WebHistoryImporter {
         case .complete:
             needsRestore.remove(threadID)
             isRestoreNeeded = false
+            tries[threadID] = nil
             // Nothing imported yet (an empty chat): opening it reads it again.
             if saved.coverage[threadID] != nil { done.insert(threadID) }
             result = .done
@@ -560,11 +570,11 @@ final class WebHistoryImporter {
             // The core emits each stored message as an event, so open chats update by themselves.
 
             if result.error != nil {
-                return (isRestoring ? .moreMayCome : .needsRestore, "Messenger web shows no messages in this chat.")
+                return (notRestoredOutcome(threadID), "Messenger web shows no messages in this chat.")
             }
             if imported.unrestored > 0 {
                 let summary = "\(imported.unrestored) message\(imported.unrestored == 1 ? " isn't" : "s aren't") restored on Messenger web yet."
-                return (isRestoring ? .moreMayCome : .needsRestore, summary)
+                return (notRestoredOutcome(threadID), summary)
             }
             // Loading older messages can stall on the page and look like the chat's start; it
             // isn't if an older encrypted message is stored (the page shows all of those). Stored
