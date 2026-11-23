@@ -378,6 +378,7 @@ final class AttachmentView: NSView, NSDraggingSource {
     private let attachment: Attachment
     private let message: ChatMessage
     private let imageView = DisplayImageView()
+    private let gifContainer = NSView()
     private lazy var gifView = LoopingVideoView()
     private let pressLayer = CALayer()
     private weak var pressHost: CALayer?
@@ -524,17 +525,13 @@ final class AttachmentView: NSView, NSDraggingSource {
         let scale = min(1, box.width / size.width, box.height / size.height)
         size = CGSize(width: max(60, size.width * scale), height: max(60, size.height * scale))
 
-        // Messenger and WhatsApp deliver "GIFs" as looping, silent MP4s, which NSImageView can't
-        // show — they play in a video layer instead.
-        let content: NSView
-        if attachment.kind == .gif {
-            content = gifView
-        } else {
-            imageView.imageScaling = .scaleProportionallyUpOrDown
-            imageView.animates = true
-            imageView.wantsLayer = true
-            content = imageView
-        }
+        imageView.imageScaling = .scaleProportionallyUpOrDown
+        imageView.animates = true
+        imageView.wantsLayer = true
+
+        // GIF-style videos may arrive as silent, looping MP4s, so choose the renderer
+        // based on the downloaded media rather than the attachment's label.
+        let content: NSView = attachment.kind == .gif ? gifContainer : imageView
         content.translatesAutoresizingMaskIntoConstraints = false
         addSubview(content)
 
@@ -558,7 +555,22 @@ final class AttachmentView: NSView, NSDraggingSource {
         if attachment.kind == .gif {
             Task { [weak self] in
                 guard let self, let url = try? await ChatStore.shared.localFile(for: self.attachment, in: self.message) else { return }
-                self.gifView.load(url)
+                let asset = AVURLAsset(url: url)
+                let isPlayableVideo = (try? await asset.load(.isPlayable)) == true
+                let content = isPlayableVideo ? self.gifView : self.imageView
+                content.translatesAutoresizingMaskIntoConstraints = false
+                self.gifContainer.addSubview(content)
+                NSLayoutConstraint.activate([
+                    content.leadingAnchor.constraint(equalTo: self.gifContainer.leadingAnchor),
+                    content.trailingAnchor.constraint(equalTo: self.gifContainer.trailingAnchor),
+                    content.topAnchor.constraint(equalTo: self.gifContainer.topAnchor),
+                    content.bottomAnchor.constraint(equalTo: self.gifContainer.bottomAnchor),
+                ])
+                if isPlayableVideo {
+                    self.gifView.load(url)
+                } else {
+                    self.imageView.image = NSImage(contentsOf: url)
+                }
             }
             return
         }
