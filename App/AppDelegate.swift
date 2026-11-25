@@ -277,6 +277,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updater.checkForUpdates(sender)
     }
 
+    /// Hermes › Release Notes: every version's changes, on GitHub.
+    @objc func showReleaseNotes(_ sender: Any?) {
+        if let url = URL(string: "https://github.com/gklka/Hermes/releases") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     /// File › Add Account…: relaunches with a new account, which shows the login.
     @objc func addAccount(_ sender: Any?) {
         Accounts.add()
