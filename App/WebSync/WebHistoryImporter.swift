@@ -574,6 +574,12 @@ final class WebHistoryImporter {
             }
             if imported.unrestored > 0 {
                 let summary = "\(imported.unrestored) message\(imported.unrestored == 1 ? " isn't" : "s aren't") restored on Messenger web yet."
+                // Real messages next to the placeholders: the chat is restored, and the web app
+                // can't decrypt those (or not yet). It's read again a few times (finish caps the
+                // tries), but the PIN isn't asked for.
+                if imported.unrestored < result.messages.count {
+                    return (.moreMayCome, summary)
+                }
                 return (notRestoredOutcome(threadID), summary)
             }
             // Loading older messages can stall on the page and look like the chat's start; it
