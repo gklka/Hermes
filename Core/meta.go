@@ -168,6 +168,24 @@ func (c *Core) handleThreadTables(tbl *table.LSTable, cs *changeSet) {
 		delete(cs.threads, id)
 		c.removeThread(id)
 	}
+	// Archived or ignored (a group) on another device: it leaves the list, the Dock badge and
+	// notifications, as in the web app.
+	for _, t := range tbl.LSMoveThreadToArchivedFolder {
+		id := c.threadID(t.ThreadKey)
+		c.log.Debug().Str("thread_id", id).Msg("Chat moved to the archive")
+		c.store.SetThreadFolder(id, folderArchived)
+		cs.thread(id)
+	}
+	// Back in the inbox (unarchived, or a new message in an archived chat). Only archived chats:
+	// what else this is sent for isn't known, and requests stay requests until accepted.
+	for _, t := range tbl.LSMoveThreadToInboxAndUpdateParent {
+		id := c.threadID(t.ThreadKey)
+		if existing := c.store.GetThread(id); existing != nil && existing.Folder == folderArchived {
+			c.log.Debug().Str("thread_id", id).Msg("Chat moved back to the inbox")
+			c.store.SetThreadFolder(id, folderInbox)
+			cs.thread(id)
+		}
+	}
 	for _, t := range tbl.LSMoveThreadToE2EECutoverFolder {
 		id := c.threadID(t.ThreadKey)
 		c.store.SetThreadType(id, table.ENCRYPTED_OVER_WA_ONE_TO_ONE)

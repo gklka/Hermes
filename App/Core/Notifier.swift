@@ -111,8 +111,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         guard date > launchTime.addingTimeInterval(-30), Date().timeIntervalSince(date) < Self.maxAge else { return }
         // Edits and other updates re-send the same message.
         guard notifiedIDs.insert(message.id).inserted else { return }
-        let conversation = store.conversation(message.threadID)
-        if conversation?.isMuted == true || isThreadVisible?(message.threadID) == true { return }
+        // Not for chats that aren't listed (archived, ignored, spam), as in the web app. The core
+        // sends a chat before its messages, so a listed chat is known by now.
+        guard let conversation = store.conversation(message.threadID) else { return }
+        if conversation.isMuted || isThreadVisible?(message.threadID) == true { return }
         Task { await post(message, in: conversation) }
     }
 
@@ -121,8 +123,9 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let date = Date(timeIntervalSince1970: TimeInterval(reaction.timestamp) / 1000)
         guard date > launchTime.addingTimeInterval(-30), Date().timeIntervalSince(date) < Self.maxAge,
               notifiedIDs.insert("\(reaction.messageID)|\(reaction.senderID)|\(reaction.emoji)").inserted else { return }
-        let conversation = store.conversation(reaction.threadID)
-        if conversation?.isMuted == true || isThreadVisible?(reaction.threadID) == true { return }
+        // Not for chats that aren't listed (archived, ignored, spam).
+        guard let conversation = store.conversation(reaction.threadID) else { return }
+        if conversation.isMuted || isThreadVisible?(reaction.threadID) == true { return }
         let text = reaction.messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         let quoted = text.count > 60 ? String(text.prefix(60)) + "…" : text
         let body = quoted.isEmpty ? "Reacted \(reaction.emoji) to your message" : "Reacted \(reaction.emoji) to “\(quoted)”"

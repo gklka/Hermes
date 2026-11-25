@@ -327,6 +327,9 @@ const (
 	folderRequests    = "pending"      // message requests
 	// Requests Messenger filtered into its Spam list.
 	folderFilteredRequests = "other"
+	// Archived chats, also groups you ignore (Messenger moves them here and doesn't notify).
+	// Not listed, like the web app's inbox; ignored 1:1 chats go to "spam", also not listed.
+	folderArchived = "archived"
 )
 
 type threadRow struct {
