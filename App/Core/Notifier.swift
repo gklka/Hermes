@@ -115,7 +115,25 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         // sends a chat before its messages, so a listed chat is known by now.
         guard let conversation = store.conversation(message.threadID) else { return }
         if conversation.isMuted || isThreadVisible?(message.threadID) == true { return }
-        Task { await post(message, in: conversation) }
+        Task {
+            guard let delay = Self.delay else {
+                await post(message, in: conversation)
+                return
+            }
+            try? await Task.sleep(for: delay)
+            // Read meanwhile (here or on another device), unsent, or the chat is on screen now.
+            guard let conversation = store.conversation(message.threadID), conversation.unreadCount > 0,
+                  !conversation.isMuted, isThreadVisible?(message.threadID) != true,
+                  store.messages(in: message.threadID).first(where: { $0.id == message.id })?.isUnsent != true else { return }
+            await post(message, in: conversation)
+        }
+    }
+
+    /// How long to wait before posting a notification, so one read meanwhile on another device
+    /// isn't shown. Off unless set: `defaults write <bundle ID> NotificationDelayMs -int 3000`.
+    private static var delay: Duration? {
+        let ms = UserDefaults.standard.integer(forKey: "NotificationDelayMs")
+        return ms > 0 ? .milliseconds(ms) : nil
     }
 
     /// Someone else reacted to one of your messages (the core only sends those).
@@ -131,6 +149,12 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         let body = quoted.isEmpty ? "Reacted \(reaction.emoji) to your message" : "Reacted \(reaction.emoji) to “\(quoted)”"
         let identifier = "reaction-\(reaction.messageID)-\(reaction.senderID)"
         Task {
+            if let delay = Self.delay {
+                try? await Task.sleep(for: delay)
+                // Seen meanwhile (here or on another device), or the chat is on screen now.
+                guard store.unseenReactions[reaction.threadID] != nil,
+                      isThreadVisible?(reaction.threadID) != true else { return }
+            }
             await post(
                 threadID: reaction.threadID, senderID: reaction.senderID, body: body,
                 identifier: identifier, messageID: reaction.messageID,

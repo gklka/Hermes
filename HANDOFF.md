@@ -83,7 +83,7 @@ Share extension (ShareExtension/) ──App Group files + hermes:// URL──▶
   - `CoreBridge.swift`: calls into Go; `log(...)` writes to `core.log` with `source=app`. `AppData.folder` is the data folder.
   - `Models.swift`: mirrors `Core/api.go`. `Attachment.Kind.label` names attachments ("Photo", "Voice Message").
   - `ChatStore.swift`: the app state, with coalesced change notifications; `waitUntilReady` for things that can launch the app.
-  - `Notifier.swift`: notifications (messages, reactions), with Reply and Mark as Read.
+  - `Notifier.swift`: notifications (messages, reactions), with Reply and Mark as Read. Hidden setting `defaults write hu.lka.gk.Hermes NotificationDelayMs -int <ms>` waits before posting and drops the notification if the chat was read (or the reaction seen) meanwhile, e.g. on another device.
   - `OutgoingMedia.swift`: the `outgoing/` staging folder, HEIC/TIFF → JPEG, compose thumbnails.
 - **`Main/`**
   - `MainWindowController.swift` (window, toolbar, split view), `ChatWindowController.swift` (a chat in its own window), `ConversationListViewController.swift` (sidebar, filter, context menu), `NewMessageViewController.swift`.
