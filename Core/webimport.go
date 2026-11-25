@@ -222,7 +222,7 @@ func (c *Core) importWebReactions(messageID, threadID string, fromMe bool, react
 	}
 	changed := false
 	set := func(actor, emoji string) {
-		c.store.SetReaction(messageID, actor, emoji)
+		c.store.SetReaction(messageID, actor, emoji, 0)
 		changed = true
 	}
 	for _, r := range reactions {

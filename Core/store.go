@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS reactions (
 	message_id TEXT NOT NULL,
 	sender_id  TEXT NOT NULL,
 	emoji      TEXT NOT NULL,
+	timestamp  INTEGER NOT NULL DEFAULT 0,
 	PRIMARY KEY (message_id, sender_id)
 );
 CREATE TABLE IF NOT EXISTS poll_options (
@@ -103,6 +104,7 @@ func OpenStore(path string) (*Store, error) {
 	}
 	// Columns added since: these fail harmlessly once they exist.
 	_, _ = db.Exec(`ALTER TABLE messages ADD COLUMN mentions TEXT NOT NULL DEFAULT '[]'`)
+	_, _ = db.Exec(`ALTER TABLE reactions ADD COLUMN timestamp INTEGER NOT NULL DEFAULT 0`)
 	s := &Store{db: db}
 	s.convertCallLogLinks()
 	return s, nil
@@ -915,14 +917,18 @@ func (s *Store) Reaction(messageID, senderID string) string {
 	return emoji
 }
 
-func (s *Store) SetReaction(messageID, senderID, emoji string) {
+// SetReaction stores the person's reaction ("": removes it), sent at ts (ms; 0 if unknown,
+// which keeps the time stored, e.g. from the web app, which doesn't show it).
+func (s *Store) SetReaction(messageID, senderID, emoji string, ts int64) {
 	if emoji == "" {
 		_, _ = s.db.Exec(`DELETE FROM reactions WHERE message_id=? AND sender_id=?`, messageID, senderID)
 		return
 	}
 	_, _ = s.db.Exec(`
-		INSERT INTO reactions (message_id, sender_id, emoji) VALUES (?, ?, ?)
-		ON CONFLICT (message_id, sender_id) DO UPDATE SET emoji=excluded.emoji`, messageID, senderID, emoji)
+		INSERT INTO reactions (message_id, sender_id, emoji, timestamp) VALUES (?, ?, ?, ?)
+		ON CONFLICT (message_id, sender_id) DO UPDATE SET emoji=excluded.emoji,
+			timestamp=CASE WHEN excluded.timestamp > 0 THEN excluded.timestamp ELSE reactions.timestamp END`,
+		messageID, senderID, emoji, ts)
 }
 
 func (s *Store) Reactions(messageIDs []string) map[string][]apiReaction {
@@ -935,7 +941,7 @@ func (s *Store) Reactions(messageIDs []string) map[string][]apiReaction {
 	for i, id := range messageIDs {
 		args[i] = id
 	}
-	rows, err := s.db.Query(`SELECT message_id, sender_id, emoji FROM reactions WHERE message_id IN (`+placeholders+`)`, args...)
+	rows, err := s.db.Query(`SELECT message_id, sender_id, emoji, timestamp FROM reactions WHERE message_id IN (`+placeholders+`)`, args...)
 	if err != nil {
 		return out
 	}
@@ -943,7 +949,7 @@ func (s *Store) Reactions(messageIDs []string) map[string][]apiReaction {
 	for rows.Next() {
 		var messageID string
 		var r apiReaction
-		if rows.Scan(&messageID, &r.SenderID, &r.Emoji) == nil {
+		if rows.Scan(&messageID, &r.SenderID, &r.Emoji, &r.Timestamp) == nil {
 			r.Emoji = emojiPresentation(r.Emoji)
 			out[messageID] = append(out[messageID], r)
 		}

@@ -273,11 +273,12 @@ extension ChatViewController: MessageCellDelegate {
     func messageCell(_ cell: MessageCellView, showReactionsOf message: ChatMessage, anchor: NSView) {
         let people = message.reactions.map { reaction -> ReactionsViewController.Entry in
             let participant = store.participant(reaction.senderID, in: message.threadID)
+            let date = reaction.timestamp.map { Date(timeIntervalSince1970: TimeInterval($0) / 1000) }
             if reaction.senderID == selfID, let account = store.account {
                 // The account itself often has no picture; your contact entry does.
-                return .init(emoji: reaction.emoji, name: "You", avatarURL: participant?.avatarURL ?? account.avatarURL)
+                return .init(emoji: reaction.emoji, name: "You", avatarURL: participant?.avatarURL ?? account.avatarURL, date: date)
             }
-            return .init(emoji: reaction.emoji, name: participant?.name ?? "Unknown", avatarURL: participant?.avatarURL)
+            return .init(emoji: reaction.emoji, name: participant?.name ?? "Unknown", avatarURL: participant?.avatarURL, date: date)
         }
         guard !people.isEmpty else { return }
         NSPopover.show(ReactionsViewController(entries: people), from: anchor)

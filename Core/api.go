@@ -45,8 +45,9 @@ type apiConversation struct {
 }
 
 type apiReaction struct {
-	SenderID string `json:"senderID"`
-	Emoji    string `json:"emoji"`
+	SenderID  string `json:"senderID"`
+	Emoji     string `json:"emoji"`
+	Timestamp int64  `json:"timestamp,omitempty"` // ms; absent when unknown (stored before it was)
 }
 
 type apiReply struct {

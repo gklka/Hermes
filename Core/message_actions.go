@@ -86,7 +86,7 @@ func (c *Core) react(ctx context.Context, threadID, messageID, emoji string) err
 		if err := c.sendE2EEChange(ctx, target, msg); err != nil {
 			return err
 		}
-		c.store.SetReaction(messageID, self, emoji)
+		c.store.SetReaction(messageID, self, emoji, time.Now().UnixMilli())
 		c.emitMessage(messageID)
 		return nil
 	}

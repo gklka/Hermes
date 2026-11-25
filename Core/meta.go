@@ -286,7 +286,7 @@ func (c *Core) handleMessageTables(tbl *table.LSTable, cs *changeSet) {
 		cs.message(r.MessageId)
 	}
 	for _, r := range tbl.LSDeleteReaction {
-		c.store.SetReaction(r.MessageId, id64(r.ActorId), "")
+		c.store.SetReaction(r.MessageId, id64(r.ActorId), "", 0)
 		cs.message(r.MessageId)
 	}
 }
@@ -521,7 +521,7 @@ func (c *Core) storeFBMessage(m *table.WrappedMessage, cs *changeSet) {
 	c.store.PutMessage(row)
 	cs.message(row.ID)
 	for _, r := range m.Reactions {
-		c.store.SetReaction(r.MessageId, id64(r.ActorId), r.Reaction)
+		c.store.SetReaction(r.MessageId, id64(r.ActorId), r.Reaction, r.TimestampMs)
 	}
 }
 

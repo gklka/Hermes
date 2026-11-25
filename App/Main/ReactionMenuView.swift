@@ -144,6 +144,8 @@ final class ReactionsViewController: NSViewController {
         let emoji: String
         let name: String
         let avatarURL: String?
+        /// When they reacted, if known.
+        let date: Date?
     }
 
     private let entries: [Entry]
@@ -192,9 +194,18 @@ private final class ReactionPersonView: NSView {
     /// Room around the bubble for its shadow.
     static let margin: CGFloat = 8
 
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        formatter.doesRelativeDateFormatting = true
+        return formatter
+    }()
+
     init(_ entry: ReactionsViewController.Entry) {
         super.init(frame: .zero)
-        toolTip = entry.name
+        // "Andi, Today at 15:50" (relative days, the Mac's date and time format).
+        toolTip = entry.date.map { "\(entry.name), \(Self.dateFormatter.string(from: $0))" } ?? entry.name
 
         let emoji = NSTextField(labelWithString: entry.emoji)
         emoji.font = .systemFont(ofSize: 34)

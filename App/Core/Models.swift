@@ -67,6 +67,8 @@ enum RequestList: String, Codable, CaseIterable {
 struct Reaction: Codable, Hashable {
     let senderID: String
     let emoji: String
+    /// When it was sent (ms); nil when unknown (stored before Hermes kept it, or from the web app).
+    var timestamp: Int64?
 }
 
 struct ReplyPreview: Codable, Hashable {

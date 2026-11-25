@@ -7,7 +7,7 @@ package main
 // one already stored (e.g. synced again after reconnecting) isn't.
 func (c *Core) setReaction(messageID, actorID, emoji string, ts int64) {
 	previous := c.store.Reaction(messageID, actorID)
-	c.store.SetReaction(messageID, actorID, emoji)
+	c.store.SetReaction(messageID, actorID, emoji, ts)
 	self := c.selfID()
 	if emoji == "" || emoji == previous || actorID == self {
 		return
