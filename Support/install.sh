@@ -16,9 +16,19 @@ if [ -n "$UNIVERSAL" ]; then
 else
 	DESTINATION="platform=macOS,arch=$(uname -m)"
 fi
-xcodebuild -project Hermes.xcodeproj -scheme Hermes -configuration Release \
+# A failed build stops here: otherwise the last build's app (maybe much older) is installed.
+# (Piping xcodebuild into grep would hide its exit status.)
+BUILD_LOG=$(mktemp)
+if xcodebuild -project Hermes.xcodeproj -scheme Hermes -configuration Release \
     -destination "$DESTINATION" \
-    -derivedDataPath build/DerivedData -allowProvisioningUpdates build 2>&1 | grep -E "error: |\*\* BUILD"
+    -derivedDataPath build/DerivedData -allowProvisioningUpdates build >"$BUILD_LOG" 2>&1; then
+    BUILD_OK=1
+else
+    BUILD_OK=0
+fi
+grep -E "error: |\*\* BUILD" "$BUILD_LOG" || true
+rm -f "$BUILD_LOG"
+[ "$BUILD_OK" = 1 ] || { echo "Build failed: nothing installed." >&2; exit 1; }
 BUILT=build/DerivedData/Build/Products/Release/Hermes.app
 codesign --verify --strict "$BUILT"
 
