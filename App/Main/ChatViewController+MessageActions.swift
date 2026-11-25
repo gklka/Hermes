@@ -663,53 +663,81 @@ extension ChatViewController: MessageCellDelegate {
         }
     }
 
-    /// Quick Look with all of the message's attachments, starting at the clicked one. Pictures
-    /// not downloaded yet show the low-res version from the chat until the full one arrives.
+    /// The media viewer with all of the chat's pictures and videos (← / → step through them),
+    /// starting at the clicked one. Items load when they're first shown; pictures not
+    /// downloaded yet show the low-res version from the chat until the full one arrives.
     private func showQuickLook(of message: ChatMessage, startingAt clicked: Attachment, from cell: MessageCellView) async {
-        var items: [MediaViewer.Item] = []
-        var ids: [String] = []
-        var stillDownloading: [Attachment] = []
-        var startIndex = 0
-        for attachment in message.attachments where attachment.kind != .link {
-            do {
-                let (item, isPreview) = try await quickLookItem(for: attachment, of: message, in: cell)
-                if attachment.id == clicked.id { startIndex = items.count }
-                items.append(item)
-                ids.append(attachment.id)
-                if isPreview { stillDownloading.append(attachment) }
-            } catch {
-                if attachment.id == clicked.id {
-                    _ = presentError(error)
-                    return
-                }
-                CoreBridge.shared.log("Quick Look: attachment \(attachment.id) unavailable: \(error)")
-            }
-        }
-        previewCell = cell
-        previewMessageID = message.id
-        previewAttachmentIDs = ids
         let session = UUID()
         previewSession = session
-        MediaViewer.shared.show(items, at: startIndex, over: view.window) { [weak self] index in
-            self?.zoomSource(forItemAt: index)
+        let entries = await mediaEntries(around: message, clicked: clicked)
+        guard session == previewSession,
+              let startIndex = entries.firstIndex(where: { $0.message.id == message.id && $0.attachment.id == clicked.id }) else { return }
+        let first: MediaViewer.Item
+        do {
+            first = try await viewerItem(at: startIndex, of: entries, session: session)
+        } catch {
+            _ = presentError(error)
+            return
         }
-
-        for attachment in stillDownloading {
+        guard session == previewSession else { return }
+        previewEntries = entries
+        MediaViewer.shared.show(first, at: startIndex, count: entries.count, over: view.window, load: { [weak self] index in
+            guard let self, session == self.previewSession else { return nil }
             do {
-                let url = try await store.localFile(for: attachment, in: message)
-                if session == previewSession, let index = previewAttachmentIDs.firstIndex(of: attachment.id) {
-                    MediaViewer.shared.replaceItem(at: index, with: url)
-                }
+                return try await self.viewerItem(at: index, of: entries, session: session)
             } catch {
-                CoreBridge.shared.log("Quick Look: full-size \(attachment.id) unavailable, keeping the preview: \(error)")
+                CoreBridge.shared.log("Media viewer: attachment \(entries[index].attachment.id) unavailable: \(error)")
+                return nil
+            }
+        }, source: { [weak self] index in
+            self?.zoomSource(forItemAt: index)
+        })
+    }
+
+    /// What the viewer steps through: the chat's stored pictures and videos (with the loaded
+    /// messages, in case one isn't stored yet), oldest first. A sticker, or a chat whose media
+    /// can't be listed, gets just the message's own attachments.
+    private func mediaEntries(around message: ChatMessage, clicked: Attachment) async -> [(message: ChatMessage, attachment: Attachment)] {
+        let ownEntries = message.attachments.filter { $0.kind != .link }.map { (message: message, attachment: $0) }
+        let media: Set<Attachment.Kind> = [.image, .gif, .video]
+        guard media.contains(clicked.kind) else { return ownEntries }
+        var byID: [String: ChatMessage] = [:]
+        for stored in await store.mediaMessages(in: message.threadID) { byID[stored.id] = stored }
+        for loaded in store.messages(in: message.threadID) where loaded.attachments.contains(where: { media.contains($0.kind) }) {
+            byID[loaded.id] = loaded
+        }
+        byID[message.id] = message
+        let messages = byID.values.filter { !$0.isUnsent }.sorted { ($0.timestamp, $0.id) < ($1.timestamp, $1.id) }
+        return messages.flatMap { m in m.attachments.filter { media.contains($0.kind) }.map { (message: m, attachment: $0) } }
+    }
+
+    /// Loads viewer item `index`. A picture shown as its low-res preview is swapped for the
+    /// full-size one once that's downloaded.
+    private func viewerItem(at index: Int, of entries: [(message: ChatMessage, attachment: Attachment)], session: UUID) async throws -> MediaViewer.Item {
+        let (message, attachment) = entries[index]
+        let (item, isPreview) = try await quickLookItem(for: attachment, of: message, in: visibleCell(showing: message.id))
+        if isPreview {
+            Task { [weak self] in
+                do {
+                    guard let url = try await self?.store.localFile(for: attachment, in: message) else { return }
+                    if session == self?.previewSession { MediaViewer.shared.replaceItem(at: index, with: url) }
+                } catch {
+                    CoreBridge.shared.log("Media viewer: full-size \(attachment.id) unavailable, keeping the preview: \(error)")
+                }
             }
         }
+        return item
+    }
+
+    /// The message's cell, while it's on screen.
+    private func visibleCell(showing messageID: String) -> MessageCellView? {
+        visibleCells(MessageCellView.self).first { $0.cell.message?.id == messageID }?.cell
     }
 
     /// What Quick Look shows for the attachment: its downloaded file; for a picture not
     /// downloaded yet, the chat's picture at the full picture's size (`isPreview`: replaced once
     /// it's downloaded); otherwise the file, downloaded now.
-    private func quickLookItem(for attachment: Attachment, of message: ChatMessage, in cell: MessageCellView) async throws -> (item: MediaViewer.Item, isPreview: Bool) {
+    private func quickLookItem(for attachment: Attachment, of message: ChatMessage, in cell: MessageCellView?) async throws -> (item: MediaViewer.Item, isPreview: Bool) {
         let isPicture = [.image, .gif, .sticker].contains(attachment.kind)
         let title = attachment.filename.flatMap { $0.isEmpty ? nil : $0 } ?? attachment.kind.label
         func fileItem(_ url: URL) -> MediaViewer.Item {
@@ -718,7 +746,7 @@ extension ChatViewController: MessageCellDelegate {
         if let downloaded = store.downloadedFile(for: attachment, in: message) {
             return (fileItem(downloaded), false)
         }
-        if isPicture, let image = cell.attachmentView(for: attachment.id)?.displayedImage?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+        if isPicture, let image = cell?.attachmentView(for: attachment.id)?.displayedImage?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
             let size = await finalPixelSize(of: attachment, in: message, thumbnail: image)
             if let preview = await ImageSize.writeQuickLookPreview(image, finalSize: size, attachmentID: attachment.id) {
                 return (MediaViewer.Item(url: preview, title: title, pixelSize: size), true)
@@ -758,9 +786,9 @@ extension ChatViewController: MessageCellDelegate {
 
     /// Where Quick Look item `index`'s picture is in the chat (on screen), while it's visible.
     private func zoomSource(forItemAt index: Int) -> (frame: NSRect, image: NSImage)? {
-        guard previewAttachmentIDs.indices.contains(index),
-              let cell = previewCell, cell.message?.id == previewMessageID,
-              let view = cell.attachmentView(for: previewAttachmentIDs[index]), let window = view.window,
+        guard previewEntries.indices.contains(index),
+              let cell = visibleCell(showing: previewEntries[index].message.id),
+              let view = cell.attachmentView(for: previewEntries[index].attachment.id), let window = view.window,
               let image = view.displayedImage else { return nil }
         // Only while it's visible in the message list (cells are reused once scrolled away).
         let rect = view.convert(view.bounds, to: scrollView.contentView)

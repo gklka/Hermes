@@ -470,6 +470,12 @@ final class ChatStore {
         return page?.messages ?? []
     }
 
+    /// The chat's stored messages with pictures or videos, oldest first (the media viewer's list).
+    func mediaMessages(in threadID: String) async -> [ChatMessage] {
+        let page = try? await core.call("messages.media", ThreadParams(threadID: threadID), as: MessagesPage.self)
+        return page?.messages ?? []
+    }
+
     /// Whether the chat has any pinned messages (from the conversation, synchronously).
     func hasPinnedMessages(in threadID: String) -> Bool {
         !(conversation(threadID)?.pinnedMessageIDs ?? []).isEmpty

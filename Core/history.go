@@ -40,6 +40,24 @@ func (c *Core) messagesPage(rows []*messageRow, hasMore bool) apiMessagesPage {
 	return apiMessagesPage{Messages: c.store.APIMessages(rows, c.selfID()), HasMore: hasMore}
 }
 
+// mediaMessages returns the chat's stored messages with pictures or videos, oldest first (for
+// stepping through the chat's media in the viewer).
+func (c *Core) mediaMessages(threadID string) apiMessagesPage {
+	var rows []*messageRow
+	for _, m := range c.store.AllMessages(threadID) {
+		if m.IsUnsent {
+			continue
+		}
+		for _, a := range m.Attachments {
+			if a.Kind == kindImage || a.Kind == kindGIF || a.Kind == kindVideo {
+				rows = append(rows, m)
+				break
+			}
+		}
+	}
+	return c.messagesPage(rows, false)
+}
+
 // pinnedMessagesList returns a chat's pinned messages, newest pin first.
 func (c *Core) pinnedMessagesList(threadID string) apiMessagesPage {
 	var rows []*messageRow

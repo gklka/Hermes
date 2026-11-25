@@ -129,10 +129,9 @@ final class ChatViewController: NSViewController {
     private var keyMonitors: [Any] = []
     /// Edited messages whose earlier versions are shown.
     var expandedEdits: Set<String> = []
-    /// The attachment shown by each Quick Look item, to zoom from its picture in the chat.
-    var previewAttachmentIDs: [String] = []
-    weak var previewCell: MessageCellView?
-    var previewMessageID: String?
+    /// The attachment shown by each media viewer item (the chat's pictures and videos), to load
+    /// it and to zoom from its picture in the chat.
+    var previewEntries: [(message: ChatMessage, attachment: Attachment)] = []
     /// Identifies the current Quick Look session, so late downloads don't touch a newer one.
     var previewSession: UUID?
     /// Files shown in the system Quick Look panel (non-media attachments).

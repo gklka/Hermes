@@ -192,6 +192,8 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 		return c.messagesPage(c.store.ListMessages(p.ThreadID, p.Before, p.Limit), false), nil
 	case "messages.search":
 		return c.searchMessages(p.ThreadID, p.Text, p.Limit), nil
+	case "messages.media":
+		return c.mediaMessages(p.ThreadID), nil
 	case "messages.pinned":
 		return c.pinnedMessagesList(p.ThreadID), nil
 	case "messages.fetchOlder":
