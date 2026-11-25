@@ -16,6 +16,17 @@ enum ConversationFilter: Int, CaseIterable {
         }
     }
 
+    var symbol: String {
+        switch self {
+        case .all: "tray.full"
+        case .unread: "envelope.badge"
+        case .messages: "person"
+        case .groups: "person.2"
+        case .marketplace: "storefront"
+        case .requests: "person.crop.circle.badge.questionmark"
+        }
+    }
+
     func includes(_ conversation: Conversation) -> Bool {
         // Requests only show under their own filter.
         guard self != .requests else { return conversation.isRequest }

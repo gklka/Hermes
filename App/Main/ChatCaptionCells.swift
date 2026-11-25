@@ -175,7 +175,7 @@ final class ReadersCellView: NSTableCellView {
                 avatar.heightAnchor.constraint(equalToConstant: Self.pictureSize),
             ])
             avatar.configure(name: reader.name, url: reader.avatarURL)
-            avatar.toolTip = reader.name
+            avatar.toolTip = Self.label(reader)
             avatar.alphaValue = hiding.contains(reader.id) ? 0 : 1
             stack.addArrangedSubview(avatar)
             avatars.append((reader, avatar))
@@ -186,6 +186,20 @@ final class ReadersCellView: NSTableCellView {
             more.textColor = .secondaryLabelColor
             stack.addArrangedSubview(more)
         }
-        toolTip = "Seen by " + readers.map(\.name).filter { !$0.isEmpty }.joined(separator: ", ")
+        toolTip = "Seen by\n" + readers.filter { !$0.name.isEmpty }.map(Self.label).joined(separator: "\n")
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        formatter.doesRelativeDateFormatting = true
+        return formatter
+    }()
+
+    /// "Name, Today at 14:05": the read mark is when they read it.
+    private static func label(_ reader: Participant) -> String {
+        guard let ms = reader.readWatermark, ms > 0 else { return reader.name }
+        return "\(reader.name), \(dateFormatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1000)))"
     }
 }

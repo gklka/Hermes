@@ -326,6 +326,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSWindo
                 let menuItem = NSMenuItem(title: filter.title, action: #selector(selectFilter(_:)), keyEquivalent: "")
                 menuItem.target = self
                 menuItem.tag = filter.rawValue
+                menuItem.image = NSImage(systemSymbolName: filter.symbol, accessibilityDescription: nil)
+                // macOS 27 hides menu images unless asked.
+                if #available(macOS 27, *) { menuItem.preferredImageVisibility = .visible }
                 menu.addItem(menuItem)
             }
             let item = NSMenuToolbarItem(itemIdentifier: itemIdentifier)
