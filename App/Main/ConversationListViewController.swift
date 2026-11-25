@@ -254,9 +254,10 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
         let query = searchField.stringValue.trimmingCharacters(in: .whitespaces)
         var conversations = filter == .requests ? store.requests : store.conversations
         // As many chats as Messenger web's list has loaded (scrolling to the bottom loads more),
-        // and the open one; searching finds them all.
+        // and the open one; searching finds them all, and so does Unread (the Dock badge counts
+        // unread chats further down too).
         let listed = WebChatImporter.shared.listedChats
-        if query.isEmpty, listed > 0, filter != .requests {
+        if query.isEmpty, listed > 0, filter != .requests, filter != .unread {
             let selectedIndex = selectedID.flatMap { id in conversations.firstIndex { $0.id == id } } ?? -1
             conversations = Array(conversations.prefix(max(listed, selectedIndex + 1)))
         }
