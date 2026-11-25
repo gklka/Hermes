@@ -3,11 +3,12 @@ import Combine
 
 enum ConversationFilter: Int, CaseIterable {
     // The raw values are stored (the chosen filter), so new cases get new ones.
-    case all = 0, messages = 1, groups = 3, marketplace = 2, requests = 4
+    case all = 0, unread = 5, messages = 1, groups = 3, marketplace = 2, requests = 4
 
     var title: String {
         switch self {
         case .all: "All"
+        case .unread: "Unread"
         case .messages: "Messages"
         case .groups: "Groups"
         case .marketplace: "Marketplace"
@@ -21,6 +22,8 @@ enum ConversationFilter: Int, CaseIterable {
         guard !conversation.isRequest else { return false }
         switch self {
         case .all, .requests: return true
+        // Also with reactions you haven't seen or marked unread, as the dot shows.
+        case .unread: return ChatStore.shared.isUnread(conversation)
         case .messages: return !conversation.isGroup && !conversation.isMarketplace
         case .groups: return conversation.isGroup && !conversation.isMarketplace
         case .marketplace: return conversation.isMarketplace
@@ -258,8 +261,10 @@ final class ConversationListViewController: NSViewController, NSTableViewDataSou
             conversations = Array(conversations.prefix(max(listed, selectedIndex + 1)))
         }
         rows = conversations.filter {
-            // Ignoring case and accents: "peter" finds "Péter".
-            filter.includes($0) && (filter != .requests || $0.requestList == requestTab)
+            // The open chat stays under Unread once it's read, instead of vanishing while you read it.
+            (filter.includes($0) || filter == .unread && $0.id == selectedID)
+                && (filter != .requests || $0.requestList == requestTab)
+                // Ignoring case and accents: "peter" finds "Péter".
                 && (query.isEmpty || $0.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil)
         }
         showsLoadingRow = WebChatImporter.shared.isLoadingMoreChats && query.isEmpty

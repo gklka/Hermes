@@ -330,9 +330,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 extension AppDelegate: NSMenuItemValidation {
+    /// Chat › Mark All as Read.
+    @objc func markAllRead(_ sender: Any?) {
+        store.markAllRead()
+    }
+
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(togglePreferNicknames(_:)) {
             menuItem.state = ContactCards.shared.prefersNicknames ? .on : .off
+        }
+        if menuItem.action == #selector(markAllRead(_:)) {
+            return !store.unreadConversations.isEmpty
         }
         if menuItem.action == #selector(logOut(_:)) {
             menuItem.title = store.account.map { "Log Out \($0.name)…" } ?? "Log Out…"

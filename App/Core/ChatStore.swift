@@ -577,6 +577,18 @@ final class ChatStore {
     }
 
     /// Mark as Read / Mark as Unread (the menus).
+    /// Chats (not requests) that are unread, marked unread or have reactions you haven't seen.
+    var unreadConversations: [Conversation] {
+        conversations.filter { !$0.isRequest && isUnread($0) }
+    }
+
+    /// Chat › Mark All as Read.
+    func markAllRead() {
+        for conversation in unreadConversations {
+            markRead(conversation.id)
+        }
+    }
+
     func toggleRead(_ conversation: Conversation) {
         if isUnread(conversation) {
             markRead(conversation.id)
