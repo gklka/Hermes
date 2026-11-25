@@ -421,9 +421,17 @@ final class MediaViewer: NSObject, NSWindowDelegate {
     /// Shows a still picture (aspect-fit) with a VisionKit Live Text overlay, so text in the picture
     /// can be selected, copied and looked up — the way Preview and Quick Look's panel do.
     private final class LiveTextImageView: NSView, ImageAnalysisOverlayViewDelegate {
-        /// Zooms (pinch, ⌘+ / ⌘- / ⌘0) and pans the picture; at 1× it fits the window.
+        /// Zooms (pinch, ⌘+ / ⌘- / ⌘0) and pans the picture. Its document is the picture at its
+        /// own size; the magnification is the picture's scale on screen. Fitting the window
+        /// (following its size) until zoomed in; zoomed in, the scale and the picture's place on
+        /// screen stay put while the window is resized.
         private let scrollView = NSScrollView()
         private let content = NSView()
+        /// The scale that fits the picture in the window, as of the last layout.
+        private var fitScale: CGFloat = 1
+        /// Where the visible area was on screen, as of the last layout (to keep the picture in
+        /// place when the window is resized from an edge).
+        private var lastClipScreenRect: NSRect?
         private let imageView = DisplayImageView()
         private let overlay = ImageAnalysisOverlayView()
         private let analyzer = ImageAnalyzer()
@@ -446,14 +454,18 @@ final class MediaViewer: NSObject, NSWindowDelegate {
             scrollView.autohidesScrollers = true
             scrollView.scrollerStyle = .overlay
             scrollView.allowsMagnification = true
-            scrollView.minMagnification = 1
-            scrollView.maxMagnification = Self.maxZoom
             addSubview(scrollView)
 
+            let clip = CenteringClipView()
+            clip.drawsBackground = false
+            scrollView.contentView = clip
             content.frame = NSRect(origin: .zero, size: scrollView.contentSize)
             scrollView.documentView = content
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(magnifyEnded(_:)), name: NSScrollView.didEndLiveMagnifyNotification, object: scrollView
+            )
 
-            imageView.imageScaling = .scaleProportionallyUpOrDown
+            imageView.imageScaling = .scaleAxesIndependently
             imageView.autoresizingMask = [.width, .height]
             imageView.frame = content.bounds
             content.addSubview(imageView)
@@ -468,11 +480,124 @@ final class MediaViewer: NSObject, NSWindowDelegate {
         @available(*, unavailable)
         required init?(coder: NSCoder) { fatalError() }
 
+        /// Whether the picture fits the window (not zoomed in).
+        private var isFitting: Bool { scrollView.magnification <= fitScale * 1.001 }
+
+        /// A new picture: fit it at the next layout.
+        private var forceFit = true
+
+        /// The zoomed-in picture's scale and place when a resize started.
+        private struct ResizeStart {
+            var magnification: CGFloat
+            var origin: NSPoint
+            var screen: NSRect
+        }
+
+        /// Set while the window is being resized by dragging, if the picture was zoomed in: the
+        /// whole drag is measured from it, so shrinking the window again within the same drag
+        /// brings back the scale and place the picture had before.
+        private var liveResizeStart: ResizeStart?
+
+        override func viewWillStartLiveResize() {
+            super.viewWillStartLiveResize()
+            liveResizeStart = isFitting ? nil : currentResizeStart
+        }
+
+        override func viewDidEndLiveResize() {
+            super.viewDidEndLiveResize()
+            liveResizeStart = nil
+        }
+
+        private var currentResizeStart: ResizeStart? {
+            lastClipScreenRect.map {
+                ResizeStart(magnification: scrollView.magnification, origin: scrollView.contentView.bounds.origin, screen: $0)
+            }
+        }
+
         override func layout() {
+            let wasFitting = isFitting || forceFit
+            forceFit = false
+            // A drag measures from where it started; any other resize from the last layout.
+            let start = inLiveResize ? liveResizeStart : (wasFitting ? nil : currentResizeStart)
             super.layout()
-            // The picture's unzoomed size is the window's (contentSize isn't affected by zooming).
+            let clip = scrollView.contentView
+            let screen = window.map { $0.convertToScreen(clip.convert(clip.bounds, to: nil)) }
+            defer { lastClipScreenRect = screen }
+            let picture = content.frame.size
             let size = scrollView.contentSize
-            if content.frame.size != size { content.setFrameSize(size) }
+            guard picture.width > 0, picture.height > 0, size.width > 0, size.height > 0 else { return }
+            fitScale = min(size.width / picture.width, size.height / picture.height)
+            scrollView.minMagnification = fitScale
+            scrollView.maxMagnification = fitScale * Self.maxZoom
+
+            func fit() {
+                scrollView.magnification = fitScale
+                clip.scroll(to: clip.constrainBoundsRect(clip.bounds).origin)
+                scrollView.reflectScrolledClipView(clip)
+            }
+            guard let start, let screen, start.magnification > fitScale * 1.001 else {
+                fit()
+                return
+            }
+            // Zoomed in. Once the window is bigger than the zoomed picture along a side where it
+            // was cropped, fit the picture to the window instead.
+            let shown = NSSize(width: picture.width * start.magnification, height: picture.height * start.magnification)
+            let croppedX = start.screen.width < shown.width - 0.5, croppedY = start.screen.height < shown.height - 0.5
+            if (croppedX && size.width > shown.width + 0.5) || (croppedY && size.height > shown.height + 0.5) {
+                fit()
+                return
+            }
+            // Otherwise the same scale, and the picture stays where it was on screen, so resizing
+            // from an edge crops it on that side (until its edge reaches the window's).
+            scrollView.magnification = start.magnification
+            let origin = NSPoint(
+                x: start.origin.x + (screen.minX - start.screen.minX) / start.magnification,
+                y: start.origin.y + (screen.minY - start.screen.minY) / start.magnification
+            )
+            clip.scroll(to: clip.constrainBoundsRect(NSRect(origin: origin, size: clip.bounds.size)).origin)
+            scrollView.reflectScrolledClipView(clip)
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            NotificationCenter.default.removeObserver(self, name: NSWindow.didMoveNotification, object: nil)
+            if let window {
+                NotificationCenter.default.addObserver(
+                    self, selector: #selector(windowMoved(_:)), name: NSWindow.didMoveNotification, object: window
+                )
+            }
+        }
+
+        /// The window moved (not resized; `layout` handles that): the picture moved with it.
+        @objc private func windowMoved(_ notification: Notification) {
+            guard let window, let old = lastClipScreenRect else { return }
+            let clip = scrollView.contentView
+            let screen = window.convertToScreen(clip.convert(clip.bounds, to: nil))
+            if screen.size == old.size { lastClipScreenRect = screen }
+        }
+
+        /// A pinch back to (or past) fitting: fit, following the window's size again.
+        @objc private func magnifyEnded(_ notification: Notification) {
+            guard isFitting else { return }
+            scrollView.magnification = fitScale
+            let clip = scrollView.contentView
+            clip.scroll(to: clip.constrainBoundsRect(clip.bounds).origin)
+            scrollView.reflectScrolledClipView(clip)
+        }
+
+        /// Keeps the picture's edges at the window's edges (no scrolling past them), and the
+        /// picture centered on a side where it's smaller than the window.
+        private final class CenteringClipView: NSClipView {
+            override func constrainBoundsRect(_ proposedBounds: NSRect) -> NSRect {
+                var rect = super.constrainBoundsRect(proposedBounds)
+                guard let document = documentView?.frame, !document.isEmpty else { return rect }
+                func clamp(_ origin: CGFloat, length: CGFloat, extent: CGFloat) -> CGFloat {
+                    length >= extent ? -(length - extent) / 2 : min(max(origin, 0), extent - length)
+                }
+                rect.origin.x = clamp(rect.origin.x, length: rect.width, extent: document.width)
+                rect.origin.y = clamp(rect.origin.y, length: rect.height, extent: document.height)
+                return rect
+            }
         }
 
         enum Zoom { case zoomIn, zoomOut, actualSize }
@@ -480,11 +605,11 @@ final class MediaViewer: NSObject, NSWindowDelegate {
         func zoom(_ zoom: Zoom) {
             let current = scrollView.magnification
             let target: CGFloat = switch zoom {
-            case .zoomIn: min(Self.maxZoom, current * Self.zoomStep)
-            case .zoomOut: max(1, current / Self.zoomStep)
-            case .actualSize: 1
+            case .zoomIn: min(fitScale * Self.maxZoom, current * Self.zoomStep)
+            case .zoomOut: max(fitScale, current / Self.zoomStep)
+            case .actualSize: fitScale
             }
-            guard target != current else { return }
+            guard abs(target - current) > 0.0001 else { return }
             let visible = scrollView.contentView.bounds
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.2
@@ -496,13 +621,17 @@ final class MediaViewer: NSObject, NSWindowDelegate {
         func show(_ url: URL?) {
             analysisToken += 1
             let token = analysisToken
-            scrollView.magnification = 1
             overlay.analysis = nil
             guard let url, let image = NSImage(contentsOf: url) else {
                 imageView.image = nil
                 return
             }
+            // A new picture (or its full-size version) starts fitting the window.
             imageView.image = image
+            content.setFrameSize(image.size)
+            forceFit = true
+            needsLayout = true
+            layoutSubtreeIfNeeded()
             var rect = NSRect(origin: .zero, size: image.size)
             guard let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return }
             Task { [weak self] in
