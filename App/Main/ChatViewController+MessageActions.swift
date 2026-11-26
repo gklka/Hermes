@@ -52,6 +52,10 @@ extension ChatViewController: MessageCellDelegate {
         if !message.text.isEmpty {
             add("Copy", #selector(copyFromMenu(_:)), key: "c")
         }
+        let links = Self.links(in: message)
+        if !links.isEmpty {
+            add(links.count == 1 ? "Copy Link" : "Copy Links", #selector(copyLinksFromMenu(_:)))
+        }
         let pictures = message.attachments.filter { Self.isPicture($0) }
         if !pictures.isEmpty {
             add(pictures.count == 1 ? "Copy Image" : "Copy Images", #selector(copyImagesFromMenu(_:)))
@@ -143,6 +147,37 @@ extension ChatViewController: MessageCellDelegate {
     @objc private func copyFromMenu(_ sender: NSMenuItem) {
         guard let message = sender.representedObject as? ChatMessage else { return }
         copyText(of: [message])
+    }
+
+    @objc private func copyLinksFromMenu(_ sender: NSMenuItem) {
+        guard let message = sender.representedObject as? ChatMessage else { return }
+        let links = Self.links(in: message)
+        guard !links.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(links.map(\.absoluteString).joined(separator: "\n"), forType: .string)
+        if links.count == 1, let link = links.first {
+            NSPasteboard.general.setString(link.absoluteString, forType: .URL)
+        }
+    }
+
+    /// The web addresses of a message's link cards (shared posts, reels, videos…), with Facebook's
+    /// redirect (l.facebook.com/l.php?u=…) unwrapped.
+    private static func links(in message: ChatMessage) -> [URL] {
+        var seen = Set<String>()
+        return message.attachments.compactMap { attachment -> URL? in
+            guard attachment.kind == .link, let string = attachment.url, let url = URL(string: string),
+                  url.scheme == "http" || url.scheme == "https" else { return nil }
+            return unwrapRedirect(url)
+        }.filter { seen.insert($0.absoluteString).inserted }
+    }
+
+    private static func unwrapRedirect(_ url: URL) -> URL {
+        guard let host = url.host?.lowercased(), host.hasSuffix("facebook.com") || host.hasSuffix("messenger.com"),
+              url.path == "/l.php",
+              let target = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                  .queryItems?.first(where: { $0.name == "u" })?.value,
+              let unwrapped = URL(string: target) else { return url }
+        return unwrapped
     }
 
     @objc private func togglePinFromMenu(_ sender: NSMenuItem) {
