@@ -399,7 +399,20 @@ final class MessageCellView: NSTableCellView {
             for view in attachmentsStack.arrangedSubviews {
                 view.removeFromSuperview()
             }
+            // Several photos and videos: one fanned stack, where the first of them is.
+            let stacked = PhotoStackView.stacked(shown)
             for attachment in shown {
+                if let first = stacked.first, stacked.contains(where: { $0.id == attachment.id }) {
+                    guard attachment.id == first.id else { continue }
+                    let stack = PhotoStackView(attachments: stacked, message: message, maxWidth: key.maxWidth, outgoing: message.isFromMe)
+                    stack.onOpen = { [weak self] attachment in
+                        guard let self, let message = self.message else { return }
+                        self.delegate?.messageCell(self, open: attachment, of: message)
+                    }
+                    stack.onSelect = { [weak self] in self?.selectWithModifiers($0) }
+                    attachmentsStack.addArrangedSubview(stack)
+                    continue
+                }
                 if attachment.kind == .call, let call = attachment.call {
                     attachmentsStack.addArrangedSubview(CallCardView(call: call, message: message))
                     continue
@@ -593,6 +606,25 @@ final class MessageCellView: NSTableCellView {
     /// The view showing one of this message's attachments (for Quick Look's zoom).
     func attachmentView(for attachmentID: String) -> AttachmentView? {
         attachmentsStack.arrangedSubviews.lazy.compactMap { $0 as? AttachmentView }.first { $0.attachmentID == attachmentID }
+    }
+
+    private func photoStack(with attachmentID: String) -> PhotoStackView? {
+        attachmentsStack.arrangedSubviews.lazy.compactMap { $0 as? PhotoStackView }
+            .first { $0.attachments.contains { $0.id == attachmentID } }
+    }
+
+    /// The picture the chat shows for an attachment (on its own, or in a photo stack).
+    func displayedImage(for attachmentID: String) -> NSImage? {
+        attachmentView(for: attachmentID)?.displayedImage ?? photoStack(with: attachmentID)?.displayedImage(for: attachmentID)
+    }
+
+    /// Where an attachment's picture is (a view and a rect in it), for the viewer to zoom from and
+    /// back to. A photo stack brings that picture to the top first.
+    func zoomSource(for attachmentID: String) -> (view: NSView, rect: NSRect, image: NSImage)? {
+        if let view = attachmentView(for: attachmentID) {
+            return view.displayedImage.map { (view, view.bounds, $0) }
+        }
+        return photoStack(with: attachmentID)?.zoomSource(for: attachmentID)
     }
 
     /// What popovers about this message point at: the text bubble, or the attachments.

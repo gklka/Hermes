@@ -4,7 +4,7 @@ import AppKit
 /// clicked subview opts in, so attachments get them here and can be dragged out.
 final class ChatTableView: NSTableView {
     override func validateProposedFirstResponder(_ responder: NSResponder, for event: NSEvent?) -> Bool {
-        if event?.type == .leftMouseDown, responder is AttachmentView || responder is ReactionsBadge || responder is CaptionCellView {
+        if event?.type == .leftMouseDown, responder is AttachmentView || responder is PhotoDeckView || responder is ReactionsBadge || responder is CaptionCellView {
             return true
         }
         return super.validateProposedFirstResponder(responder, for: event)

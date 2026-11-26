@@ -781,7 +781,7 @@ extension ChatViewController: MessageCellDelegate {
         if let downloaded = store.downloadedFile(for: attachment, in: message) {
             return (fileItem(downloaded), false)
         }
-        if isPicture, let image = cell?.attachmentView(for: attachment.id)?.displayedImage?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+        if isPicture, let image = cell?.displayedImage(for: attachment.id)?.cgImage(forProposedRect: nil, context: nil, hints: nil) {
             let size = await finalPixelSize(of: attachment, in: message, thumbnail: image)
             if let preview = await ImageSize.writeQuickLookPreview(image, finalSize: size, attachmentID: attachment.id) {
                 return (MediaViewer.Item(url: preview, title: title, pixelSize: size), true)
@@ -823,12 +823,12 @@ extension ChatViewController: MessageCellDelegate {
     private func zoomSource(forItemAt index: Int) -> (frame: NSRect, image: NSImage)? {
         guard previewEntries.indices.contains(index),
               let cell = visibleCell(showing: previewEntries[index].message.id),
-              let view = cell.attachmentView(for: previewEntries[index].attachment.id), let window = view.window,
-              let image = view.displayedImage else { return nil }
+              let source = cell.zoomSource(for: previewEntries[index].attachment.id),
+              let window = source.view.window else { return nil }
         // Only while it's visible in the message list (cells are reused once scrolled away).
-        let rect = view.convert(view.bounds, to: scrollView.contentView)
+        let rect = source.view.convert(source.rect, to: scrollView.contentView)
         guard scrollView.contentView.bounds.intersects(rect) else { return nil }
-        return (window.convertToScreen(view.convert(view.bounds, to: nil)), image)
+        return (window.convertToScreen(source.view.convert(source.rect, to: nil)), source.image)
     }
 }
 
