@@ -568,6 +568,11 @@ final class ComposeView: NSView, NSTextViewDelegate {
     }
 
     @objc private func plusClicked() {
+        // Attaching is the only choice outside group chats: no menu then.
+        guard delegate?.composeViewCanCreatePoll(self) == true else {
+            attachClicked()
+            return
+        }
         let menu = NSMenu()
         let attach = menu.addItem(withTitle: "Attach File…", action: #selector(attachClicked), keyEquivalent: "")
         attach.image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: nil)
