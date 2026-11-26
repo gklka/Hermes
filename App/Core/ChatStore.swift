@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import UniformTypeIdentifiers
 
 /// In-memory view model shared by all windows. The Go core is the source of truth
 /// (it persists everything); this store mirrors what the UI currently needs.
@@ -408,18 +409,29 @@ final class ChatStore {
         }
     }
 
-    /// Sends each attachment as its own message, then the text (like Messages). The reply
-    /// target and the tagged people apply to the text.
+    /// Sends the attachments, then the text (like Messages). Photos and videos go together as one
+    /// message (an album); other files each as their own. The reply target and the tagged people
+    /// apply to the text.
     func send(text: String, mentions: [Mention] = [], attachments: [URL] = [], in threadID: String, replyTo: String? = nil) {
         struct TextParams: Encodable { let threadID: String; let text: String; let replyTo: String?; let mentions: [Mention] }
-        struct MediaParams: Encodable { let threadID: String; let path: String }
+        struct MediaParams: Encodable { let threadID: String; let paths: [String] }
         Task {
+            var album: [URL] = []
+            var others: [URL] = []
             for url in attachments {
                 do {
                     let prepared = try await Task.detached { try OutgoingMedia.prepare(url) }.value
-                    try await core.call("messages.sendMedia", MediaParams(threadID: threadID, path: prepared.path))
+                    if Self.isAlbumMedia(prepared) { album.append(prepared) } else { others.append(prepared) }
                 } catch {
-                    core.log("messages.sendMedia failed for \(url.lastPathComponent): \(error)")
+                    core.log("preparing \(url.lastPathComponent) failed: \(error)")
+                }
+            }
+            let groups = (album.isEmpty ? [] : [album]) + others.map { [$0] }
+            for group in groups {
+                do {
+                    try await core.call("messages.sendMedia", MediaParams(threadID: threadID, paths: group.map(\.path)))
+                } catch {
+                    core.log("messages.sendMedia failed for \(group.count) file(s): \(error)")
                 }
             }
             guard !text.isEmpty else { return }
@@ -429,6 +441,12 @@ final class ChatStore {
                 core.log("messages.send failed: \(error)")
             }
         }
+    }
+
+    /// Photos and videos (not GIFs, which Messenger sends on their own).
+    private static func isAlbumMedia(_ url: URL) -> Bool {
+        guard let type = UTType(filenameExtension: url.pathExtension), type != .gif else { return false }
+        return type.conforms(to: .image) || type.conforms(to: .movie)
     }
 
     /// Removes a message that failed to send (it only exists in this view model).

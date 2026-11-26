@@ -59,6 +59,7 @@ type requestParams struct {
 	Mentions     []apiMention       `json:"mentions"`
 	Emoji        string             `json:"emoji"`
 	Path         string             `json:"path"`
+	Paths        []string           `json:"paths"`
 	IsTyping     bool               `json:"isTyping"`
 	Enabled      bool               `json:"enabled"`
 	Pinned       bool               `json:"pinned"`
@@ -201,7 +202,11 @@ func (c *Core) dispatch(req rpcRequest) (any, error) {
 	case "messages.send":
 		return nil, c.sendText(ctx, p.ThreadID, p.Text, p.ReplyTo, p.Mentions)
 	case "messages.sendMedia":
-		return nil, c.sendMedia(ctx, p.ThreadID, p.Path)
+		paths := p.Paths
+		if len(paths) == 0 && p.Path != "" {
+			paths = []string{p.Path}
+		}
+		return nil, c.sendMedia(ctx, p.ThreadID, paths)
 	case "messages.react":
 		return nil, c.react(ctx, p.ThreadID, p.MessageID, p.Emoji)
 	case "messages.unsend":

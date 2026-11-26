@@ -1,8 +1,9 @@
 import AppKit
 
 /// Several photos (and videos) of one message as a fanned stack, like Messages: a "5 Photos"
-/// label over a pile of slightly turned cards. A sideways two-finger swipe (or a horizontal wheel)
-/// sends the top card to the back or brings the last one forward; a click opens the top one.
+/// label over a pile of cards. The ones still to come fan out to the right, the ones seen to the
+/// left, so you can tell how much is left. A sideways two-finger swipe (or a horizontal wheel)
+/// moves to the next or previous picture; a click opens the top one.
 final class PhotoStackView: NSView {
     /// Opens a picture (a click on the top card, or the label).
     var onOpen: ((Attachment) -> Void)?
@@ -26,15 +27,13 @@ final class PhotoStackView: NSView {
 
         let videos = attachments.filter { $0.kind == .video }.count
         let noun = videos == 0 ? "Photos" : videos == attachments.count ? "Videos" : "Items"
-        label.title = "\(attachments.count) \(noun)"
         label.image = NSImage(systemSymbolName: "square.grid.2x2.fill", accessibilityDescription: nil)
         label.symbolConfiguration = .init(pointSize: 10, weight: .semibold)
         label.imagePosition = .imageLeading
         label.imageHugsTitle = true
         label.isBordered = false
-        label.font = .systemFont(ofSize: 12, weight: .semibold)
         label.contentTintColor = .controlAccentColor
-        label.attributedTitle = NSAttributedString(string: label.title, attributes: [
+        label.attributedTitle = NSAttributedString(string: "\(attachments.count) \(noun)", attributes: [
             .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
             .foregroundColor: NSColor.controlAccentColor,
         ])
@@ -81,7 +80,8 @@ final class PhotoStackView: NSView {
 }
 
 /// The cards. A layer-hosting view: the cards are plain layers, so they can be turned and moved
-/// freely (AppKit doesn't manage layer-hosting views' sublayers).
+/// freely (AppKit doesn't manage layer-hosting views' sublayers). Only the cards near the top one
+/// exist; the others are made (and dropped) as you go, so a thousand pictures stay cheap.
 final class PhotoDeckView: NSView, NSDraggingSource {
     var onOpen: ((Attachment) -> Void)?
     var onSelect: ((NSEvent.ModifierFlags) -> Void)?
@@ -89,19 +89,24 @@ final class PhotoDeckView: NSView, NSDraggingSource {
     private let attachments: [Attachment]
     private let message: ChatMessage
     private let cardSize: CGSize
-    private var cards: [CALayer] = []
+    /// The cards that exist, by index in `attachments`.
+    private var cards: [Int: CALayer] = [:]
     private var images: [String: NSImage] = [:]
-    /// Indices into `attachments`, top card first.
-    private var order: [Int]
+    /// The top card's index.
+    private var current = 0
     private let pressLayer = CALayer()
 
     private static let cornerRadius: CGFloat = 16
-    /// Room around the top card for the turned cards behind it.
-    private static let inset = NSEdgeInsets(top: 8, left: 6, bottom: 8, right: 6)
-    /// The cards behind the top one: sideways offset, turn (degrees) and scale, by depth.
-    private static let fan: [(dx: CGFloat, angle: CGFloat, scale: CGFloat)] = [
-        (0, 0, 1), (9, -2.5, 0.97), (-7, 2, 0.95), (13, -4, 0.93), (-10, 3.5, 0.91),
-    ]
+    /// Room around the top card for the fanned cards.
+    private static let inset = NSEdgeInsets(top: 8, left: 26, bottom: 8, right: 26)
+    /// Cards fanned out on each side; the ones further away hide behind the last of them.
+    private static let fanned = 4
+    /// Cards kept on each side (the hidden extra ones fade in as they come closer).
+    private static let kept = 6
+    /// Per card away from the top: turn (degrees, clockwise on the right like Messages), sideways shift, shrink.
+    private static let turnStep: CGFloat = 2.2
+    private static let shiftStep: CGFloat = 7
+    private static let shrinkStep: CGFloat = 0.05
 
     // Swiping
     private enum Gesture { case none, mine, theirs }
@@ -118,7 +123,6 @@ final class PhotoDeckView: NSView, NSDraggingSource {
     init(attachments: [Attachment], message: ChatMessage, maxWidth: CGFloat) {
         self.attachments = attachments
         self.message = message
-        order = Array(attachments.indices)
         // Every card has the first picture's shape, kept between 3:4 and 4:3.
         let first = attachments.first
         var aspect: CGFloat = 3.0 / 4.0
@@ -133,44 +137,36 @@ final class PhotoDeckView: NSView, NSDraggingSource {
         // Layer-hosting: set the layer before turning layers on.
         let root = CALayer()
         root.masksToBounds = false
+        root.isGeometryFlipped = false
         layer = root
         wantsLayer = true
 
-        for attachment in attachments {
-            let card = CALayer()
-            card.cornerRadius = Self.cornerRadius
-            card.cornerCurve = .continuous
-            card.masksToBounds = true
-            card.contentsGravity = .resizeAspectFill
-            card.bounds = CGRect(origin: .zero, size: cardSize)
-            card.borderWidth = 0.5
-            // Stacking order switches at once (an animated one would pass cards through each other).
-            card.actions = ["zPosition": NSNull(), "contents": NSNull()]
-            if attachment.kind == .video { addPlayIcon(to: card) }
-            root.addSublayer(card)
-            cards.append(card)
-        }
-        for (index, attachment) in attachments.enumerated() {
-            load(attachment, into: index)
-        }
         pressLayer.backgroundColor = NSColor.black.cgColor
         pressLayer.opacity = 0
         pressLayer.zPosition = 1000
-        updateColors()
+        pressLayer.frame = CGRect(origin: .zero, size: cardSize)
 
         NSLayoutConstraint.activate([
             widthAnchor.constraint(equalToConstant: cardSize.width + Self.inset.left + Self.inset.right),
             heightAnchor.constraint(equalToConstant: cardSize.height + Self.inset.top + Self.inset.bottom),
         ])
+        syncCards()
         placeCards(animated: false)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    var topAttachment: Attachment? { order.first.map { attachments[$0] } }
+    var topAttachment: Attachment? { attachments.indices.contains(current) ? attachments[current] : nil }
 
-    func image(for attachmentID: String) -> NSImage? { images[attachmentID] }
+    func image(for attachmentID: String) -> NSImage? {
+        if let image = images[attachmentID] { return image }
+        guard let attachment = attachments.first(where: { $0.id == attachmentID }) else { return nil }
+        if attachment.kind == .video {
+            return attachment.previewURL.flatMap(URL.init(string:)).flatMap { ImageCache.shared.cached($0) }
+        }
+        return ImageCache.shared.cached(ImageCache.key(for: attachment, in: message))
+    }
 
     /// The top card's frame (unturned), in this view's coordinates.
     var topCardRect: NSRect {
@@ -178,13 +174,54 @@ final class PhotoDeckView: NSView, NSDraggingSource {
     }
 
     func bringToTop(_ attachmentID: String) {
-        guard let index = attachments.firstIndex(where: { $0.id == attachmentID }),
-              let position = order.firstIndex(of: index), position != 0 else { return }
-        order = Array(order[position...] + order[..<position])
+        guard let index = attachments.firstIndex(where: { $0.id == attachmentID }), index != current else { return }
+        current = index
+        offset = 0
+        syncCards()
         placeCards(animated: false)
     }
 
-    // MARK: - Pictures
+    // MARK: - Cards
+
+    /// Makes the cards near the top one and drops the rest.
+    private func syncCards() {
+        guard !attachments.isEmpty else { return }
+        let range = max(0, current - Self.kept)...min(attachments.count - 1, current + Self.kept)
+        for index in cards.keys where !range.contains(index) {
+            cards[index]?.removeFromSuperlayer()
+            cards[index] = nil
+            images[attachments[index].id] = nil
+        }
+        for index in range where cards[index] == nil {
+            let card = makeCard(for: attachments[index])
+            cards[index] = card
+            // Placed before it's shown, so it doesn't animate there.
+            place(card, at: index)
+            layer?.addSublayer(card)
+            load(attachments[index], into: index)
+        }
+    }
+
+    private func makeCard(for attachment: Attachment) -> CALayer {
+        let card = CALayer()
+        card.cornerRadius = Self.cornerRadius
+        card.cornerCurve = .continuous
+        card.masksToBounds = true
+        card.contentsGravity = .resizeAspectFill
+        card.bounds = CGRect(origin: .zero, size: cardSize)
+        // Turned and shrunk around its middle.
+        card.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        card.borderWidth = 0.5
+        card.contentsScale = window?.backingScaleFactor ?? 2
+        // Stacking order switches at once (an animated one would pass cards through each other).
+        card.actions = ["zPosition": NSNull(), "contents": NSNull()]
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            card.backgroundColor = NSColor.quaternaryLabelColor.cgColor
+            card.borderColor = NSColor.separatorColor.cgColor
+        }
+        if attachment.kind == .video { addPlayIcon(to: card) }
+        return card
+    }
 
     private func load(_ attachment: Attachment, into index: Int) {
         if attachment.kind == .video {
@@ -206,9 +243,10 @@ final class PhotoDeckView: NSView, NSDraggingSource {
     }
 
     private func show(_ image: NSImage?, at index: Int) {
-        guard let image, cards.indices.contains(index) else { return }
+        // The card may be gone by now (moved far away).
+        guard let image, let card = cards[index] else { return }
         images[attachments[index].id] = image
-        cards[index].contents = image
+        card.contents = image
     }
 
     private func addPlayIcon(to card: CALayer) {
@@ -222,107 +260,154 @@ final class PhotoDeckView: NSView, NSDraggingSource {
         icon.bounds = CGRect(origin: .zero, size: symbol.size)
         icon.position = CGPoint(x: cardSize.width / 2, y: cardSize.height / 2)
         icon.zPosition = 10
+        icon.contentsScale = card.contentsScale
         card.addSublayer(icon)
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        updateColors()
-    }
-
-    override func viewDidChangeBackingProperties() {
-        super.viewDidChangeBackingProperties()
-        let scale = window?.backingScaleFactor ?? 2
-        for card in cards {
-            card.contentsScale = scale
-            card.sublayers?.forEach { $0.contentsScale = scale }
-        }
-    }
-
-    private func updateColors() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            for card in cards {
+            for card in cards.values {
                 card.backgroundColor = NSColor.quaternaryLabelColor.cgColor
                 card.borderColor = NSColor.separatorColor.cgColor
             }
         }
     }
 
-    // MARK: - Placing the cards
-
-    private var center: CGPoint {
-        CGPoint(x: Self.inset.left + cardSize.width / 2, y: Self.inset.bottom + cardSize.height / 2)
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        let scale = window?.backingScaleFactor ?? 2
+        for card in cards.values {
+            card.contentsScale = scale
+            card.sublayers?.forEach { $0.contentsScale = scale }
+        }
     }
 
-    private static func fan(at depth: Int) -> (dx: CGFloat, angle: CGFloat, scale: CGFloat) {
-        fan[min(depth, fan.count - 1)]
+    // MARK: - Placing the cards
+
+    /// The top card's middle (the cards turn around their middles).
+    private var pivot: CGPoint {
+        CGPoint(x: Self.inset.left + cardSize.width / 2, y: Self.inset.bottom + cardSize.height / 2)
     }
 
     private static func transform(angle: CGFloat, scale: CGFloat) -> CATransform3D {
         CATransform3DScale(CATransform3DMakeRotation(angle * .pi / 180, 0, 0, 1), scale, scale, 1)
     }
 
-    /// Puts every card in its place for the current order (the top card shifted by `offset`).
+    /// A card's place: the top one (shifted by `offset` while swiping), the coming ones fanned to
+    /// the right, the seen ones to the left, each a bit more turned than the one before it.
+    private func place(_ card: CALayer, at index: Int) {
+        let distance = index - current
+        let pulling = offset > 0 && canMove(forward: false)
+        if distance == -1, pulling {
+            // Swiping back: the previous card is drawn out of the seen pile to the left, under the
+            // top card (the reverse of a card going onto the pile), following the fingers. It's the
+            // one at the very back.
+            let progress = min(1, offset / throwDistance)
+            let step = seenStep(distance)
+            card.position = CGPoint(x: pivot.x - step * Self.shiftStep - offset, y: pivot.y)
+            let angle = step * Self.turnStep + (8 - step * Self.turnStep) * progress
+            let scale = (1 - step * Self.shrinkStep) + (0.97 - (1 - step * Self.shrinkStep)) * progress
+            card.transform = Self.transform(angle: angle, scale: scale)
+            card.opacity = 1
+            card.zPosition = Self.seenZ(distance)
+            return
+        }
+        if distance == 0 {
+            // It follows the fingers forward, and past the first picture (as a rubber band).
+            let shift = pulling ? 0 : offset
+            card.position = CGPoint(x: pivot.x + shift, y: pivot.y)
+            card.transform = Self.transform(angle: -shift * 0.04, scale: 1)
+            card.opacity = 1
+            card.zPosition = 0
+            return
+        }
+        if distance > 0 {
+            // Still to come: under the top card in order, each a bit more fanned out to the right.
+            let step = CGFloat(min(distance, Self.fanned))
+            card.position = CGPoint(x: pivot.x + step * Self.shiftStep, y: pivot.y)
+            card.transform = Self.transform(angle: -step * Self.turnStep, scale: 1 - step * Self.shrinkStep)
+            card.opacity = distance <= Self.fanned ? 1 : 0
+            card.zPosition = -CGFloat(distance)
+            return
+        }
+        // Seen: at the back of the stack, the latest one at the very back and the most fanned out to the left.
+        let step = seenStep(distance)
+        card.position = CGPoint(x: pivot.x - step * Self.shiftStep, y: pivot.y)
+        card.transform = Self.transform(angle: step * Self.turnStep, scale: 1 - step * Self.shrinkStep)
+        card.opacity = -distance <= Self.fanned ? 1 : 0
+        card.zPosition = Self.seenZ(distance)
+    }
+
+    /// How fanned out a seen card is: the latest (at the back) the most, older ones (above it) less.
+    private func seenStep(_ distance: Int) -> CGFloat {
+        let shown = min(current, Self.fanned)
+        return CGFloat(max(1, shown + 1 + distance))
+    }
+
+    /// Seen cards are under all the coming ones; the latest seen is the lowest.
+    private static func seenZ(_ distance: Int) -> CGFloat {
+        -10_000 - CGFloat(distance)
+    }
+
     private func placeCards(animated: Bool, duration: CFTimeInterval = 0.3) {
         CATransaction.begin()
         CATransaction.setDisableActions(!animated)
         CATransaction.setAnimationDuration(duration)
         CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
-        for (depth, index) in order.enumerated() {
-            let card = cards[index]
-            let fan = Self.fan(at: depth)
-            card.zPosition = CGFloat(-depth)
-            card.opacity = depth < Self.fan.count ? 1 : 0
-            if depth == 0 {
-                card.position = CGPoint(x: center.x + offset, y: center.y)
-                card.transform = Self.transform(angle: -offset * 0.04, scale: 1)
-            } else {
-                card.position = CGPoint(x: center.x + fan.dx, y: center.y)
-                card.transform = Self.transform(angle: fan.angle, scale: fan.scale)
-            }
-        }
+        for (index, card) in cards { place(card, at: index) }
         CATransaction.commit()
     }
 
     /// Whether there's a card to go to: no wrapping around from the last picture to the first.
-    private func canCycle(forward: Bool) -> Bool {
-        guard let top = order.first else { return false }
-        return forward ? top < attachments.count - 1 : top > 0
+    private func canMove(forward: Bool) -> Bool {
+        forward ? current < attachments.count - 1 : current > 0
     }
 
-    /// Sends the top card to the back (`forward`), or brings the last card to the top.
-    private func cycle(forward: Bool) {
-        guard order.count > 1, !animating, canCycle(forward: forward) else { return }
+    /// How far a card goes out to the side when it's thrown onto (or taken off) the seen pile: clear
+    /// of the top card, so it can change sides (over / under) without showing it.
+    private var throwDistance: CGFloat { cardSize.width + 16 }
+
+    /// Moves to the next picture (the top card goes onto the seen pile on the left) or the previous
+    /// one (it comes back from there).
+    private func move(forward: Bool) {
+        guard !animating, canMove(forward: forward) else { return }
+        let target = current + (forward ? 1 : -1)
+        guard let card = cards[forward ? current : target] else {
+            current = target
+            offset = 0
+            syncCards()
+            placeCards(animated: true)
+            return
+        }
         animating = true
-        let throwDistance = cardSize.width * 0.8
-        let moving = forward ? order[0] : order[order.count - 1]
-        let card = cards[moving]
-        let side: CGFloat = forward ? (offset > 0 ? 1 : -1) : (offset < 0 ? -1 : 1)
-        // Out to the side…
-        CATransaction.begin()
-        CATransaction.setAnimationDuration(0.16)
-        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
-        CATransaction.setCompletionBlock { [weak self] in
+        // Then everything settles into its new place: forward, the old top card goes under, onto
+        // the seen pile; back, the drawn-out card goes over, onto the top.
+        let settle = { [weak self] in
             guard let self else { return }
-            // …then behind the others (or in front), and everything settles into place.
-            if forward {
-                self.order.append(self.order.removeFirst())
-            } else {
-                self.order.insert(self.order.removeLast(), at: 0)
-            }
+            card.zPosition = forward ? -20_000 : 1
+            self.current = target
             self.offset = 0
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            card.zPosition = forward ? -CGFloat(self.order.count) : 1
-            card.opacity = 1
-            CATransaction.commit()
+            self.syncCards()
             CATransaction.begin()
             CATransaction.setCompletionBlock { [weak self] in self?.animating = false }
             self.placeCards(animated: true, duration: 0.28)
             CATransaction.commit()
         }
-        card.position = CGPoint(x: center.x + side * throwDistance, y: center.y)
-        card.transform = Self.transform(angle: -side * 8, scale: forward ? 0.95 : 1)
+        // Already dragged all the way out: it changes sides right away, then flies into place.
+        if forward ? -offset >= throwDistance : offset >= throwDistance {
+            settle()
+            return
+        }
+        // First (the rest of the way) out to the left: over the stack going forward, from under it
+        // going back; it changes sides only out there.
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.16)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        CATransaction.setCompletionBlock(settle)
+        if forward { card.zPosition = 1 }
+        card.position = CGPoint(x: pivot.x - throwDistance, y: pivot.y)
+        card.transform = Self.transform(angle: 8, scale: 0.97)
         card.opacity = 1
         CATransaction.commit()
     }
@@ -333,7 +418,7 @@ final class PhotoDeckView: NSView, NSDraggingSource {
         // A mouse's sideways wheel (or Shift-wheel): one card per notch.
         guard event.hasPreciseScrollingDeltas else {
             if abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY), event.scrollingDeltaX != 0 {
-                cycle(forward: event.scrollingDeltaX < 0)
+                move(forward: event.scrollingDeltaX < 0)
             } else {
                 super.scrollWheel(with: event)
             }
@@ -364,21 +449,28 @@ final class PhotoDeckView: NSView, NSDraggingSource {
         // Follow the fingers.
         let delta = event.isDirectionInvertedFromDevice ? event.scrollingDeltaX : -event.scrollingDeltaX
         // Past the first or last picture it only gives a little, like a rubber band.
-        let blocked = offset + delta < 0 ? !canCycle(forward: true) : offset + delta > 0 ? !canCycle(forward: false) : false
+        let next = offset + delta
+        let blocked = next < 0 ? !canMove(forward: true) : next > 0 ? !canMove(forward: false) : false
         offset += blocked ? delta * 0.25 : delta
         if event.phase.contains(.ended) || event.phase.contains(.cancelled) {
             gesture = .none
             swallowingMomentum = true
-            if offset <= -Self.commitDistance, canCycle(forward: true) {
-                cycle(forward: true)
-            } else if offset >= Self.commitDistance, canCycle(forward: false) {
-                cycle(forward: false)
+            if offset <= -Self.commitDistance, canMove(forward: true) {
+                move(forward: true)
+            } else if offset >= Self.commitDistance, canMove(forward: false) {
+                move(forward: false)
             } else {
                 offset = 0
                 placeCards(animated: true, duration: 0.2)
             }
         } else {
-            placeCards(animated: false)
+            // Forward the top card follows the fingers; back, the previous card is drawn out.
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            for index in [current - 1, current] {
+                if let card = cards[index] { place(card, at: index) }
+            }
+            CATransaction.commit()
         }
     }
 
@@ -423,7 +515,7 @@ final class PhotoDeckView: NSView, NSDraggingSource {
 
     private func dragImage(of attachment: Attachment) -> NSImage {
         let size = cardSize
-        let picture = images[attachment.id]
+        let picture = image(for: attachment.id)
         return NSImage(size: size, flipped: false) { rect in
             NSBezierPath(roundedRect: rect, xRadius: Self.cornerRadius, yRadius: Self.cornerRadius).addClip()
             if let picture {
@@ -442,13 +534,12 @@ final class PhotoDeckView: NSView, NSDraggingSource {
 
     /// Darkens the top card while the mouse is held down on it.
     private func setPressed(_ pressed: Bool) {
-        guard let index = order.first else { return }
+        guard let card = cards[current] else { return }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        if pressLayer.superlayer !== cards[index] {
+        if pressLayer.superlayer !== card {
             pressLayer.removeFromSuperlayer()
-            pressLayer.frame = CGRect(origin: .zero, size: cardSize)
-            cards[index].addSublayer(pressLayer)
+            card.addSublayer(pressLayer)
         }
         pressLayer.opacity = pressed ? 0.05 : 0
         CATransaction.commit()

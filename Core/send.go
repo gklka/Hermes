@@ -207,11 +207,21 @@ func (c *Core) sendE2EE(
 	if err != nil {
 		return failPending(t.ID, out.pendingID, err)
 	}
-	chat := t.chatJID()
-	resp, err := e2ee.SendFBMessage(ctx, chat, consumerMessage(content), meta, whatsmeow.SendRequestExtra{ID: out.otidStr})
+	resp, err := e2ee.SendFBMessage(ctx, t.chatJID(), consumerMessage(content), meta, whatsmeow.SendRequestExtra{ID: out.otidStr})
 	if err != nil {
 		return failPending(t.ID, out.pendingID, err)
 	}
+	c.storeSentE2EE(t, out, row, resp)
+	return nil
+}
+
+// storeSentE2EE stores a message sent over the encrypted connection and replaces its echo.
+func (c *Core) storeSentE2EE(t *threadRow, out outgoing, row *messageRow, resp whatsmeow.SendResponse) {
+	e2ee, err := c.requireE2EE()
+	if err != nil {
+		return
+	}
+	chat := t.chatJID()
 	row.ID = resp.ID
 	row.ThreadID = t.ID
 	row.SenderID = c.selfID()
@@ -226,7 +236,6 @@ func (c *Core) sendE2EE(
 	c.flush(cs)
 	// Sending reads the chat, as with Facebook messages (sendFBTask), also in the official apps.
 	go c.sendE2EEReadWatermark(context.Background(), t, readMarkAfterSending(resp.Timestamp))
-	return nil
 }
 
 // MARK: - Sending files
@@ -278,47 +287,116 @@ func kindForMime(mimeType string) string {
 	}
 }
 
-func (c *Core) sendMedia(ctx context.Context, threadID, path string) error {
+// sendMedia sends files as one message (several photos and videos are one album).
+func (c *Core) sendMedia(ctx context.Context, threadID string, paths []string) error {
+	if len(paths) == 0 {
+		return errors.New("no files to send")
+	}
 	t, err := c.thread(threadID)
 	if err != nil {
 		return err
 	}
-	f, err := readMediaFile(path)
-	if err != nil {
-		return err
+	files := make([]*mediaFile, 0, len(paths))
+	for _, path := range paths {
+		f, err := readMediaFile(path)
+		if err != nil {
+			return err
+		}
+		files = append(files, f)
 	}
 	out := newOutgoing()
-	c.emitEcho(threadID, out, "", nil, nil, []apiAttachment{f.attachment(out.pendingID + "-0")})
-	if t.Type.IsWhatsApp() {
-		return c.sendE2EEMedia(ctx, t, out, f)
+	attachments := make([]apiAttachment, len(files))
+	for i, f := range files {
+		attachments[i] = f.attachment(out.pendingID + "-" + strconv.Itoa(i))
 	}
-	return c.sendFBMedia(ctx, t, out, f)
+	c.emitEcho(threadID, out, "", nil, nil, attachments)
+	if t.Type.IsWhatsApp() {
+		return c.sendE2EEMedia(ctx, t, out, files)
+	}
+	return c.sendFBMedia(ctx, t, out, files)
 }
 
-func (c *Core) sendFBMedia(ctx context.Context, t *threadRow, out outgoing, f *mediaFile) error {
+// sendFBMedia uploads the files and sends them in one message.
+func (c *Core) sendFBMedia(ctx context.Context, t *threadRow, out outgoing, files []*mediaFile) error {
 	cli, err := c.requireClient()
 	if err != nil {
 		return failPending(t.ID, out.pendingID, err)
 	}
-	resp, err := cli.GetHTTP().SendMercuryUploadRequest(ctx, c.fbThreadKey(t.ID), &httpclient.MercuryUploadMedia{
-		Filename: f.filename, MimeType: f.mimeType, MediaData: f.data,
-	})
-	if err != nil {
-		return failPending(t.ID, out.pendingID, fmt.Errorf("upload failed: %w", err))
-	}
-	if resp.Payload.RealMetadata == nil || resp.Payload.RealMetadata.GetFbId() == 0 {
-		return failPending(t.ID, out.pendingID, errors.New("upload failed: no attachment ID"))
+	ids := make([]int64, 0, len(files))
+	for _, f := range files {
+		resp, err := cli.GetHTTP().SendMercuryUploadRequest(ctx, c.fbThreadKey(t.ID), &httpclient.MercuryUploadMedia{
+			Filename: f.filename, MimeType: f.mimeType, MediaData: f.data,
+		})
+		if err != nil {
+			return failPending(t.ID, out.pendingID, fmt.Errorf("upload failed: %w", err))
+		}
+		if resp.Payload.RealMetadata == nil || resp.Payload.RealMetadata.GetFbId() == 0 {
+			return failPending(t.ID, out.pendingID, errors.New("upload failed: no attachment ID"))
+		}
+		ids = append(ids, resp.Payload.RealMetadata.GetFbId())
 	}
 	task := c.newSendTask(t, out, table.MEDIA)
-	task.AttachmentFBIds = []int64{resp.Payload.RealMetadata.GetFbId()}
+	task.AttachmentFBIds = ids
 	return c.sendFBTask(ctx, t.ID, out, task)
 }
 
-func (c *Core) sendE2EEMedia(ctx context.Context, t *threadRow, out outgoing, f *mediaFile) error {
+// sendE2EEMedia sends the files over the encrypted connection. Each file is its own message
+// there; several are marked as one group (an album), and stored here as one message.
+func (c *Core) sendE2EEMedia(ctx context.Context, t *threadRow, out outgoing, files []*mediaFile) error {
 	e2ee, err := c.requireE2EE()
 	if err != nil {
 		return failPending(t.ID, out.pendingID, err)
 	}
+	type prepared struct {
+		content *waConsumerApplication.ConsumerApplication_Content
+		stored  storedAttachment
+	}
+	parts := make([]prepared, 0, len(files))
+	for i, f := range files {
+		content, stored, err := c.uploadE2EEMedia(ctx, e2ee, f, strconv.Itoa(i))
+		if err != nil {
+			return failPending(t.ID, out.pendingID, err)
+		}
+		parts = append(parts, prepared{content, stored})
+	}
+	if len(parts) == 1 {
+		row := &messageRow{Attachments: []storedAttachment{parts[0].stored}}
+		return c.sendE2EE(ctx, t, out, parts[0].content, nil, row)
+	}
+	groupID := out.otidStr
+	row := &messageRow{}
+	var first whatsmeow.SendResponse
+	for i, part := range parts {
+		meta := &waMsgApplication.MessageApplication_Metadata{
+			GroupID:    proto.String(groupID),
+			GroupSize:  proto.Uint32(uint32(len(parts))),
+			GroupIndex: proto.Uint32(uint32(i)),
+		}
+		id := out.otidStr
+		if i > 0 {
+			id = newOutgoing().otidStr
+		}
+		resp, err := e2ee.SendFBMessage(ctx, t.chatJID(), consumerMessage(part.content), meta, whatsmeow.SendRequestExtra{ID: id})
+		if err != nil {
+			if i == 0 {
+				return failPending(t.ID, out.pendingID, err)
+			}
+			// Keep what went out.
+			c.storeSentE2EE(t, out, row, first)
+			return err
+		}
+		if i == 0 {
+			first = resp
+		}
+		row.Attachments = append(row.Attachments, part.stored)
+	}
+	c.storeSentE2EE(t, out, row, first)
+	return nil
+}
+
+// uploadE2EEMedia uploads a file for the encrypted connection: the message content, and the
+// attachment as it's stored (with the keys to download it again).
+func (c *Core) uploadE2EEMedia(ctx context.Context, e2ee *whatsmeow.Client, f *mediaFile, id string) (*waConsumerApplication.ConsumerApplication_Content, storedAttachment, error) {
 	mediaType := whatsmeow.MediaDocument
 	switch f.kind {
 	case kindImage:
@@ -329,21 +407,20 @@ func (c *Core) sendE2EEMedia(ctx context.Context, t *threadRow, out outgoing, f 
 	}
 	uploaded, err := e2ee.Upload(ctx, f.data, mediaType)
 	if err != nil {
-		return failPending(t.ID, out.pendingID, fmt.Errorf("upload failed: %w", err))
+		return nil, storedAttachment{}, fmt.Errorf("upload failed: %w", err)
 	}
 	content, err := e2eeMediaContent(f, mediaType, uploaded)
 	if err != nil {
-		return failPending(t.ID, out.pendingID, err)
+		return nil, storedAttachment{}, err
 	}
 	stored := storedAttachment{
-		apiAttachment: f.attachment("0"),
+		apiAttachment: f.attachment(id),
 		WA: &waMediaInfo{
 			MediaType: string(mediaType), Key: uploaded.MediaKey, SHA256: uploaded.FileSHA256,
 			EncSHA256: uploaded.FileEncSHA256, DirectPath: uploaded.DirectPath,
 		},
 	}
-	row := &messageRow{Attachments: []storedAttachment{stored}}
-	return c.sendE2EE(ctx, t, out, content, nil, row)
+	return content, stored, nil
 }
 
 // e2eeMediaContent is the message content for an uploaded file.
